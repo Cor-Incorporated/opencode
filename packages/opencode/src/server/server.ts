@@ -1,57 +1,27 @@
-import { createHash } from "node:crypto"
 import { Log } from "../util/log"
 import { describeRoute, generateSpecs, validator, resolver, openAPIRouteHandler } from "hono-openapi"
 import { Hono } from "hono"
 import { compress } from "hono/compress"
 import { cors } from "hono/cors"
-import { proxy } from "hono/proxy"
 import { basicAuth } from "hono/basic-auth"
+import type { UpgradeWebSocket } from "hono/ws"
 import z from "zod"
-import { Provider } from "../provider/provider"
-import { NamedError } from "@opencode-ai/util/error"
-import { LSP } from "../lsp"
-import { Format } from "../format"
-import { TuiRoutes } from "./routes/tui"
-import { Instance } from "../project/instance"
-import { Vcs } from "../project/vcs"
-import { Agent } from "../agent/agent"
-import { Skill } from "../skill"
 import { Auth } from "../auth"
 import { Flag } from "../flag/flag"
-import { Command } from "../command"
-import { Global } from "../global"
-import { WorkspaceID } from "../control-plane/schema"
 import { ProviderID } from "../provider/schema"
-import { WorkspaceRouterMiddleware } from "../control-plane/workspace-router-middleware"
-import { ProjectRoutes } from "./routes/project"
-import { SessionRoutes } from "./routes/session"
-import { PtyRoutes } from "./routes/pty"
-import { McpRoutes } from "./routes/mcp"
-import { FileRoutes } from "./routes/file"
-import { ConfigRoutes } from "./routes/config"
-import { ExperimentalRoutes } from "./routes/experimental"
-import { ProviderRoutes } from "./routes/provider"
-import { EventRoutes } from "./routes/event"
-import { InstanceBootstrap } from "../project/bootstrap"
-import { NotFoundError } from "../storage/db"
-import type { ContentfulStatusCode } from "hono/utils/http-status"
 import { createAdaptorServer, type ServerType } from "@hono/node-server"
 import { createNodeWebSocket } from "@hono/node-ws"
-import { HTTPException } from "hono/http-exception"
+import { WorkspaceRouterMiddleware } from "./router"
 import { errors } from "./error"
-import { Filesystem } from "@/util/filesystem"
-import { QuestionRoutes } from "./routes/question"
-import { PermissionRoutes } from "./routes/permission"
 import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
 import { lazy } from "@/util/lazy"
+import { errorHandler } from "./middleware"
+import { InstanceRoutes } from "./instance"
 import { initProjectors } from "./projectors"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
-
-const csp = (hash = "") =>
-  `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:`
 
 initProjectors()
 
@@ -63,13 +33,7 @@ export namespace Server {
     stop: (close?: boolean) => Promise<void>
   }
 
-  const DEFAULT_CSP =
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:"
-  const embeddedUIPromise = Flag.OPENCODE_DISABLE_EMBEDDED_WEB_UI
-    ? Promise.resolve(null)
-    : // @ts-expect-error - generated file at build time
-      import("opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null)
-
+  const log = Log.create({ service: "server" })
   const zipped = compress()
 
   const skipCompress = (path: string, method: string) => {
@@ -80,30 +44,9 @@ export namespace Server {
 
   export const Default = lazy(() => create({}).app)
 
-  function create(opts: { cors?: string[] }) {
-    const log = Log.create({ service: "server" })
-    const app = new Hono()
-    const ws = createNodeWebSocket({ app })
-    const route = app
-      .onError((err, c) => {
-        log.error("failed", {
-          error: err,
-        })
-        if (err instanceof NamedError) {
-          let status: ContentfulStatusCode
-          if (err instanceof NotFoundError) status = 404
-          else if (err instanceof Provider.ModelNotFoundError) status = 400
-          else if (err.name === "ProviderAuthValidationFailed") status = 400
-          else if (err.name.startsWith("Worktree")) status = 400
-          else status = 500
-          return c.json(err.toObject(), { status })
-        }
-        if (err instanceof HTTPException) return err.getResponse()
-        const message = err instanceof Error && err.stack ? err.stack : err.toString()
-        return c.json(new NamedError.Unknown({ message }).toObject(), {
-          status: 500,
-        })
-      })
+  export function ControlPlaneRoutes(app = new Hono(), opts?: { cors?: string[] }, upgrade?: UpgradeWebSocket): Hono {
+    return app
+      .onError(errorHandler(log))
       .use((c, next) => {
         // Allow CORS preflight requests to succeed without auth.
         // Browser clients sending Authorization headers will preflight with OPTIONS.
@@ -114,8 +57,8 @@ export namespace Server {
         return basicAuth({ username, password })(c, next)
       })
       .use(async (c, next) => {
-        const skipLogging = c.req.path === "/log"
-        if (!skipLogging) {
+        const skip = c.req.path === "/log"
+        if (!skip) {
           log.info("request", {
             method: c.req.method,
             path: c.req.path,
@@ -126,9 +69,7 @@ export namespace Server {
           path: c.req.path,
         })
         await next()
-        if (!skipLogging) {
-          timer.stop()
-        }
+        if (!skip) timer.stop()
       })
       .use(
         cors({
@@ -145,15 +86,8 @@ export namespace Server {
             )
               return input
 
-            // *.opencode.ai (https only, adjust if needed)
-            if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(input)) {
-              return input
-            }
-            if (opts?.cors?.includes(input)) {
-              return input
-            }
-
-            return
+            if (/^https:\/\/([a-z0-9-]+\.)*opencode\.ai$/.test(input)) return input
+            if (opts?.cors?.includes(input)) return input
           },
         }),
       )
@@ -224,27 +158,6 @@ export namespace Server {
           return c.json(true)
         },
       )
-      .use(async (c, next) => {
-        if (c.req.path === "/log") return next()
-        const raw = c.req.query("directory") || c.req.header("x-opencode-directory") || process.cwd()
-        const directory = Filesystem.resolve(
-          (() => {
-            try {
-              return decodeURIComponent(raw)
-            } catch {
-              return raw
-            }
-          })(),
-        )
-
-        return Instance.provide({
-          directory,
-          init: InstanceBootstrap,
-          async fn() {
-            return next()
-          },
-        })
-      })
       .get(
         "/doc",
         openAPIRouteHandler(app, {
@@ -266,125 +179,6 @@ export namespace Server {
             workspace: z.string().optional(),
           }),
         ),
-      )
-      .use(WorkspaceRouterMiddleware)
-      .route("/project", ProjectRoutes())
-      .route("/config", ConfigRoutes())
-      .route("/experimental", ExperimentalRoutes())
-      .route("/session", SessionRoutes())
-      .route("/permission", PermissionRoutes())
-      .route("/question", QuestionRoutes())
-      .route("/provider", ProviderRoutes())
-      .route("/", FileRoutes())
-      .route("/", EventRoutes())
-      .route("/mcp", McpRoutes())
-      .route("/tui", TuiRoutes())
-      .post(
-        "/instance/dispose",
-        describeRoute({
-          summary: "Dispose instance",
-          description: "Clean up and dispose the current OpenCode instance, releasing all resources.",
-          operationId: "instance.dispose",
-          responses: {
-            200: {
-              description: "Instance disposed",
-              content: {
-                "application/json": {
-                  schema: resolver(z.boolean()),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          await Instance.dispose()
-          return c.json(true)
-        },
-      )
-      .get(
-        "/path",
-        describeRoute({
-          summary: "Get paths",
-          description: "Retrieve the current working directory and related path information for the OpenCode instance.",
-          operationId: "path.get",
-          responses: {
-            200: {
-              description: "Path",
-              content: {
-                "application/json": {
-                  schema: resolver(
-                    z
-                      .object({
-                        home: z.string(),
-                        state: z.string(),
-                        config: z.string(),
-                        worktree: z.string(),
-                        directory: z.string(),
-                      })
-                      .meta({
-                        ref: "Path",
-                      }),
-                  ),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          return c.json({
-            home: Global.Path.home,
-            state: Global.Path.state,
-            config: Global.Path.config,
-            worktree: Instance.worktree,
-            directory: Instance.directory,
-          })
-        },
-      )
-      .get(
-        "/vcs",
-        describeRoute({
-          summary: "Get VCS info",
-          description: "Retrieve version control system (VCS) information for the current project, such as git branch.",
-          operationId: "vcs.get",
-          responses: {
-            200: {
-              description: "VCS info",
-              content: {
-                "application/json": {
-                  schema: resolver(Vcs.Info),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          const branch = await Vcs.branch()
-          return c.json({
-            branch,
-          })
-        },
-      )
-      .get(
-        "/command",
-        describeRoute({
-          summary: "List commands",
-          description: "Get a list of all available commands in the OpenCode system.",
-          operationId: "command.list",
-          responses: {
-            200: {
-              description: "List of commands",
-              content: {
-                "application/json": {
-                  schema: resolver(Command.Info.array()),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          const commands = await Command.list()
-          return c.json(commands)
-        },
       )
       .post(
         "/log",
@@ -438,138 +232,30 @@ export namespace Server {
           return c.json(true)
         },
       )
-      .get(
-        "/agent",
-        describeRoute({
-          summary: "List agents",
-          description: "Get a list of all available AI agents in the OpenCode system.",
-          operationId: "app.agents",
-          responses: {
-            200: {
-              description: "List of agents",
-              content: {
-                "application/json": {
-                  schema: resolver(Agent.Info.array()),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          const modes = await Agent.list()
-          return c.json(modes)
-        },
-      )
-      .get(
-        "/skill",
-        describeRoute({
-          summary: "List skills",
-          description: "Get a list of all available skills in the OpenCode system.",
-          operationId: "app.skills",
-          responses: {
-            200: {
-              description: "List of skills",
-              content: {
-                "application/json": {
-                  schema: resolver(Skill.Info.array()),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          const skills = await Skill.all()
-          return c.json(skills)
-        },
-      )
-      .get(
-        "/lsp",
-        describeRoute({
-          summary: "Get LSP status",
-          description: "Get LSP server status",
-          operationId: "lsp.status",
-          responses: {
-            200: {
-              description: "LSP server status",
-              content: {
-                "application/json": {
-                  schema: resolver(LSP.Status.array()),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          return c.json(await LSP.status())
-        },
-      )
-      .get(
-        "/formatter",
-        describeRoute({
-          summary: "Get formatter status",
-          description: "Get formatter status",
-          operationId: "formatter.status",
-          responses: {
-            200: {
-              description: "Formatter status",
-              content: {
-                "application/json": {
-                  schema: resolver(Format.Status.array()),
-                },
-              },
-            },
-          },
-        }),
-        async (c) => {
-          return c.json(await Format.status())
-        },
-      )
-      .route("/pty", PtyRoutes(ws.upgradeWebSocket))
-      .all("/*", async (c) => {
-        const embeddedWebUI = await embeddedUIPromise
-        const path = c.req.path
+      .use(WorkspaceRouterMiddleware(upgrade))
+  }
 
-        if (embeddedWebUI) {
-          const match = embeddedWebUI[path.replace(/^\//, "")] ?? embeddedWebUI["index.html"] ?? null
-          if (!match) return c.json({ error: "Not Found" }, 404)
-          const file = Bun.file(match)
-          if (await file.exists()) {
-            c.header("Content-Type", file.type)
-            if (file.type.startsWith("text/html")) {
-              c.header("Content-Security-Policy", DEFAULT_CSP)
-            }
-            return c.body(await file.arrayBuffer())
-          } else {
-            return c.json({ error: "Not Found" }, 404)
-          }
-        } else {
-          const response = await proxy(`https://app.opencode.ai${path}`, {
-            ...c.req,
-            headers: {
-              ...c.req.raw.headers,
-              host: "app.opencode.ai",
-            },
-          })
-          const match = response.headers.get("content-type")?.includes("text/html")
-            ? (await response.clone().text()).match(
-                /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(['"])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
-              )
-            : undefined
-          const hash = match ? createHash("sha256").update(match[2]).digest("base64") : ""
-          response.headers.set("Content-Security-Policy", csp(hash))
-          return response
-        }
-      }) as unknown as Hono
-
+  function create(opts: { cors?: string[] }) {
+    const app = new Hono()
+    const ws = createNodeWebSocket({ app })
     return {
-      app: route as Hono,
+      app: ControlPlaneRoutes(app, opts, ws.upgradeWebSocket),
       ws,
     }
   }
 
+  export function createApp(opts: { cors?: string[] }) {
+    return create(opts).app
+  }
+
   export async function openapi() {
-    // Cast to break excessive type recursion from long route chains
-    const result = await generateSpecs(Default(), {
+    // Build a fresh app with all routes registered directly so
+    // hono-openapi can see describeRoute metadata (`.route()` wraps
+    // handlers when the sub-app has a custom errorHandler, which
+    // strips the metadata symbol).
+    const app = ControlPlaneRoutes(new Hono())
+    InstanceRoutes(app)
+    const result = await generateSpecs(app, {
       documentation: {
         info: {
           title: "opencode",
@@ -591,10 +277,7 @@ export namespace Server {
     mdnsDomain?: string
     cors?: string[]
   }): Promise<Listener> {
-    const log = Log.create({ service: "server" })
-    const built = create({
-      ...opts,
-    })
+    const built = create(opts)
     const start = (port: number) =>
       new Promise<ServerType>((resolve, reject) => {
         const server = createAdaptorServer({ fetch: built.app.fetch })
@@ -622,18 +305,18 @@ export namespace Server {
       throw new Error(`Failed to resolve server address for port ${opts.port}`)
     }
 
-    const url = new URL("http://localhost")
-    url.hostname = opts.hostname
-    url.port = String(addr.port)
-    Server.url = url
+    const next = new URL("http://localhost")
+    next.hostname = opts.hostname
+    next.port = String(addr.port)
+    url = next
 
-    const shouldPublishMDNS =
+    const mdns =
       opts.mdns &&
       addr.port &&
       opts.hostname !== "127.0.0.1" &&
       opts.hostname !== "localhost" &&
       opts.hostname !== "::1"
-    if (shouldPublishMDNS) {
+    if (mdns) {
       MDNS.publish(addr.port, opts.mdnsDomain)
     } else if (opts.mdns) {
       log.warn("mDNS enabled but hostname is loopback; skipping mDNS publish")
@@ -643,10 +326,10 @@ export namespace Server {
     return {
       hostname: opts.hostname,
       port: addr.port,
-      url,
+      url: next,
       stop(close?: boolean) {
         closing ??= new Promise((resolve, reject) => {
-          if (shouldPublishMDNS) MDNS.unpublish()
+          if (mdns) MDNS.unpublish()
           server.close((err) => {
             if (err) {
               reject(err)

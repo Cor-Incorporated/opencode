@@ -175,7 +175,7 @@ export namespace Pty {
           const id = PtyID.ascending()
           const command = input.command || Shell.preferred()
           const args = input.args || []
-          if (command.endsWith("sh")) {
+          if (Shell.login(command)) {
             args.push("-l")
           }
 
@@ -272,7 +272,7 @@ export namespace Pty {
         if (input.size) {
           session.process.resize(input.size.cols, input.size.rows)
         }
-        yield* Effect.promise(() => Bus.publish(Event.Updated, { info: session.info }))
+        void Bus.publish(Event.Updated, { info: session.info })
         return session.info
       })
 
