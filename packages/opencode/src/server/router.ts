@@ -25,8 +25,8 @@ function local(method: string, path: string) {
   return false
 }
 
-export function WorkspaceRouterMiddleware(upgrade?: UpgradeWebSocket): MiddlewareHandler {
-  const routes = lazy(() => InstanceRoutes(undefined, upgrade))
+export function WorkspaceRouterMiddleware(upgrade: UpgradeWebSocket): MiddlewareHandler {
+  const routes = lazy(() => InstanceRoutes(upgrade))
 
   return async (c) => {
     const raw = c.req.query("directory") || c.req.header("x-opencode-directory") || process.cwd()

@@ -41,8 +41,8 @@ const DEFAULT_CSP =
 const csp = (hash = "") =>
   `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:`
 
-export const InstanceRoutes = (app?: Hono, upgrade?: UpgradeWebSocket) =>
-  (app ?? new Hono())
+export const InstanceRoutes = (upgrade: UpgradeWebSocket, app: Hono = new Hono()) =>
+  app
     .onError(errorHandler(log))
     .route("/project", ProjectRoutes())
     .route("/pty", PtyRoutes(upgrade))

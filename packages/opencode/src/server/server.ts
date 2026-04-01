@@ -44,7 +44,7 @@ export namespace Server {
 
   export const Default = lazy(() => create({}).app)
 
-  export function ControlPlaneRoutes(app = new Hono(), opts?: { cors?: string[] }, upgrade?: UpgradeWebSocket): Hono {
+  export function ControlPlaneRoutes(upgrade: UpgradeWebSocket, app = new Hono(), opts?: { cors?: string[] }): Hono {
     return app
       .onError(errorHandler(log))
       .use((c, next) => {
@@ -239,7 +239,7 @@ export namespace Server {
     const app = new Hono()
     const ws = createNodeWebSocket({ app })
     return {
-      app: ControlPlaneRoutes(app, opts, ws.upgradeWebSocket),
+      app: ControlPlaneRoutes(ws.upgradeWebSocket, app, opts),
       ws,
     }
   }
@@ -253,8 +253,8 @@ export namespace Server {
     // hono-openapi can see describeRoute metadata (`.route()` wraps
     // handlers when the sub-app has a custom errorHandler, which
     // strips the metadata symbol).
-    const app = ControlPlaneRoutes(new Hono())
-    InstanceRoutes(app)
+    const { app, ws } = create({})
+    InstanceRoutes(ws.upgradeWebSocket, app)
     const result = await generateSpecs(app, {
       documentation: {
         info: {
