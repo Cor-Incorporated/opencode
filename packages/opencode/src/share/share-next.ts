@@ -18,20 +18,20 @@ export namespace ShareNext {
   const log = Log.create({ service: "share-next" })
   const disabled = process.env["OPENCODE_DISABLE_SHARE"] === "true" || process.env["OPENCODE_DISABLE_SHARE"] === "1"
 
-  type Api = {
+  export type Api = {
     create: string
     sync: (shareID: string) => string
     remove: (shareID: string) => string
     data: (shareID: string) => string
   }
 
-  type Req = {
+  export type Req = {
     headers: Record<string, string>
     api: Api
     baseUrl: string
   }
 
-  type Share = {
+  export type Share = {
     id: string
     url: string
     secret: string
@@ -244,7 +244,15 @@ export namespace ShareNext {
         const next = new Map(data.map((item) => [key(item), item]))
         const timeout = setTimeout(
           InstanceState.bind(() => {
-            void runPromise(() => flush(sessionID)).catch(() => {})
+            void runPromise(() =>
+              flush(sessionID).pipe(
+                Effect.catchAllCause((cause) =>
+                  Effect.sync(() => {
+                    log.error("share flush failed", { sessionID, cause })
+                  }),
+                ),
+              ),
+            )
           }),
           1000,
         )
@@ -315,7 +323,14 @@ export namespace ShareNext {
             })
             .run(),
         )
-        yield* full(sessionID).pipe(Effect.ignore, Effect.forkIn(scope))
+        yield* full(sessionID).pipe(
+          Effect.catchAllCause((cause) =>
+            Effect.sync(() => {
+              log.error("share full sync failed", { sessionID, cause })
+            }),
+          ),
+          Effect.forkIn(scope),
+        )
         return result
       })
 
