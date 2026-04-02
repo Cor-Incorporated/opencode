@@ -118,6 +118,8 @@ export namespace Pty {
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const plugin = yield* Plugin.Service
       function teardown(session: Active) {
         try {
           session.process.kill()
@@ -157,7 +159,7 @@ export namespace Pty {
         s.sessions.delete(id)
         log.info("removing session", { id })
         teardown(session)
-        void Bus.publish(Event.Deleted, { id: session.info.id })
+        yield* bus.publish(Event.Deleted, { id: session.info.id })
       })
 
       const list = Effect.fn("Pty.list")(function* () {
@@ -181,7 +183,7 @@ export namespace Pty {
           }
 
           const cwd = input.cwd || s.dir
-          const shellEnv = await Plugin.trigger("shell.env", { cwd }, { env: {} })
+          const shellEnv = await Effect.runPromise(plugin.trigger("shell.env", { cwd }, { env: {} }))
           const env = {
             ...process.env,
             ...input.env,
@@ -254,11 +256,11 @@ export namespace Pty {
               if (session.info.status === "exited") return
               log.info("session exited", { id, exitCode })
               session.info.status = "exited"
-              void Bus.publish(Event.Exited, { id, exitCode })
+              Effect.runFork(bus.publish(Event.Exited, { id, exitCode }))
               Effect.runFork(remove(id))
             }),
           )
-          await Bus.publish(Event.Created, { info })
+          await Effect.runPromise(bus.publish(Event.Created, { info }))
           return info
         })
       })
@@ -273,7 +275,7 @@ export namespace Pty {
         if (input.size) {
           session.process.resize(input.size.cols, input.size.rows)
         }
-        void Bus.publish(Event.Updated, { info: session.info })
+        yield* bus.publish(Event.Updated, { info: session.info })
         return session.info
       })
 
@@ -361,7 +363,9 @@ export namespace Pty {
     }),
   )
 
-  const { runPromise } = makeRuntime(Service, layer)
+  const defaultLayer = layer.pipe(Layer.provide(Bus.layer), Layer.provide(Plugin.defaultLayer))
+
+  const { runPromise } = makeRuntime(Service, defaultLayer)
 
   export async function list() {
     return runPromise((svc) => svc.list())
