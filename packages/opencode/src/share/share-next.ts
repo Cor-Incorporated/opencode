@@ -113,7 +113,7 @@ export namespace ShareNext {
       const session = yield* Session.Service
       const scope = yield* Scope.Scope
 
-      function sync(sessionID: SessionID, data: Data[]): Effect.Effect<void, unknown> {
+      function sync(sessionID: SessionID, data: Data[]): Effect.Effect<void> {
         return Effect.gen(function* () {
           if (disabled) return
           const s = yield* InstanceState.get(state)
@@ -145,7 +145,7 @@ export namespace ShareNext {
       }
 
       const state: InstanceState<State> = yield* InstanceState.make<State>(
-        Effect.fn("ShareNext.state")(function* (_ctx): Effect.Effect<State, never, Scope.Scope> {
+        Effect.fn("ShareNext.state")(function* (_ctx) {
           const cache: State = { queue: new Map() }
 
           yield* Effect.addFinalizer(() =>
