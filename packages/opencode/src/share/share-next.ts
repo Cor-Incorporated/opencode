@@ -88,6 +88,24 @@ export namespace ShareNext {
   const legacyApi = api("share")
   const consoleApi = api("shares")
 
+  async function rawRequest(): Promise<Req> {
+    const headers: Record<string, string> = {}
+    const active = await Account.active()
+    if (!active?.active_org_id) {
+      const baseUrl = (await Config.get()).enterprise?.url ?? "https://opncd.ai"
+      return { headers, api: legacyApi, baseUrl }
+    }
+
+    const token = await Account.token(active.id)
+    if (!token) {
+      throw new Error("No active account token available for sharing")
+    }
+
+    headers.authorization = `Bearer ${token}`
+    headers["x-org-id"] = active.active_org_id
+    return { headers, api: consoleApi, baseUrl: active.url }
+  }
+
   function key(item: Data) {
     switch (item.type) {
       case "session":
@@ -374,11 +392,11 @@ export namespace ShareNext {
   }
 
   export async function url() {
-    return runPromise((svc) => svc.url())
+    return (await rawRequest()).baseUrl
   }
 
   export async function request(): Promise<Req> {
-    return runPromise((svc) => svc.request())
+    return rawRequest()
   }
 
   export async function create(sessionID: SessionID) {
