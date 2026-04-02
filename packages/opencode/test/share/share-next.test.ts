@@ -50,6 +50,24 @@ function live(client: HttpClient.HttpClient) {
   )
 }
 
+function wired(client: HttpClient.HttpClient) {
+  const http = Layer.succeed(HttpClient.HttpClient, client)
+  return Layer.mergeAll(
+    Bus.layer,
+    ShareNext.layer,
+    Session.layer,
+    AccountRepo.layer,
+    NodeFileSystem.layer,
+    CrossSpawnSpawner.defaultLayer,
+  ).pipe(
+    Layer.provide(Bus.layer),
+    Layer.provide(Account.layer.pipe(Layer.provide(AccountRepo.layer), Layer.provide(http))),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(http),
+    Layer.provide(Provider.defaultLayer),
+  )
+}
+
 const share = (id: SessionID) =>
   Database.use((db) => db.select().from(SessionShareTable).where(eq(SessionShareTable.session_id, id)).get())
 
@@ -213,6 +231,103 @@ describe("ShareNext", () => {
         expect(Exit.isFailure(exit)).toBe(true)
         expect(share(session.id)).toBeUndefined()
       }),
+    ),
+  )
+
+  it.live("ShareNext coalesces rapid diff events into one delayed sync with latest data", () =>
+    provideTmpdirInstance(
+      () => {
+        const seen: Array<{ url: string; body: string }> = []
+        const client = HttpClient.make((req) => {
+          if (req.url.endsWith("/sync") && req.body._tag === "Uint8Array") {
+            seen.push({ url: req.url, body: new TextDecoder().decode(req.body.body) })
+          }
+          return Effect.succeed(json(req, { ok: true }))
+        })
+
+        return Effect.gen(function* () {
+          const bus = yield* Bus.Service
+          const share = yield* ShareNext.Service
+          const session = yield* Session.Service
+
+          const info = yield* session.create({ title: "first" })
+          yield* share.init()
+          yield* Effect.sleep(50)
+          yield* Effect.sync(() =>
+            Database.use((db) =>
+              db
+                .insert(SessionShareTable)
+                .values({
+                  session_id: info.id,
+                  id: "shr_abc",
+                  url: "https://legacy-share.example.com/share/abc",
+                  secret: "sec_123",
+                })
+                .run(),
+            ),
+          )
+
+          yield* bus.publish(Session.Event.Diff, {
+            sessionID: info.id,
+            diff: [
+              {
+                file: "a.ts",
+                before: "one",
+                after: "two",
+                additions: 1,
+                deletions: 1,
+                status: "modified",
+              },
+            ],
+          })
+          yield* bus.publish(Session.Event.Diff, {
+            sessionID: info.id,
+            diff: [
+              {
+                file: "b.ts",
+                before: "old",
+                after: "new",
+                additions: 2,
+                deletions: 0,
+                status: "modified",
+              },
+            ],
+          })
+          yield* Effect.sleep(1_250)
+
+          expect(seen).toHaveLength(1)
+          expect(seen[0].url).toBe("https://legacy-share.example.com/api/share/shr_abc/sync")
+
+          const body = JSON.parse(seen[0].body) as {
+            secret: string
+            data: Array<{
+              type: string
+              data: Array<{
+                file: string
+                before: string
+                after: string
+                additions: number
+                deletions: number
+                status?: string
+              }>
+            }>
+          }
+          expect(body.secret).toBe("sec_123")
+          expect(body.data).toHaveLength(1)
+          expect(body.data[0].type).toBe("session_diff")
+          expect(body.data[0].data).toEqual([
+            {
+              file: "b.ts",
+              before: "old",
+              after: "new",
+              additions: 2,
+              deletions: 0,
+              status: "modified",
+            },
+          ])
+        }).pipe(Effect.provide(wired(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
     ),
   )
 })
