@@ -1,5 +1,6 @@
 import type * as SDK from "@opencode-ai/sdk/v2"
-import { Effect, Layer, Option, Scope, ServiceMap, Stream } from "effect"
+import { Effect, Layer, Option, Schema, Scope, ServiceMap, Stream } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Account } from "@/account"
 import { Bus } from "@/bus"
 import { InstanceState } from "@/effect/instance-state"
@@ -31,11 +32,12 @@ export namespace ShareNext {
     baseUrl: string
   }
 
-  export type Share = {
-    id: string
-    url: string
-    secret: string
-  }
+  const ShareSchema = Schema.Struct({
+    id: Schema.String,
+    url: Schema.String,
+    secret: Schema.String,
+  })
+  export type Share = typeof ShareSchema.Type
 
   type State = {
     queue: Map<string, { timeout: ReturnType<typeof setTimeout>; data: Map<string, Data> }>
@@ -88,24 +90,6 @@ export namespace ShareNext {
   const legacyApi = api("share")
   const consoleApi = api("shares")
 
-  async function rawRequest(): Promise<Req> {
-    const headers: Record<string, string> = {}
-    const active = await Account.active()
-    if (!active?.active_org_id) {
-      const baseUrl = (await Config.get()).enterprise?.url ?? "https://opncd.ai"
-      return { headers, api: legacyApi, baseUrl }
-    }
-
-    const token = await Account.token(active.id)
-    if (!token) {
-      throw new Error("No active account token available for sharing")
-    }
-
-    headers.authorization = `Bearer ${token}`
-    headers["x-org-id"] = active.active_org_id
-    return { headers, api: consoleApi, baseUrl: active.url }
-  }
-
   function key(item: Data) {
     switch (item.type) {
       case "session":
@@ -127,6 +111,8 @@ export namespace ShareNext {
       const account = yield* Account.Service
       const bus = yield* Bus.Service
       const cfg = yield* Config.Service
+      const http = yield* HttpClient.HttpClient
+      const httpOk = HttpClient.filterStatusOk(http)
       const provider = yield* Provider.Service
       const session = yield* Session.Service
       const scope = yield* Scope.Scope
@@ -243,10 +229,6 @@ export namespace ShareNext {
         return { id: row.id, secret: row.secret, url: row.url } satisfies Share
       })
 
-      const text = Effect.fnUntraced(function* (res: Response) {
-        return yield* Effect.promise(() => res.text().catch(() => res.statusText))
-      })
-
       const flush = Effect.fn("ShareNext.flush")(function* (sessionID: SessionID) {
         if (disabled) return
         const s = yield* InstanceState.get(state)
@@ -259,18 +241,13 @@ export namespace ShareNext {
         if (!share) return
 
         const req = yield* request()
-        const res = yield* Effect.promise(() =>
-          fetch(`${req.baseUrl}${req.api.sync(share.id)}`, {
-            method: "POST",
-            headers: { ...req.headers, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              secret: share.secret,
-              data: Array.from(queued.data.values()),
-            }),
-          }),
+        const res = yield* HttpClientRequest.post(`${req.baseUrl}${req.api.sync(share.id)}`).pipe(
+          HttpClientRequest.setHeaders(req.headers),
+          HttpClientRequest.bodyJson({ secret: share.secret, data: Array.from(queued.data.values()) }),
+          Effect.flatMap((r) => http.execute(r)),
         )
 
-        if (!res.ok) {
+        if (res.status >= 400) {
           log.warn("failed to sync share", { sessionID, shareID: share.id, status: res.status })
         }
       })
@@ -315,20 +292,12 @@ export namespace ShareNext {
         if (disabled) return { id: "", url: "", secret: "" }
         log.info("creating share", { sessionID })
         const req = yield* request()
-        const res = yield* Effect.promise(() =>
-          fetch(`${req.baseUrl}${req.api.create}`, {
-            method: "POST",
-            headers: { ...req.headers, "Content-Type": "application/json" },
-            body: JSON.stringify({ sessionID }),
-          }),
+        const result = yield* HttpClientRequest.post(`${req.baseUrl}${req.api.create}`).pipe(
+          HttpClientRequest.setHeaders(req.headers),
+          HttpClientRequest.bodyJson({ sessionID }),
+          Effect.flatMap((r) => httpOk.execute(r)),
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(ShareSchema)),
         )
-
-        if (!res.ok) {
-          const msg = yield* text(res)
-          throw new Error(`Failed to create share (${res.status}): ${msg || res.statusText}`)
-        }
-
-        const result = (yield* Effect.promise(() => res.json())) as Share
         yield* db((db) =>
           db
             .insert(SessionShareTable)
@@ -357,18 +326,11 @@ export namespace ShareNext {
         if (!share) return
 
         const req = yield* request()
-        const res = yield* Effect.promise(() =>
-          fetch(`${req.baseUrl}${req.api.remove(share.id)}`, {
-            method: "DELETE",
-            headers: { ...req.headers, "Content-Type": "application/json" },
-            body: JSON.stringify({ secret: share.secret }),
-          }),
+        yield* HttpClientRequest.delete(`${req.baseUrl}${req.api.remove(share.id)}`).pipe(
+          HttpClientRequest.setHeaders(req.headers),
+          HttpClientRequest.bodyJson({ secret: share.secret }),
+          Effect.flatMap((r) => httpOk.execute(r)),
         )
-
-        if (!res.ok) {
-          const msg = yield* text(res)
-          throw new Error(`Failed to remove share (${res.status}): ${msg || res.statusText}`)
-        }
 
         yield* db((db) => db.delete(SessionShareTable).where(eq(SessionShareTable.session_id, sessionID)).run())
       })
@@ -381,6 +343,7 @@ export namespace ShareNext {
     Layer.provide(Bus.layer),
     Layer.provide(Account.defaultLayer),
     Layer.provide(Config.defaultLayer),
+    Layer.provide(FetchHttpClient.layer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Session.defaultLayer),
   )
@@ -392,11 +355,11 @@ export namespace ShareNext {
   }
 
   export async function url() {
-    return (await rawRequest()).baseUrl
+    return runPromise((svc) => svc.url())
   }
 
   export async function request(): Promise<Req> {
-    return rawRequest()
+    return runPromise((svc) => svc.request())
   }
 
   export async function create(sessionID: SessionID) {
