@@ -1,5 +1,5 @@
 import type * as SDK from "@opencode-ai/sdk/v2"
-import { Effect, Layer, Option, Schema, Scope, ServiceMap, Stream } from "effect"
+import { Effect, Exit, Layer, Option, Schema, Scope, ServiceMap, Stream } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Account } from "@/account"
 import { Bus } from "@/bus"
@@ -40,7 +40,8 @@ export namespace ShareNext {
   export type Share = typeof ShareSchema.Type
 
   type State = {
-    queue: Map<string, { timeout: ReturnType<typeof setTimeout>; data: Map<string, Data> }>
+    queue: Map<string, { data: Map<string, Data> }>
+    scope: Scope.Closeable
   }
 
   type Data =
@@ -115,7 +116,6 @@ export namespace ShareNext {
       const httpOk = HttpClient.filterStatusOk(http)
       const provider = yield* Provider.Service
       const session = yield* Session.Service
-      const scope = yield* Scope.Scope
 
       function sync(sessionID: SessionID, data: Data[]): Effect.Effect<void> {
         return Effect.gen(function* () {
@@ -130,35 +130,31 @@ export namespace ShareNext {
           }
 
           const next = new Map(data.map((item) => [key(item), item]))
-          const timeout = setTimeout(
-            InstanceState.bind(() => {
-              void runPromise(() =>
-                flush(sessionID).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.sync(() => {
-                      log.error("share flush failed", { sessionID, cause })
-                    }),
-                  ),
-                ),
-              )
-            }),
-            1000,
+          s.queue.set(sessionID, { data: next })
+          yield* flush(sessionID).pipe(
+            Effect.delay(1000),
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                log.error("share flush failed", { sessionID, cause })
+              }),
+            ),
+            Effect.forkIn(s.scope),
           )
-          s.queue.set(sessionID, { timeout, data: next })
         })
       }
 
       const state: InstanceState<State> = yield* InstanceState.make<State>(
         Effect.fn("ShareNext.state")(function* (_ctx) {
-          const cache: State = { queue: new Map() }
+          const cache: State = { queue: new Map(), scope: yield* Scope.make() }
 
           yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              for (const item of cache.queue.values()) {
-                clearTimeout(item.timeout)
-              }
-              cache.queue.clear()
-            }),
+            Scope.close(cache.scope, Exit.void).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  cache.queue.clear()
+                }),
+              ),
+            ),
           )
 
           if (disabled) return cache
@@ -308,13 +304,14 @@ export namespace ShareNext {
             })
             .run(),
         )
+        const s = yield* InstanceState.get(state)
         yield* full(sessionID).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => {
               log.error("share full sync failed", { sessionID, cause })
             }),
           ),
-          Effect.forkIn(scope),
+          Effect.forkIn(s.scope),
         )
         return result
       })
