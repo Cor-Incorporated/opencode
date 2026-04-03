@@ -16,6 +16,7 @@ The inventory is derived from these sources:
 - `claude-code-skills/docs/references/harness-engineering-best-practices-2026.md`
 - `claude-code-skills/docs/references/anthropic-skill-guide-summary.md`
 - `claude-code-skills/docs/requirements/design-requirements-2026-03-24.md`
+- Anthropic `The Complete Guide to Building Skills for Claude`
 - OpenCode official docs for rules, skills, commands, plugins, and agents
 - Claude Code official docs for hooks and settings
 
@@ -26,7 +27,9 @@ The migration must preserve these non-negotiable ideas from `claude-code-skills`
 - deterministic quality gates via mechanism, not prompt prose
 - feedback speed hierarchy: fastest possible layer first
 - pointer-based instructions: keep always-loaded instructions short and move detail to ADRs/docs
+- progressive disclosure: frontmatter/router text, instruction body, and linked references must each stay in their lane
 - "implemented" is not "working": deployment/runtime integrity must be verified as a system
+- define concrete trigger and functional success cases before adding runtime enforcement
 - Codex and heavyweight automation are for bounded, mechanical, long-running work
 - GitHub and release gates must not rely on agent goodwill alone
 
