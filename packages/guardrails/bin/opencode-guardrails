@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+
+const child = require("child_process")
+const fs = require("fs")
+const path = require("path")
+
+function fail(msg) {
+  console.error(msg)
+  process.exit(1)
+}
+
+function bin() {
+  const file = require.resolve("opencode/package.json")
+  const root = path.dirname(file)
+  const json = JSON.parse(fs.readFileSync(file, "utf8"))
+  const rel = typeof json.bin === "string" ? json.bin : json.bin?.opencode
+  if (!rel) fail("Failed to resolve opencode bin from dependency")
+  return path.resolve(root, rel)
+}
+
+const dir = path.resolve(__dirname, "..", "profile")
+process.env.OPENCODE_CONFIG_DIR ||= dir
+
+const out = child.spawnSync(bin(), process.argv.slice(2), {
+  stdio: "inherit",
+  env: process.env,
+})
+
+if (out.error) fail(out.error.message)
+process.exit(typeof out.status === "number" ? out.status : 1)
