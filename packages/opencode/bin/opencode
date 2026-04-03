@@ -25,6 +25,10 @@ function bun(dir) {
     {
       stdio: "inherit",
       cwd: dir,
+      env: {
+        ...process.env,
+        OPENCODE_ORIGINAL_CWD: process.cwd(),
+      },
     },
   )
   if (result.error) {
