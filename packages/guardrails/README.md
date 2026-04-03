@@ -51,10 +51,13 @@ Current contents focus on the first thin-distribution slice:
 Planned next slices are tracked in the fork:
 
 - epic [#1](https://github.com/Cor-Incorporated/opencode/issues/1)
-- plugin MVP [#4](https://github.com/Cor-Incorporated/opencode/issues/4)
+- MVP readiness epic [#16](https://github.com/Cor-Incorporated/opencode/issues/16)
 - safe agents and commands [#5](https://github.com/Cor-Incorporated/opencode/issues/5)
 - provider policy [#6](https://github.com/Cor-Incorporated/opencode/issues/6)
 - scenario/replay harness [#7](https://github.com/Cor-Incorporated/opencode/issues/7)
+- plugin hardening wave 2 [#13](https://github.com/Cor-Incorporated/opencode/issues/13)
+- post-MVP CI and release gates [#14](https://github.com/Cor-Incorporated/opencode/issues/14)
+- post-MVP broader asset migration [#12](https://github.com/Cor-Incorporated/opencode/issues/12)
 
 ## Usage
 
