@@ -19,4 +19,5 @@ No issue is complete unless:
 - linked scenario tests are green
 - any required ADR updates are committed in the same change set
 - the implementation follows the source canon fixed in `docs/ai-guardrails/README.md`
+- the implementation also respects the Anthropic skill guide PDF fixed in that canon
 - the work can ship as a single issue-scoped pull request

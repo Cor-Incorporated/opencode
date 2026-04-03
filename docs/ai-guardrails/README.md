@@ -15,7 +15,7 @@ The migration goal is not to hide the upstream lineage. It is to make the fork l
 
 ## Operating principles
 
-This plan inherits the key philosophy from `claude-code-skills` epic `#130`, its README, and its ADRs:
+This plan inherits the key philosophy from `claude-code-skills` epic `#130`, its README, its ADRs, and Anthropic's skill construction guide:
 
 - enforce quality and safety through mechanism before prose
 - push checks to the fastest reliable layer first
@@ -43,10 +43,10 @@ The main source set for this migration is:
 - `terisuke/claude-code-skills/docs/references/anthropic-skill-guide-summary.md`
 - `terisuke/claude-code-skills/docs/requirements/design-requirements-2026-03-24.md`
 - Claude Code official hooks and settings docs
-- Anthropic skill guide PDF and summary
+- Anthropic skill guide PDF (`The Complete Guide to Building Skills for Claude`) and summary
 - OpenCode rules, skills, commands, and plugins docs
 
-At the time of writing, the source repository does not expose a separate document explicitly titled `BDF`, so the canonical reference set above is anchored to the documents that the source README, requirements, and epic `#130` actually cite.
+In this migration, references to the `BDF` document should be interpreted as Anthropic's PDF `The Complete Guide to Building Skills for Claude`, which is the skill-construction guide the source repository philosophy lines up with operationally.
 
 When these sources disagree:
 
@@ -66,6 +66,12 @@ The following rules are mandatory for guardrail work in this fork:
 - reuse Claude-compatible `SKILL.md` assets directly before rewriting them
 - keep OpenCode core close to upstream unless a missing extension point proves otherwise
 - do not let merge, release, or review freshness depend on agent goodwill alone
+- design instructions with progressive disclosure: frontmatter/router text stays short, body text stays task-focused, and detail lives in linked references or deterministic mechanisms
+- define success before implementation with triggering tests, functional tests, and baseline comparison where applicable
+- prefer problem-first workflows and explicit outcomes over tool-first feature narration
+- for critical validation, prefer deterministic scripts, plugins, commands, or CI over soft language-only reminders
+- sync `upstream/dev` into fork `dev` before starting each issue branch unless a documented exception blocks it
+- push issue branches after meaningful checkpoints so the remote repo is the recovery point for the next session
 
 ## Goal
 
@@ -126,16 +132,16 @@ Bootstrap the first thin-distribution slice that keeps OpenCode upstream-friendl
 ## Tracking
 
 - Epic: [#1](https://github.com/Cor-Incorporated/opencode/issues/1)
-- Current issue: [#3](https://github.com/Cor-Incorporated/opencode/issues/3)
+- Current issue: [#4](https://github.com/Cor-Incorporated/opencode/issues/4)
 - Future slices remain separate issues so implementation can stay one issue per pull request.
 
 Issue `#2` is the merged bootstrap base.
 
-Issue `#3` is complete only when:
+Issue `#4` is complete only when:
 
-- the inventory is committed and kept current
-- repo docs explain `.claude` vs `.opencode` ownership rules
-- a representative Claude-compatible skill fixture is exercised in scenario tests
+- the plugin brief is committed and linked from the issue pack
+- repo docs explain the plugin MVP in terms of the same canon
+- scenario coverage proves the plugin loads and exercises the intended hooks
 - future implementation work can point back to this source canon instead of relying on memory
 
 ## Session rule
@@ -143,8 +149,10 @@ Issue `#3` is complete only when:
 When continuing this work in future sessions:
 
 - start from the GitHub epic and the linked issue, not from memory
+- sync fork `dev` with `upstream/dev` before opening the next issue branch when possible
 - preserve upstream compatibility unless a missing extension point proves otherwise
 - update docs and tests in the same change set when guardrail behavior changes
+- push branch checkpoints to GitHub after meaningful milestones so the next session can resume from remote state
 - do not mark work complete unless runtime behavior is verified, not just implemented
 
 ## Artifact map

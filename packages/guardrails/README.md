@@ -8,7 +8,7 @@ It keeps upstream OpenCode as the runtime and adds organization policy at the ed
 
 - `bin/opencode-guardrails` sets `OPENCODE_CONFIG_DIR` to the packaged profile and then delegates to the pinned `opencode` dependency
 - `managed/opencode.json` is the admin-managed profile for system deployment
-- `profile/` contains the packaged custom config dir defaults, starting with `AGENTS.md` and `opencode.json`
+- `profile/` contains the packaged custom config dir defaults, including `AGENTS.md`, `opencode.json`, and the guardrail plugin
 
 ## Design intent
 
@@ -20,6 +20,7 @@ This package exists to preserve the operating model imported from `claude-code-s
 - runtime verifiability over "the code exists, so it must work"
 
 Those principles come from `claude-code-skills` epic `#130` and are tracked in this fork under `docs/ai-guardrails/`.
+They now also explicitly inherit Anthropic's `The Complete Guide to Building Skills for Claude` as the BDF-equivalent source for progressive disclosure, use-case-first design, and measurable testing discipline.
 
 ## Positioning
 
@@ -44,7 +45,8 @@ Current contents focus on the first thin-distribution slice:
 - packaged wrapper entrypoint
 - managed enterprise defaults
 - packaged custom config dir profile
-- scenario coverage for managed config precedence and project-local asset compatibility
+- packaged plugin for runtime guardrail hooks
+- scenario coverage for managed config precedence, project-local asset compatibility, and plugin behavior
 
 Planned next slices are tracked in the fork:
 
