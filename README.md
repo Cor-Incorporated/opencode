@@ -116,6 +116,17 @@ Learn more about [agents](https://opencode.ai/docs/agents).
 
 For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
 
+### Internal Guardrails
+
+The Cor-Incorporated fork is building an internal thin distribution on top of upstream OpenCode rather than a deep product fork.
+
+- Plan and ADRs: `docs/ai-guardrails/README.md`
+- Claude asset migration inventory: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- Packaged distribution layer: `packages/guardrails/`
+- GitHub tracker: epic `#1` and workstreams `#2` to `#7` on `Cor-Incorporated/opencode`
+
+The operating model follows the same philosophy captured in `claude-code-skills` epic `#130`: mechanism-first guardrails, fast feedback, pointer-based instructions, and system-level verification instead of assuming that code presence means runtime correctness.
+
 ### Contributing
 
 If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
