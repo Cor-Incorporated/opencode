@@ -25,6 +25,48 @@ This plan inherits the key philosophy from `claude-code-skills` epic `#130`, its
 
 That means the migration target is not "copy Claude hooks as-is." It is "preserve the operating model using OpenCode-native config, plugins, commands, permissions, and CI."
 
+## Source canon
+
+Future implementation work should treat the following sources as normative, in this order:
+
+1. current platform semantics from official product docs
+2. `claude-code-skills` README, epic `#130`, and accepted ADRs
+3. harness-engineering references and skill-construction references that the source README already cites
+4. this repo's ADRs, issue briefs, and scenario tests
+
+The main source set for this migration is:
+
+- `terisuke/claude-code-skills` README
+- `terisuke/claude-code-skills` epic `#130`
+- `terisuke/claude-code-skills` ADRs `001` to `004`
+- `terisuke/claude-code-skills/docs/references/harness-engineering-best-practices-2026.md`
+- `terisuke/claude-code-skills/docs/references/anthropic-skill-guide-summary.md`
+- `terisuke/claude-code-skills/docs/requirements/design-requirements-2026-03-24.md`
+- Claude Code official hooks and settings docs
+- Anthropic skill guide PDF and summary
+- OpenCode rules, skills, commands, and plugins docs
+
+At the time of writing, the source repository does not expose a separate document explicitly titled `BDF`, so the canonical reference set above is anchored to the documents that the source README, requirements, and epic `#130` actually cite.
+
+When these sources disagree:
+
+- use official runtime docs for concrete platform behavior
+- use epic `#130` and harness best practices for guardrail philosophy
+- use this repo's ADRs to document local implementation choices
+
+## Non-negotiables
+
+The following rules are mandatory for guardrail work in this fork:
+
+- mechanism before prose
+- fastest reliable feedback layer first
+- pointer-based instructions instead of long always-loaded prompts
+- "implemented" is not "working"; scenario or CI proof is required
+- migrate assets by role, not by naive one-to-one copying
+- reuse Claude-compatible `SKILL.md` assets directly before rewriting them
+- keep OpenCode core close to upstream unless a missing extension point proves otherwise
+- do not let merge, release, or review freshness depend on agent goodwill alone
+
 ## Goal
 
 Bootstrap the first thin-distribution slice that keeps OpenCode upstream-friendly while adding:
@@ -65,6 +107,15 @@ Bootstrap the first thin-distribution slice that keeps OpenCode upstream-friendl
 - Default server exposure to localhost-only and default sharing to disabled.
 - Prove config precedence and project-local compatibility with scenario tests.
 
+### Asset migration discipline
+
+- keep third-party Claude-only frameworks in `.claude` during transition
+- keep representative `.claude/skills/*/SKILL.md` fixtures as migration truth data
+- move organization-owned reusable skills into `.opencode/skills` only when ownership and packaging are stable
+- move long-form repo rules into `AGENTS.md` plus `instructions`
+- redesign hooks as plugins, commands, or CI policy instead of cloning Claude hook mechanics
+- refuse implementation work that has not first been classified in the migration inventory or explicitly justified as an exception
+
 ## Delivery phases
 
 1. Freeze architecture decisions in ADRs.
@@ -75,8 +126,17 @@ Bootstrap the first thin-distribution slice that keeps OpenCode upstream-friendl
 ## Tracking
 
 - Epic: [#1](https://github.com/Cor-Incorporated/opencode/issues/1)
-- Current issue: [#2](https://github.com/Cor-Incorporated/opencode/issues/2)
+- Current issue: [#3](https://github.com/Cor-Incorporated/opencode/issues/3)
 - Future slices remain separate issues so implementation can stay one issue per pull request.
+
+Issue `#2` is the merged bootstrap base.
+
+Issue `#3` is complete only when:
+
+- the inventory is committed and kept current
+- repo docs explain `.claude` vs `.opencode` ownership rules
+- a representative Claude-compatible skill fixture is exercised in scenario tests
+- future implementation work can point back to this source canon instead of relying on memory
 
 ## Session rule
 
@@ -91,10 +151,18 @@ When continuing this work in future sessions:
 
 - ADRs: `docs/ai-guardrails/adr/`
 - Issue briefs: `docs/ai-guardrails/issues/`
+- Migration inventory: `docs/ai-guardrails/migration/`
 - Scenario tests: `packages/opencode/test/scenario/`
 - Thin distribution package: `packages/guardrails/`
 
 ## Primary references
 
 - OpenCode config: https://opencode.ai/docs/config
+- OpenCode rules: https://opencode.ai/docs/rules
+- OpenCode skills: https://opencode.ai/docs/skills
+- OpenCode commands: https://opencode.ai/docs/commands
+- OpenCode plugins: https://opencode.ai/docs/plugins
 - OpenCode server: https://opencode.ai/docs/server
+- Claude Code hooks: https://docs.anthropic.com/en/docs/claude-code/hooks
+- Claude Code settings: https://docs.anthropic.com/en/docs/claude-code/settings
+- Anthropic skills guide PDF: https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf

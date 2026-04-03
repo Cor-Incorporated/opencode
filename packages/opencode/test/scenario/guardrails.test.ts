@@ -69,6 +69,46 @@ test("guardrails package pins the runtime to the packaged opencode version", asy
   expect(guardrails.dependencies.opencode).toBe(opencode.version)
 })
 
+test("claude-compatible skills remain discoverable and command-addressable", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, ".claude", "skills", "review-loop", "SKILL.md"),
+        `---
+name: review-loop
+description: Review loop from Claude-compatible assets.
+---
+
+# Review Loop
+`,
+      )
+      await Bun.write(
+        path.join(dir, ".opencode", "skills", "ship-gate", "SKILL.md"),
+        `---
+name: ship-gate
+description: Internal ship gate skill.
+---
+
+# Ship Gate
+`,
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const skills = await Skill.all()
+      const cmds = await Command.list()
+
+      expect(skills.map((item) => item.name).sort()).toEqual(["review-loop", "ship-gate"])
+      expect(cmds.some((item) => item.name === "review-loop" && item.source === "skill")).toBe(true)
+      expect(cmds.some((item) => item.name === "ship-gate" && item.source === "skill")).toBe(true)
+    },
+  })
+})
+
 test("guardrail profile keeps defaults while allowing project-local commands, agents, and skills", async () => {
   const prev = process.env.OPENCODE_CONFIG_DIR
   process.env.OPENCODE_CONFIG_DIR = profile
