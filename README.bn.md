@@ -43,7 +43,27 @@
 
 ---
 
+### About This Fork
+
+This repository is the Cor-Incorporated fork of OpenCode.
+
+- It tracks upstream OpenCode and keeps compatibility where practical.
+- It adds a thin internal distribution layer rather than a deep rewrite.
+- Internal product work lives under `docs/ai-guardrails/` and `packages/guardrails/`.
+- It is not an official OpenCode team repository or release channel.
+
+If you are reading this fork for internal implementation work, start here:
+
+- Plan and ADRs: `docs/ai-guardrails/README.md`
+- Migration inventory: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- Thin distribution package: `packages/guardrails/`
+- GitHub tracker: `Cor-Incorporated/opencode` issues `#1` to `#7`
+
 ### ইনস্টলেশন (Installation)
+
+The commands below install official upstream OpenCode, not this fork-specific internal distribution.
+
+This fork currently preserves upstream compatibility and develops an additional internal layer on top. If Cor-Incorporated publishes its own install path or renamed distribution, that should be documented separately from the upstream install instructions below.
 
 ```bash
 # YOLO
@@ -121,6 +141,13 @@ OpenCode এ দুটি বিল্ট-ইন এজেন্ট রয়ে
 আপনি যদি OpenCode এ অবদান রাখতে চান, অনুগ্রহ করে একটি পুল রিকোয়েস্ট সাবমিট করার আগে আমাদের [কন্ট্রিবিউটিং ডকস](./CONTRIBUTING.md) পড়ে নিন।
 
 ### OpenCode এর উপর বিল্ডিং (Building on OpenCode)
+
+For this fork specifically, the correct framing is:
+
+- forked from OpenCode
+- keeps upstream compatibility where practical
+- extends it into a Cor-Incorporated internal tool through a separate guardrail layer
+- should not be presented as an official upstream OpenCode release
 
 আপনি যদি এমন প্রজেক্টে কাজ করেন যা OpenCode এর সাথে সম্পর্কিত এবং প্রজেক্টের নামের অংশ হিসেবে "opencode" ব্যবহার করেন, উদাহরণস্বরূপ "opencode-dashboard" বা "opencode-mobile", তবে দয়া করে আপনার README তে একটি নোট যোগ করে স্পষ্ট করুন যে এই প্রজেক্টটি OpenCode দল দ্বারা তৈরি হয়নি এবং আমাদের সাথে এর কোনো সরাসরি সম্পর্ক নেই।
 

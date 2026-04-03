@@ -43,7 +43,27 @@
 
 ---
 
+### About This Fork
+
+This repository is the Cor-Incorporated fork of OpenCode.
+
+- It tracks upstream OpenCode and keeps compatibility where practical.
+- It adds a thin internal distribution layer rather than a deep rewrite.
+- Internal product work lives under `docs/ai-guardrails/` and `packages/guardrails/`.
+- It is not an official OpenCode team repository or release channel.
+
+If you are reading this fork for internal implementation work, start here:
+
+- Plan and ADRs: `docs/ai-guardrails/README.md`
+- Migration inventory: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- Thin distribution package: `packages/guardrails/`
+- GitHub tracker: `Cor-Incorporated/opencode` issues `#1` to `#7`
+
 ### Встановлення
+
+The commands below install official upstream OpenCode, not this fork-specific internal distribution.
+
+This fork currently preserves upstream compatibility and develops an additional internal layer on top. If Cor-Incorporated publishes its own install path or renamed distribution, that should be documented separately from the upstream install instructions below.
 
 ```bash
 # YOLO
@@ -121,6 +141,13 @@ OpenCode містить два вбудовані агенти, між яким�
 Якщо ви хочете зробити внесок в OpenCode, будь ласка, прочитайте нашу [документацію для контриб'юторів](./CONTRIBUTING.md) перед надсиланням pull request.
 
 ### Проєкти на базі OpenCode
+
+For this fork specifically, the correct framing is:
+
+- forked from OpenCode
+- keeps upstream compatibility where practical
+- extends it into a Cor-Incorporated internal tool through a separate guardrail layer
+- should not be presented as an official upstream OpenCode release
 
 Якщо ви працюєте над проєктом, пов'язаним з OpenCode, і використовуєте "opencode" у назві, наприклад "opencode-dashboard" або "opencode-mobile", додайте примітку до свого README.
 Уточніть, що цей проєкт не створений командою OpenCode і жодним чином не афілійований із нами.

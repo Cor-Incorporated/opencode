@@ -43,7 +43,27 @@
 
 ---
 
+### About This Fork
+
+This repository is the Cor-Incorporated fork of OpenCode.
+
+- It tracks upstream OpenCode and keeps compatibility where practical.
+- It adds a thin internal distribution layer rather than a deep rewrite.
+- Internal product work lives under `docs/ai-guardrails/` and `packages/guardrails/`.
+- It is not an official OpenCode team repository or release channel.
+
+If you are reading this fork for internal implementation work, start here:
+
+- Plan and ADRs: `docs/ai-guardrails/README.md`
+- Migration inventory: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- Thin distribution package: `packages/guardrails/`
+- GitHub tracker: `Cor-Incorporated/opencode` issues `#1` to `#7`
+
 ### 安裝
+
+The commands below install official upstream OpenCode, not this fork-specific internal distribution.
+
+This fork currently preserves upstream compatibility and develops an additional internal layer on top. If Cor-Incorporated publishes its own install path or renamed distribution, that should be documented separately from the upstream install instructions below.
 
 ```bash
 # 直接安裝 (YOLO)
@@ -120,6 +140,13 @@ OpenCode 內建了兩種 Agent，您可以使用 `Tab` 鍵快速切換。
 如果您有興趣參與 OpenCode 的開發，請在提交 Pull Request 前先閱讀我們的 [貢獻指南 (Contributing Docs)](./CONTRIBUTING.md)。
 
 ### 基於 OpenCode 進行開發
+
+For this fork specifically, the correct framing is:
+
+- forked from OpenCode
+- keeps upstream compatibility where practical
+- extends it into a Cor-Incorporated internal tool through a separate guardrail layer
+- should not be presented as an official upstream OpenCode release
 
 如果您正在開發與 OpenCode 相關的專案，並在名稱中使用了 "opencode"（例如 "opencode-dashboard" 或 "opencode-mobile"），請在您的 README 中加入聲明，說明該專案並非由 OpenCode 團隊開發，且與我們沒有任何隸屬關係。
 

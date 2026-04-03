@@ -43,7 +43,47 @@
 
 ---
 
-### التثبيت
+### About This Fork
+
+This repository is the Cor-Incorporated fork of OpenCode.
+
+- It tracks upstream OpenCode and keeps compatibility where practical.
+- It adds a thin internal distribution layer rather than a deep rewrite.
+- Internal product work lives under `docs/ai-guardrails/` and `packages/guardrails/`.
+- It is not an official OpenCode team repository or release channel.
+
+If you are reading this fork for internal implementation work, start here:
+
+- Plan and ADRs: `docs/ai-guardrails/README.md`
+- Migration inventory: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- Thin distribution package: `packages/guardrails/`
+- GitHub tracker: `Cor-Incorporated/opencode` issues `#1` to `#7`
+
+### حول هذا الـ fork
+
+هذا المستودع هو fork خاص بـ Cor-Incorporated من OpenCode.
+
+- يحافظ على التوافق مع OpenCode الاصلي قدر الامكان.
+- يضيف طبقة توزيع داخلية خفيفة بدلا من تحويل الـ fork الى اعادة كتابة عميقة.
+- اعمال المنتج الداخلية الحالية موجودة تحت `docs/ai-guardrails/` و `packages/guardrails/`.
+- هذا ليس مستودعا رسميا لفريق OpenCode ولا قناة اصدار رسمية لهم.
+
+اذا كنت تقرأ هذا الـ fork بغرض العمل الداخلي، ابدأ من:
+
+- الخطة و ADRs: `docs/ai-guardrails/README.md`
+- جرد الترحيل: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- حزمة التوزيع الخفيفة: `packages/guardrails/`
+
+### تثبيت النسخة الاصلية
+
+الاوامر التالية تثبت OpenCode الاصلي، وليس التوزيع الداخلي الخاص بهذا الـ fork.
+
+يحافظ هذا الـ fork حاليا على التوافق مع النسخة الاصلية ويطوّر طبقة داخلية اضافية فوقها. اذا نشرت Cor-Incorporated لاحقا مسار تثبيت خاصا بها او توزيعة باسم مختلف، فيجب توثيق ذلك بشكل منفصل عن تعليمات التثبيت الاصلية ادناه.
+
+The commands below install official upstream OpenCode, not this fork-specific internal distribution.
+
+This fork currently preserves upstream compatibility and develops an additional internal layer on top. If Cor-Incorporated publishes its own install path or renamed distribution, that should be documented separately from the upstream install instructions below.
+
 
 ```bash
 # YOLO
@@ -123,7 +163,21 @@ XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
 ### البناء فوق OpenCode
 
 اذا كنت تعمل على مشروع مرتبط بـ OpenCode ويستخدم "opencode" كجزء من اسمه (مثل "opencode-dashboard" او "opencode-mobile")، يرجى اضافة ملاحظة في README توضح انه ليس مبنيا بواسطة فريق OpenCode ولا يرتبط بنا بأي شكل.
+بالنسبة لهذا الـ fork تحديدا، الصياغة الصحيحة هي:
 
+- fork من OpenCode
+- يحافظ على التوافق مع النسخة الاصلية حيثما كان ذلك عمليا
+- يمدده الى اداة داخلية خاصة بـ Cor-Incorporated عبر طبقة guardrail منفصلة
+- لا ينبغي تقديمه على انه اصدار رسمي من OpenCode
+
+
+
+For this fork specifically, the correct framing is:
+
+- forked from OpenCode
+- keeps upstream compatibility where practical
+- extends it into a Cor-Incorporated internal tool through a separate guardrail layer
+- should not be presented as an official upstream OpenCode release
 ### FAQ
 
 #### ما الفرق عن Claude Code؟
