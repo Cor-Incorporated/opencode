@@ -127,21 +127,32 @@ Bootstrap the first thin-distribution slice that keeps OpenCode upstream-friendl
 1. Freeze architecture decisions in ADRs.
 2. Land the thin-distribution bootstrap as the first issue-sized slice.
 3. Keep scenario coverage in the same change set as runtime behavior.
-4. Stack later issues for plugin policy, safe workflows, provider lanes, and replay coverage on top of this base.
+4. Establish the MVP floor explicitly before broadening into later maturity work.
+5. Stack later issues for plugin policy, safe workflows, provider lanes, replay coverage, and authoritative release gates on top of this base.
+
+## MVP readiness split
+
+The remaining work is intentionally split into two stages:
+
+- `now required before MVP claim`: `#5`, `#6`, `#7`, and `#13`
+- `later, after MVP floor`: `#14` and `#12`
+
+The detailed rationale lives in `docs/ai-guardrails/mvp-readiness.md`. Future sessions should start there before expanding issue scope.
 
 ## Tracking
 
 - Epic: [#1](https://github.com/Cor-Incorporated/opencode/issues/1)
-- Current issue: [#4](https://github.com/Cor-Incorporated/opencode/issues/4)
+- MVP readiness epic: [#16](https://github.com/Cor-Incorporated/opencode/issues/16)
+- Current issue: [#15](https://github.com/Cor-Incorporated/opencode/issues/15)
 - Future slices remain separate issues so implementation can stay one issue per pull request.
 
 Issue `#2` is the merged bootstrap base.
 
-Issue `#4` is complete only when:
+Issue `#15` is complete only when:
 
-- the plugin brief is committed and linked from the issue pack
-- repo docs explain the plugin MVP in terms of the same canon
-- scenario coverage proves the plugin loads and exercises the intended hooks
+- the repo has a written MVP readiness register
+- missing local issue briefs for the open workstreams are committed
+- GitHub issue structure matches the same `now` versus `later` split
 - future implementation work can point back to this source canon instead of relying on memory
 
 ## Session rule
@@ -159,6 +170,7 @@ When continuing this work in future sessions:
 
 - ADRs: `docs/ai-guardrails/adr/`
 - Issue briefs: `docs/ai-guardrails/issues/`
+- MVP readiness: `docs/ai-guardrails/mvp-readiness.md`
 - Migration inventory: `docs/ai-guardrails/migration/`
 - Scenario tests: `packages/opencode/test/scenario/`
 - Thin distribution package: `packages/guardrails/`

@@ -208,11 +208,14 @@ Bucket definitions:
 
 ## Immediate Implications For This Repo
 
-- `Issue 001` should stay thin: wrapper, managed config, packaged profile.
-- `Issue 002` is complete only when this inventory remains current and scenario coverage for `.claude/skills` stays green.
-- `Issue 003` should focus on plugin rewrites that preserve fast feedback and system-level verifiability.
-- `Issue 004` should turn command-bucket items into explicit safe workflows like `/implement`, `/review`, `/ship`, and `/handoff`.
-- `Issue 005` should keep provider policy declarative and independent from one transient model brand.
+- `001-bootstrap-thin-distribution` should stay thin: wrapper, managed config, packaged profile.
+- `002-claude-asset-inventory-and-import` is complete only when this inventory remains current and scenario coverage for `.claude/skills` stays green.
+- `003-guardrail-plugin-mvp` proved the runtime hook surface but not the full MVP floor.
+- `004-safe-agents-and-commands` should turn command-bucket items into explicit safe workflows like `/implement`, `/review`, `/ship`, and `/handoff`.
+- `005-provider-admission-policy` should keep provider policy declarative and independent from one transient model brand.
+- `006-scenario-and-replay-harness` should prove the MVP floor in runtime scenarios, not just code review.
+- `007-plugin-hardening-wave-2` should carry the next high-value plugin migrations that still block an MVP claim.
+- `008-authoritative-ci-and-release-gates` and `009-broader-claude-asset-migration` are later maturity work and should not silently expand the MVP floor.
 
 ## What Success Looks Like
 
