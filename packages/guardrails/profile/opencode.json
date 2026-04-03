@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "default_agent": "implement",
   "share": "disabled",
   "server": {
     "hostname": "127.0.0.1",
@@ -14,6 +15,12 @@
       "*": "ask",
       "rm -rf *": "deny",
       "sudo *": "deny",
+      "git checkout -- *": "deny",
+      "git merge *": "deny",
+      "git push --force*": "deny",
+      "git push * --force*": "deny",
+      "git reset --hard*": "deny",
+      "gh pr merge *": "deny",
       "curl * | sh*": "deny",
       "wget * | sh*": "deny"
     },

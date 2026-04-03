@@ -10,6 +10,7 @@ import { Session } from "../../src/session"
 import { Skill } from "../../src/skill"
 import { Filesystem } from "../../src/util/filesystem"
 import { SessionID } from "../../src/session/schema"
+import { Permission } from "../../src/permission"
 import { tmpdir } from "../fixture/fixture"
 
 const disable = process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS
@@ -239,11 +240,26 @@ description: Project-local skill.
         const cmds = await Command.list()
         const skills = await Skill.all()
         const agents = await Agent.list()
+        const name = await Agent.defaultAgent()
+        const implement = await Agent.get("implement")
+        const review = await Agent.get("review")
 
+        expect(cfg.default_agent).toBe("implement")
         expect(cfg.share).toBe("disabled")
         expect(cfg.server?.hostname).toBe("127.0.0.1")
+        expect(name).toBe("implement")
+        expect(implement?.mode).toBe("primary")
+        expect(Permission.evaluate("question", "*", implement?.permission).action).toBe("allow")
+        expect(Permission.evaluate("bash", "git push --force-with-lease origin head", implement?.permission).action).toBe(
+          "deny",
+        )
+        expect(Permission.evaluate("edit", "*", review?.permission).action).toBe("deny")
+        expect(cmds.some((item) => item.name === "implement" && item.agent === "implement")).toBe(true)
+        expect(cmds.some((item) => item.name === "review" && item.agent === "review" && item.subtask)).toBe(true)
+        expect(cmds.some((item) => item.name === "ship" && item.agent === "review" && item.subtask)).toBe(true)
         expect(cmds.some((item) => item.name === "handoff")).toBe(true)
         expect(cmds.some((item) => item.name === "project-local")).toBe(true)
+        expect(agents.some((item) => item.name === "implement")).toBe(true)
         expect(skills.some((item) => item.name === "project-skill")).toBe(true)
         expect(agents.some((item) => item.name === "review")).toBe(true)
         expect(agents.some((item) => item.name === "project-review")).toBe(true)

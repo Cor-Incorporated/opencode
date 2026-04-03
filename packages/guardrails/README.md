@@ -45,6 +45,8 @@ Current contents focus on the first thin-distribution slice:
 - managed enterprise defaults
 - packaged custom config dir profile
 - initial guardrail plugin for shell env injection, secret-path blocking, and compaction context
+- guarded default implementation agent
+- packaged workflow commands for `implement`, `review`, `ship`, and `handoff`
 
 Planned next slices are tracked in the fork:
 

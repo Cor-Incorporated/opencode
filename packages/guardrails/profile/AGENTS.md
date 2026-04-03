@@ -6,4 +6,5 @@
 - Keep always-loaded instructions short and pointer-based; move detailed rationale into ADRs and docs.
 - Push checks to the fastest reliable layer first, then fall back to command workflows and CI for authoritative gates.
 - Keep project-local `.opencode` assets working; use them for repo-specific workflows instead of editing this profile unless the rule is organization-wide.
-- Default to review and explicit workflow gates before shipping changes.
+- Default to the guarded `implement` agent instead of raw `build`.
+- Use `/review`, `/ship`, and `/handoff` as explicit workflow gates before shipping changes.
