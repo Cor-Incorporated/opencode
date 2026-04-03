@@ -37,6 +37,56 @@ const mut = [
   />/,
 ]
 
+const src = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".py",
+  ".go",
+  ".rs",
+  ".swift",
+  ".kt",
+  ".java",
+  ".rb",
+  ".php",
+  ".vue",
+  ".svelte",
+  ".css",
+  ".scss",
+  ".sql",
+  ".prisma",
+  ".graphql",
+  ".sh",
+])
+
+const paid: Record<string, Set<string>> = {
+  "zai-coding-plan": new Set([
+    "glm-4.5",
+    "glm-4.5-air",
+    "glm-4.5-flash",
+    "glm-4.5v",
+    "glm-4.6",
+    "glm-4.6v",
+    "glm-4.7",
+    "glm-4.7-flash",
+    "glm-4.7-flashx",
+    "glm-5",
+    "glm-5-turbo",
+    "glm-5.1",
+  ]),
+  openai: new Set([
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-mini",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.3-codex",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+  ]),
+}
+
 function norm(file: string) {
   return path.resolve(file).replaceAll("\\", "/")
 }
@@ -50,6 +100,10 @@ function rel(root: string, file: string) {
 
 function has(file: string, list: RegExp[]) {
   return list.some((item) => item.test(file))
+}
+
+function ext(file: string) {
+  return path.extname(file).toLowerCase()
 }
 
 function stash(file: string) {
@@ -84,7 +138,21 @@ function list(data: unknown) {
   return Array.isArray(data) ? data.filter((item): item is string => typeof item === "string" && item !== "") : []
 }
 
+function num(data: unknown) {
+  return typeof data === "number" && Number.isFinite(data) ? data : 0
+}
+
+function flag(data: unknown) {
+  return data === true
+}
+
+function str(data: unknown) {
+  return typeof data === "string" ? data : ""
+}
+
 function free(data: {
+  id?: unknown
+  providerID?: unknown
   cost?: {
     input?: number
     output?: number
@@ -95,17 +163,38 @@ function free(data: {
   const outCost = data.cost?.output ?? 0
   const readCost = data.cost?.cache?.read ?? 0
   const writeCost = data.cost?.cache?.write ?? 0
-  return inCost === 0 && outCost === 0 && readCost === 0 && writeCost === 0
+  if (!(inCost === 0 && outCost === 0 && readCost === 0 && writeCost === 0)) return false
+  const ids = paid[str(data.providerID)]
+  return !(ids && ids.has(str(data.id)))
 }
 
 function preview(data: {
   id?: unknown
   status?: unknown
 }) {
-  const id = typeof data.id === "string" ? data.id : ""
-  const status = typeof data.status === "string" ? data.status : ""
+  const id = str(data.id)
+  const status = str(data.status)
   if (status && status !== "active") return true
   return /(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i.test(id)
+}
+
+function vers(text: string) {
+  return [...text.matchAll(/\bv?\d+\.\d+\.\d+\b/g)].map((item) => item[0]).slice(0, 8)
+}
+
+function semver(text: string) {
+  const hit = text.match(/^v?(\d+)\.(\d+)\.(\d+)$/)
+  if (!hit) return
+  return hit.slice(1).map((item) => Number(item))
+}
+
+function cmp(left: string, right: string) {
+  const a = semver(left)
+  const b = semver(right)
+  if (!a || !b) return 0
+  if (a[0] !== b[0]) return a[0] - b[0]
+  if (a[1] !== b[1]) return a[1] - b[1]
+  return a[2] - b[2]
 }
 
 export default async function guardrail(input: {
@@ -136,8 +225,8 @@ export default async function guardrail(input: {
 
   function note(props: Record<string, unknown> | undefined) {
     return {
-      sessionID: typeof props?.sessionID === "string" ? props.sessionID : undefined,
-      permission: typeof props?.permission === "string" ? props.permission : undefined,
+      sessionID: str(props?.sessionID) || undefined,
+      permission: str(props?.permission) || undefined,
       patterns: Array.isArray(props?.patterns) ? props.patterns : undefined,
     }
   }
@@ -146,11 +235,101 @@ export default async function guardrail(input: {
     return rel(input.worktree, file).startsWith(".opencode/guardrails/")
   }
 
+  function code(file: string) {
+    const item = rel(input.worktree, file)
+    if (hidden(file)) return false
+    if (item === "AGENTS.md") return false
+    if (item.startsWith(".claude/")) return false
+    if (item.startsWith(".opencode/")) return false
+    if (item.startsWith("docs/")) return false
+    if (item.includes("/docs/")) return false
+    if (item.startsWith("node_modules/")) return false
+    if (item.includes("/node_modules/")) return false
+    if (item.startsWith("tmp/")) return false
+    if (item.includes("/tmp/")) return false
+    return src.has(ext(item))
+  }
+
+  function fact(file: string) {
+    const item = rel(input.worktree, file)
+    if (hidden(file)) return false
+    if (code(file)) return true
+    if (/(^|\/)(README|AGENTS)\.md$/i.test(item)) return true
+    if (item.startsWith("docs/") || item.includes("/docs/")) return true
+    if (item.startsWith("hooks/") || item.includes("/hooks/")) return true
+    if (item.startsWith("scripts/") || item.includes("/scripts/")) return true
+    if (item.startsWith("src/") || item.includes("/src/")) return true
+    return [".md", ".mdx", ".json", ".yaml", ".yml", ".toml"].includes(ext(item))
+  }
+
+  function stale(data: Record<string, unknown>, key: "edit_count_since_check" | "edits_since_review") {
+    return num(data[key]) > 0
+  }
+
+  function factLine(data: Record<string, unknown>) {
+    if (!flag(data.factchecked)) return "missing"
+    const source = str(data.factcheck_source) || "unknown"
+    const at = str(data.factcheck_at) || "unknown"
+    if (!stale(data, "edit_count_since_check")) return `fresh via ${source} at ${at}`
+    return `stale after ${num(data.edit_count_since_check)} edit(s) since ${source} at ${at}`
+  }
+
+  function reviewLine(data: Record<string, unknown>) {
+    if (!flag(data.reviewed)) return "missing"
+    const at = str(data.review_at) || "unknown"
+    if (!stale(data, "edits_since_review")) return `fresh at ${at}`
+    return `stale after ${num(data.edits_since_review)} edit(s) since ${at}`
+  }
+
+  function compact(data: Record<string, unknown>) {
+    const block = str(data.last_block) || "none"
+    const reason = str(data.last_reason)
+    return [
+      "Guardrail runtime state:",
+      `- unique source reads: ${num(data.read_count)}`,
+      `- edit/write count: ${num(data.edit_count)}`,
+      `- fact-check: ${factLine(data)}`,
+      `- review state: ${reviewLine(data)}`,
+      `- last block: ${block}${reason ? ` (${reason})` : ""}`,
+      "Treat missing or stale fact-check/review state as an explicit gate.",
+    ].join("\n")
+  }
+
   function deny(file: string, kind: "read" | "edit") {
     const item = rel(input.worktree, file)
     if (kind === "read" && has(item, sec)) return "secret material is outside the allowed read surface"
     if (hidden(file)) return "guardrail runtime state is plugin-owned"
     if (kind === "edit" && has(item, cfg)) return "linter or formatter configuration is policy-protected"
+  }
+
+  function baseline(old: string, next: string) {
+    if (/:latest\b/i.test(old) && vers(next).length > 0) {
+      return ":latest pin requires ADR-backed compatibility verification"
+    }
+    const left = vers(old)
+    const right = vers(next)
+    if (!left.length || !right.length) return
+    if (left.length !== right.length || left.length > 3) return
+    for (let i = 0; i < left.length; i++) {
+      if (cmp(right[i], left[i]) < 0) return `version baseline regression ${left[i]} -> ${right[i]}`
+    }
+  }
+
+  async function version(args: Record<string, unknown>) {
+    const file = pick(args)
+    if (!file || hidden(file)) return
+    if (typeof args.oldString === "string" && typeof args.newString === "string") {
+      return baseline(args.oldString, args.newString)
+    }
+    if (typeof args.content !== "string") return
+    const prev = await Bun.file(file).text().catch(() => "")
+    if (!prev) return
+    return baseline(prev, args.content)
+  }
+
+  async function budget() {
+    const data = await stash(state)
+    return num(data.read_count)
   }
 
   function gate(data: {
@@ -166,8 +345,8 @@ export default async function guardrail(input: {
       }
     }
   }) {
-    const provider = typeof data.model?.providerID === "string" ? data.model.providerID : ""
-    const agent = typeof data.agent === "string" ? data.agent : ""
+    const provider = str(data.model?.providerID)
+    const agent = str(data.agent)
     if (!provider) return
 
     if (evals.has(provider) && agent !== evalAgent) {
@@ -178,7 +357,7 @@ export default async function guardrail(input: {
     }
 
     const ids = allow[provider]
-    const model = typeof data.model?.id === "string" ? data.model.id : ""
+    const model = str(data.model?.id)
     if (ids?.size && model && !ids.has(model)) {
       return `${provider}/${model} is not admitted by provider policy`
     }
@@ -207,6 +386,19 @@ export default async function guardrail(input: {
         await mark({
           last_session: event.properties?.sessionID,
           last_event: event.type,
+          read_files: [],
+          read_count: 0,
+          edited_files: [],
+          edit_count: 0,
+          factchecked: false,
+          factcheck_source: "",
+          factcheck_at: "",
+          edit_count_since_check: 0,
+          reviewed: false,
+          review_at: "",
+          edits_since_review: 0,
+          last_block: "",
+          last_reason: "",
         })
       }
       if (event.type === "permission.asked") {
@@ -230,9 +422,25 @@ export default async function guardrail(input: {
       const file = pick(out.args ?? item.args)
       if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write")) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
-        if (!err) return
-        await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
-        throw new Error(text(err))
+        if (err) {
+          await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
+          throw new Error(text(err))
+        }
+      }
+      if (item.tool === "edit" || item.tool === "write") {
+        const err = await version(out.args ?? {})
+        if (err) {
+          await mark({ last_block: item.tool, last_file: file ? rel(input.worktree, file) : "", last_reason: err })
+          throw new Error(text(err))
+        }
+      }
+      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+        const count = await budget()
+        if (count >= 4) {
+          const err = `context budget exceeded after ${count} source reads; narrow scope or delegate before editing`
+          await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
+          throw new Error(text(err))
+        }
       }
       if (item.tool === "bash") {
         const cmd = typeof out.args?.command === "string" ? out.args.command : ""
@@ -247,6 +455,95 @@ export default async function guardrail(input: {
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
       }
+    },
+    "tool.execute.after": async (
+      item: { tool: string; args?: Record<string, unknown> },
+      _out: { title: string; output: string; metadata: Record<string, unknown> },
+    ) => {
+      const now = new Date().toISOString()
+      const file = pick(item.args)
+      const data = await stash(state)
+
+      if (item.tool === "read" && file) {
+        if (code(file)) {
+          const seen = list(data.read_files)
+          const next = seen.includes(rel(input.worktree, file)) ? seen : [...seen, rel(input.worktree, file)]
+          await mark({
+            read_files: next,
+            read_count: next.length,
+            last_read: rel(input.worktree, file),
+          })
+        }
+        if (fact(file)) {
+          await mark({
+            factchecked: true,
+            factcheck_source: "DocRead",
+            factcheck_at: now,
+            edit_count_since_check: 0,
+          })
+        }
+      }
+
+      if (item.tool === "webfetch" || item.tool.startsWith("mcp__context7__")) {
+        await mark({
+          factchecked: true,
+          factcheck_source: item.tool === "webfetch" ? "WebFetch" : "Context7",
+          factcheck_at: now,
+          edit_count_since_check: 0,
+        })
+      }
+
+      if (item.tool === "bash") {
+        const cmd = typeof item.args?.command === "string" ? item.args.command : ""
+        if (/(^|&&|\|\||;)\s*(gcloud|kubectl|aws)\s+/i.test(cmd)) {
+          await mark({
+            factchecked: true,
+            factcheck_source: "CLI",
+            factcheck_at: now,
+            edit_count_since_check: 0,
+          })
+        }
+      }
+
+      if ((item.tool === "edit" || item.tool === "write") && file) {
+        const seen = list(data.edited_files)
+        const next = seen.includes(rel(input.worktree, file)) ? seen : [...seen, rel(input.worktree, file)]
+        await mark({
+          edited_files: next,
+          edit_count: num(data.edit_count) + 1,
+          edit_count_since_check: num(data.edit_count_since_check) + 1,
+          edits_since_review: num(data.edits_since_review) + 1,
+          last_edit: rel(input.worktree, file),
+        })
+      }
+
+      if (item.tool === "task") {
+        const cmd = typeof item.args?.command === "string" ? item.args.command : ""
+        const agent = typeof item.args?.subagent_type === "string" ? item.args.subagent_type : ""
+        if (cmd === "review" || agent.includes("review")) {
+          await mark({
+            reviewed: true,
+            review_at: now,
+            review_agent: agent,
+            edits_since_review: 0,
+          })
+        }
+      }
+    },
+    "command.execute.before": async (
+      item: { command: string; sessionID: string; arguments: string },
+      out: {
+        parts: {
+          type?: string
+          prompt?: string
+        }[]
+      },
+    ) => {
+      if (!["review", "ship", "handoff"].includes(item.command)) return
+      const data = await stash(state)
+      const part = out.parts.find((item) => item.type === "subtask" && typeof item.prompt === "string")
+      if (!part?.prompt) return
+      part.prompt = `${part.prompt}\n\n${compact(data)}`
     },
     "shell.env": async (_item: { cwd: string }, out: { env: Record<string, string> }) => {
       out.env.OPENCODE_GUARDRAIL_MODE = mode
@@ -295,8 +592,12 @@ export default async function guardrail(input: {
         [
           `Guardrail mode: ${mode}.`,
           `Preserve policy state from ${rel(input.worktree, state)} when handing work to the next agent.`,
-          `Last guardrail event: ${typeof data.last_event === "string" ? data.last_event : "none"}.`,
-          `Last guardrail block: ${typeof data.last_block === "string" ? data.last_block : "none"}.`,
+          `Last guardrail event: ${str(data.last_event) || "none"}.`,
+          `Last guardrail block: ${str(data.last_block) || "none"}.`,
+          `Unique source reads: ${num(data.read_count)}.`,
+          `Edit/write count: ${num(data.edit_count)}.`,
+          `Fact-check state: ${factLine(data)}.`,
+          `Review state: ${reviewLine(data)}.`,
         ].join(" "),
       )
     },

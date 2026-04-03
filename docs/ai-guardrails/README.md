@@ -45,6 +45,7 @@ The main source set for this migration is:
 - Claude Code official hooks and settings docs
 - Anthropic skill guide PDF (`The Complete Guide to Building Skills for Claude`) and summary
 - OpenCode rules, skills, commands, and plugins docs
+- Z.AI OpenCode / Coding Plan docs
 
 In this migration, references to the `BDF` document should be interpreted as Anthropic's PDF `The Complete Guide to Building Skills for Claude`, which is the skill-construction guide the source repository philosophy lines up with operationally.
 
@@ -137,7 +138,7 @@ The remaining work is intentionally split into two stages:
 - `now required before MVP claim`: `#5`, `#6`, `#7`, and `#13`
 - `later, after MVP floor`: `#14` and `#12`
 
-The detailed rationale lives in `docs/ai-guardrails/mvp-readiness.md`. Future sessions should start there before expanding issue scope.
+The detailed rationale lives in `docs/ai-guardrails/mvp-readiness.md`. The `#13` boundary and intentional deferrals are fixed in `docs/ai-guardrails/adr/006-plugin-hardening-floor.md`. Future sessions should start there before expanding issue scope.
 
 ## Tracking
 
@@ -173,6 +174,7 @@ When continuing this work in future sessions:
 - MVP readiness: `docs/ai-guardrails/mvp-readiness.md`
 - Migration inventory: `docs/ai-guardrails/migration/`
 - Scenario tests: `packages/opencode/test/scenario/`
+- Scripted replays: `packages/opencode/test/scenario/replay.ts` and `packages/opencode/test/scenario/harness.ts`
 - Thin distribution package: `packages/guardrails/`
 
 ## Primary references

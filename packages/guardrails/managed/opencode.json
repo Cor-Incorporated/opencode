@@ -2,6 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "enabled_providers": [
     "zai",
+    "zai-coding-plan",
     "openai",
     "openrouter"
   ],
@@ -18,8 +19,32 @@
         "glm-4.5-air"
       ]
     },
+    "zai-coding-plan": {
+      "whitelist": [
+        "glm-4.5",
+        "glm-4.5-air",
+        "glm-4.5-flash",
+        "glm-4.5v",
+        "glm-4.6",
+        "glm-4.6v",
+        "glm-4.7",
+        "glm-4.7-flash",
+        "glm-4.7-flashx",
+        "glm-5",
+        "glm-5-turbo",
+        "glm-5.1"
+      ]
+    },
     "openai": {
       "whitelist": [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1-codex-max",
         "gpt-5",
         "gpt-5-mini",
         "gpt-5-nano",
@@ -28,10 +53,22 @@
     },
     "openrouter": {
       "whitelist": [
-        "openai/gpt-5",
-        "openai/gpt-5-mini",
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-opus-4.5",
+        "anthropic/claude-opus-4.6",
         "anthropic/claude-sonnet-4.5",
-        "google/gemini-2.5-pro"
+        "anthropic/claude-sonnet-4.6",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-pro",
+        "minimax/minimax-m2.1",
+        "minimax/minimax-m2.5",
+        "moonshotai/kimi-k2.5",
+        "openai/gpt-5.2",
+        "openai/gpt-5.2-codex",
+        "openai/gpt-5.3-codex",
+        "openai/gpt-5.4",
+        "openai/gpt-5.4-mini",
+        "qwen/qwen3-coder"
       ]
     }
   },
