@@ -46,7 +46,8 @@ Current contents focus on the first thin-distribution slice:
 - managed enterprise defaults
 - packaged custom config dir profile
 - packaged plugin for runtime guardrail hooks
-- scenario coverage for managed config precedence, project-local asset compatibility, and plugin behavior
+- guarded `implement` and `review` agents plus packaged `/implement`, `/review`, `/ship`, and `/handoff` workflow commands
+- scenario coverage for managed config precedence, project-local asset compatibility, plugin behavior, and workflow safety defaults
 
 Planned next slices are tracked in the fork:
 
@@ -68,6 +69,8 @@ opencode-guardrails
 ```
 
 It respects an existing `OPENCODE_CONFIG_DIR` so project- or environment-specific overrides can still replace the packaged profile when needed.
+
+The packaged profile defaults to the `implement` agent. Review and release-readiness work should run through the packaged `/review`, `/ship`, and `/handoff` commands so the workflow stays read-only at the gate layer.
 
 ## Managed deployment
 

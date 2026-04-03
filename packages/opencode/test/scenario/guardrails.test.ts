@@ -4,6 +4,7 @@ import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { Command } from "../../src/command"
 import { Config } from "../../src/config/config"
+import { Permission } from "../../src/permission"
 import { Plugin } from "../../src/plugin"
 import { Instance } from "../../src/project/instance"
 import { Skill } from "../../src/skill"
@@ -50,6 +51,11 @@ function guard(dir: string) {
 
 function wait(ms = 50) {
   return new Promise((done) => setTimeout(done, ms))
+}
+
+function perm(agent: Agent.Info | undefined, key: string, pattern = "*") {
+  if (!agent) return undefined
+  return Permission.evaluate(key, pattern, agent.permission).action
 }
 
 test("managed config overrides weaker project defaults", async () => {
@@ -192,6 +198,63 @@ description: Project-local skill.
         expect(cmds.some((item) => item.name === "project-local")).toBe(true)
         expect(skills.some((item) => item.name === "project-skill")).toBe(true)
         expect(agents.some((item) => item.name === "project-review")).toBe(true)
+      },
+    })
+  })
+})
+
+test("guardrail profile ships safe agents and workflow commands", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await write(dir, "opencode.json", {
+          $schema: "https://opencode.ai/config.json",
+          share: "auto",
+        })
+        await Bun.write(
+          path.join(dir, ".opencode", "commands", "project-local.md"),
+          `---
+description: Project-local workflow.
+---
+
+Use the project-local command.
+`,
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const cfg = await Config.get()
+        const cmds = await Command.list()
+        const impl = await Agent.get("implement")
+        const review = await Agent.get("review")
+
+        expect(cfg.default_agent).toBe("implement")
+        expect(await Agent.defaultAgent()).toBe("implement")
+        expect(impl?.mode).toBe("primary")
+        expect(review?.mode).toBe("subagent")
+        expect(perm(impl, "question")).toBe("allow")
+        expect(perm(impl, "plan_enter")).toBe("allow")
+        expect(perm(impl, "edit")).toBe("ask")
+        expect(perm(impl, "bash", "git reset --hard HEAD")).toBe("deny")
+        expect(perm(impl, "bash", "git push origin --force-with-lease")).toBe("deny")
+        expect(perm(review, "edit")).toBe("deny")
+        expect(perm(review, "read")).toBe("allow")
+        expect(perm(review, "bash", "git diff HEAD")).toBe("allow")
+        expect(perm(review, "bash", "bun test")).toBe("deny")
+
+        const map = Object.fromEntries(cmds.map((item) => [item.name, item]))
+        expect(map.implement?.agent).toBe("implement")
+        expect(map.review?.agent).toBe("review")
+        expect(map.review?.subtask).toBe(true)
+        expect(map.ship?.agent).toBe("review")
+        expect(map.ship?.subtask).toBe(true)
+        expect(map.handoff?.agent).toBe("review")
+        expect(map.handoff?.subtask).toBe(true)
+        expect(map["project-local"]?.name).toBe("project-local")
       },
     })
   })
