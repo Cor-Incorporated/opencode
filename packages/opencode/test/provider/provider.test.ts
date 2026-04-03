@@ -1,11 +1,20 @@
 import { test, expect } from "bun:test"
+import { unlink } from "fs/promises"
 import path from "path"
 
 import { tmpdir } from "../fixture/fixture"
+import { Global } from "../../src/global"
 import { Instance } from "../../src/project/instance"
 import { Provider } from "../../src/provider/provider"
 import { ProviderID, ModelID } from "../../src/provider/schema"
+import { Filesystem } from "../../src/util/filesystem"
 import { Env } from "../../src/env"
+
+function paid(providers: Awaited<ReturnType<typeof Provider.list>>) {
+  const item = providers[ProviderID.make("opencode")]
+  expect(item).toBeDefined()
+  return Object.values(item.models).filter((model) => model.cost.input > 0).length
+}
 
 test("provider loaded from env variable", async () => {
   await using tmp = await tmpdir({
@@ -2281,4 +2290,112 @@ test("cloudflare-ai-gateway forwards config metadata options", async () => {
       })
     },
   })
+})
+
+test("opencode loader keeps paid models when config apiKey is present", async () => {
+  await using base = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+        }),
+      )
+    },
+  })
+
+  const none = await Instance.provide({
+    directory: base.path,
+    fn: async () => paid(await Provider.list()),
+  })
+
+  await using keyed = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            opencode: {
+              options: {
+                apiKey: "test-key",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+
+  const keyedCount = await Instance.provide({
+    directory: keyed.path,
+    fn: async () => paid(await Provider.list()),
+  })
+
+  expect(none).toBe(0)
+  expect(keyedCount).toBeGreaterThan(0)
+})
+
+test("opencode loader keeps paid models when auth exists", async () => {
+  await using base = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+        }),
+      )
+    },
+  })
+
+  const none = await Instance.provide({
+    directory: base.path,
+    fn: async () => paid(await Provider.list()),
+  })
+
+  await using keyed = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+        }),
+      )
+    },
+  })
+
+  const authPath = path.join(Global.Path.data, "auth.json")
+  let prev: string | undefined
+
+  try {
+    prev = await Filesystem.readText(authPath)
+  } catch {}
+
+  try {
+    await Filesystem.write(
+      authPath,
+      JSON.stringify({
+        opencode: {
+          type: "api",
+          key: "test-key",
+        },
+      }),
+    )
+
+    const keyedCount = await Instance.provide({
+      directory: keyed.path,
+      fn: async () => paid(await Provider.list()),
+    })
+
+    expect(none).toBe(0)
+    expect(keyedCount).toBeGreaterThan(0)
+  } finally {
+    if (prev !== undefined) {
+      await Filesystem.write(authPath, prev)
+      return
+    }
+    try {
+      await unlink(authPath)
+    } catch {}
+  }
 })
