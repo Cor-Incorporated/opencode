@@ -297,6 +297,16 @@
         "typescript": "catalog:",
       },
     },
+    "packages/guardrails": {
+      "name": "@opencode-ai/guardrails",
+      "version": "1.3.13",
+      "bin": {
+        "opencode-guardrails": "./bin/opencode-guardrails",
+      },
+      "dependencies": {
+        "opencode": "1.3.13",
+      },
+    },
     "packages/opencode": {
       "name": "opencode",
       "version": "1.3.13",
@@ -1477,6 +1487,8 @@
     "@opencode-ai/enterprise": ["@opencode-ai/enterprise@workspace:packages/enterprise"],
 
     "@opencode-ai/function": ["@opencode-ai/function@workspace:packages/function"],
+
+    "@opencode-ai/guardrails": ["@opencode-ai/guardrails@workspace:packages/guardrails"],
 
     "@opencode-ai/plugin": ["@opencode-ai/plugin@workspace:packages/plugin"],
 
