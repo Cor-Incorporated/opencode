@@ -1,7 +1,9 @@
 import { afterEach, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
+import { Effect } from "effect"
 import { Agent } from "../../src/agent/agent"
+import { Auth } from "../../src/auth"
 import { Command } from "../../src/command"
 import { Config } from "../../src/config/config"
 import { Env } from "../../src/env"
@@ -13,6 +15,8 @@ import { ProviderID } from "../../src/provider/schema"
 import { Skill } from "../../src/skill"
 import { Filesystem } from "../../src/util/filesystem"
 import { tmpdir } from "../fixture/fixture"
+import { assertReplay, it, run } from "./harness"
+import { replays } from "./replay"
 
 const managed = process.env.OPENCODE_TEST_MANAGED_CONFIG_DIR!
 const profile = path.resolve(import.meta.dir, "../../../guardrails/profile")
@@ -289,24 +293,85 @@ test("guardrail profile enforces provider admission lanes", async () => {
         const evalAgent = await Agent.get("provider-eval")
         const openrouter = providers[ProviderID.openrouter]
         const zai = providers[ProviderID.make("zai")]
+        const plan = providers[ProviderID.make("zai-coding-plan")]
         const openai = providers[ProviderID.openai]
+        const zaiModels = Object.keys(zai.models).sort()
+        const planModels = Object.keys(plan.models).sort()
+        const openaiModels = Object.keys(openai.models).sort()
 
-        expect(cfg.enabled_providers).toEqual(["zai", "openai", "openrouter"])
+        expect(cfg.enabled_providers).toEqual(["zai", "zai-coding-plan", "openai", "openrouter"])
         expect(zai).toBeDefined()
+        expect(plan).toBeDefined()
         expect(openai).toBeDefined()
         expect(openrouter).toBeDefined()
-        expect(Object.keys(zai.models).sort()).toEqual(["glm-4.5", "glm-4.5-air", "glm-5"])
-        expect(Object.keys(openai.models).sort()).toEqual(["gpt-4.1", "gpt-5", "gpt-5-mini", "gpt-5-nano"])
+        expect(zaiModels).toEqual(["glm-4.5", "glm-4.5-air", "glm-5"])
+        for (const item of [
+          "glm-4.5",
+          "glm-4.5-air",
+          "glm-4.5-flash",
+          "glm-4.5v",
+          "glm-4.6",
+          "glm-4.6v",
+          "glm-4.7",
+          "glm-4.7-flash",
+          "glm-4.7-flashx",
+          "glm-5",
+          "glm-5-turbo",
+          "glm-5.1",
+        ]) {
+          expect(planModels).toContain(item)
+        }
+        expect(openaiModels).toEqual(
+          expect.arrayContaining([
+            "gpt-4.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
+            "gpt-5.4",
+          ]),
+        )
         expect(Object.keys(openrouter.models).sort()).toEqual([
+          "anthropic/claude-haiku-4.5",
+          "anthropic/claude-opus-4.5",
+          "anthropic/claude-opus-4.6",
           "anthropic/claude-sonnet-4.5",
+          "anthropic/claude-sonnet-4.6",
+          "google/gemini-2.5-flash",
           "google/gemini-2.5-pro",
-          "openai/gpt-5",
-          "openai/gpt-5-mini",
+          "minimax/minimax-m2.1",
+          "minimax/minimax-m2.5",
+          "moonshotai/kimi-k2.5",
+          "openai/gpt-5.2",
+          "openai/gpt-5.2-codex",
+          "openai/gpt-5.3-codex",
+          "openai/gpt-5.4",
+          "openai/gpt-5.4-mini",
+          "qwen/qwen3-coder",
         ])
+        expect(plan.models["glm-5.1"]?.api.id).toBe("glm-5.1")
+        expect(plan.models["glm-5.1"]?.api.url).toBe("https://api.z.ai/api/coding/paas/v4")
         expect(evalAgent?.mode).toBe("subagent")
         expect(cmds.some((item) => item.name === "provider-eval" && item.agent === "provider-eval")).toBe(true)
 
-        const evalModel = openrouter.models["openai/gpt-5-mini"]
+        await expect(
+          Plugin.trigger(
+            "chat.params",
+            {
+              sessionID: "session_test",
+              agent: "implement",
+              model: plan.models["glm-5.1"],
+            },
+            { temperature: undefined, topP: undefined, topK: undefined, options: {} },
+          ),
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
+
+        const evalModel = openrouter.models["openai/gpt-5.4-mini"]
 
         await expect(
           Plugin.trigger(
@@ -340,17 +405,14 @@ test("guardrail profile enforces provider admission lanes", async () => {
               agent: "provider-eval",
               model: {
                 ...evalModel,
-                id: "deepseek/deepseek-r1:free" as typeof evalModel.id,
-                cost: {
-                  ...evalModel.cost,
-                  input: 0,
-                  output: 0,
-                  cache: {
-                    read: 0,
-                    write: 0,
+                  id: "google/gemini-3-pro-preview" as typeof evalModel.id,
+                  cost: {
+                    ...evalModel.cost,
+                    input: 0.1,
+                    output: 0.2,
+                    cache: { read: 0, write: 0 },
                   },
                 },
-              },
             },
             { temperature: undefined, topP: undefined, topK: undefined, options: {} },
           ),
@@ -370,7 +432,7 @@ test("guardrail profile enforces provider admission lanes", async () => {
       },
     })
   })
-})
+}, 15000)
 
 test("guardrail profile plugin injects shell env and blocks protected files", async () => {
   await withProfile(async () => {
@@ -408,6 +470,247 @@ test("guardrail profile plugin injects shell env and blocks protected files", as
             { args: { filePath: path.join(tmp.path, "eslint.config.js"), content: "export default []" } },
           ),
         ).rejects.toThrow("policy-protected")
+      },
+    })
+  })
+})
+
+test("guardrail profile keeps OpenAI OAuth Codex models visible", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await write(dir, "opencode.json", {
+          $schema: "https://opencode.ai/config.json",
+          share: "auto",
+        })
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        await Auth.set(
+          "openai",
+          new Auth.Oauth({
+            type: "oauth",
+            access: "test-openai-access",
+            refresh: "test-openai-refresh",
+            expires: Date.now() + 60_000,
+          }),
+        )
+      },
+      fn: async () => {
+        const providers = await Provider.list()
+        const openai = providers[ProviderID.openai]
+        const models = Object.keys(openai.models).sort()
+
+        expect(openai).toBeDefined()
+        expect(models).toEqual(
+          expect.arrayContaining([
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
+            "gpt-5.4",
+          ]),
+        )
+        expect(openai.models["gpt-5.4"]?.cost.input).toBe(0)
+        await expect(
+          Plugin.trigger(
+            "chat.params",
+            {
+              sessionID: "session_test",
+              agent: "implement",
+              model: openai.models["gpt-5.4"],
+            },
+            { temperature: undefined, topP: undefined, topK: undefined, options: {} },
+          ),
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
+      },
+    })
+  })
+})
+
+test("guardrail profile plugin enforces version baselines and context budget", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }, null, 2))
+        await Bun.write(path.join(dir, "Dockerfile"), "FROM app:latest\n")
+        await Bun.write(path.join(dir, "src", "a.ts"), "export const a = 1\n")
+        await Bun.write(path.join(dir, "src", "b.ts"), "export const b = 1\n")
+        await Bun.write(path.join(dir, "src", "c.ts"), "export const c = 1\n")
+        await Bun.write(path.join(dir, "src", "d.ts"), "export const d = 1\n")
+        await Bun.write(path.join(dir, "src", "e.ts"), "export const e = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: {
+              sessionID: "session_test",
+            },
+          },
+        } as any)
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_test", callID: "call_ver" },
+            {
+              args: {
+                filePath: path.join(tmp.path, "package.json"),
+                oldString: `"version": "1.2.3"`,
+                newString: `"version": "1.1.9"`,
+              },
+            },
+          ),
+        ).rejects.toThrow("version baseline regression")
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_test", callID: "call_latest" },
+            {
+              args: {
+                filePath: path.join(tmp.path, "Dockerfile"),
+                oldString: "FROM app:latest",
+                newString: "FROM app:v1.2.3",
+              },
+            },
+          ),
+        ).rejects.toThrow("ADR-backed compatibility verification")
+
+        for (const file of ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]) {
+          await Plugin.trigger(
+            "tool.execute.after",
+            { tool: "read", sessionID: "session_test", callID: file, args: { filePath: path.join(tmp.path, file) } },
+            { title: "read", output: "", metadata: {} },
+          )
+        }
+
+        const state = await Bun.file(files.state).json()
+        expect(state.read_count).toBe(4)
+        expect(state.read_files).toEqual(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"])
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_test", callID: "call_budget" },
+            {
+              args: {
+                filePath: path.join(tmp.path, "src", "e.ts"),
+                oldString: "export const e = 1",
+                newString: "export const e = 2",
+              },
+            },
+          ),
+        ).rejects.toThrow("context budget exceeded")
+      },
+    })
+  })
+})
+
+test("guardrail profile plugin records factcheck and review freshness state", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "docs"), { recursive: true })
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "docs", "plan.md"), "# plan\n")
+        await Bun.write(path.join(dir, "src", "flow.ts"), "export const flow = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: {
+              sessionID: "session_test",
+            },
+          },
+        } as any)
+
+        await Plugin.trigger(
+          "tool.execute.after",
+          {
+            tool: "read",
+            sessionID: "session_test",
+            callID: "call_doc",
+            args: { filePath: path.join(tmp.path, "docs", "plan.md") },
+          },
+          { title: "read", output: "", metadata: {} },
+        )
+        await Plugin.trigger(
+          "tool.execute.after",
+          {
+            tool: "write",
+            sessionID: "session_test",
+            callID: "call_write",
+            args: { filePath: path.join(tmp.path, "src", "flow.ts"), content: "export const flow = 2\n" },
+          },
+          { title: "write", output: "", metadata: {} },
+        )
+        await Plugin.trigger(
+          "tool.execute.after",
+          {
+            tool: "task",
+            sessionID: "session_test",
+            callID: "call_review",
+            args: {
+              command: "review",
+              subagent_type: "review",
+            },
+          },
+          { title: "review", output: "", metadata: {} },
+        )
+        await Plugin.trigger(
+          "tool.execute.after",
+          {
+            tool: "edit",
+            sessionID: "session_test",
+            callID: "call_edit",
+            args: {
+              filePath: path.join(tmp.path, "src", "flow.ts"),
+              oldString: "export const flow = 2",
+              newString: "export const flow = 3",
+            },
+          },
+          { title: "edit", output: "", metadata: {} },
+        )
+
+        const state = await Bun.file(files.state).json()
+        const compact = await Plugin.trigger(
+          "experimental.session.compacting",
+          { sessionID: "session_test" },
+          { context: [], prompt: undefined },
+        )
+
+        expect(state.factchecked).toBe(true)
+        expect(state.factcheck_source).toBe("DocRead")
+        expect(state.edit_count).toBe(2)
+        expect(state.edit_count_since_check).toBe(2)
+        expect(state.reviewed).toBe(true)
+        expect(state.edits_since_review).toBe(1)
+        expect(compact.context.join("\n")).toContain("Fact-check state: stale after 2 edit(s)")
+        expect(compact.context.join("\n")).toContain("Review state: stale after 1 edit(s)")
       },
     })
   })
@@ -464,6 +767,9 @@ test("guardrail profile plugin records lifecycle events and compaction context",
         expect(log).toContain("\"type\":\"permission.asked\"")
         expect(log).toContain("\"type\":\"session.idle\"")
         expect(state.last_session).toBe("session_test")
+        expect(state.read_count).toBe(0)
+        expect(state.factchecked).toBe(false)
+        expect(state.reviewed).toBe(false)
         expect(state.last_permission).toBe("bash")
         expect(compact.context.join("\n")).toContain("Guardrail mode: enforced.")
         expect(compact.context.join("\n")).toContain(".opencode/guardrails/state.json")
@@ -471,3 +777,13 @@ test("guardrail profile plugin records lifecycle events and compaction context",
     })
   })
 })
+
+for (const replay of Object.values(replays)) {
+  it.live(`guardrail replay keeps ${replay.command} executable`, () =>
+    run(replay).pipe(
+      Effect.map((data) => {
+        assertReplay(replay, data)
+      }),
+    ),
+  )
+}

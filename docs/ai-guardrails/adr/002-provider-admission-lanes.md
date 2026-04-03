@@ -26,7 +26,7 @@ This follows the same philosophy imported from `claude-code-skills` epic `#130` 
 
 Adopt three admission lanes:
 
-1. `zai` and `openai` are the standard confidential-code lane.
+1. `zai`, `zai-coding-plan`, and `openai` are the standard confidential-code lane.
 2. `openrouter` is admitted only as a separate evaluation lane.
 3. OpenRouter-backed evaluation stays on an explicit `provider-eval` agent and command instead of widening the default implementation lane.
 
@@ -39,8 +39,9 @@ The policy is implemented in two layers:
 
 ### Standard lane
 
-- admitted providers: `zai`, `openai`
+- admitted providers: `zai`, `zai-coding-plan`, `openai`
 - admitted models are pinned through provider allowlists
+- `zai-coding-plan` is exposed as its own provider because Z.AI's official OpenCode guidance instructs Coding Plan subscribers to select `Z.AI Coding Plan` rather than overloading the general `Z.AI` provider
 - preview, free, and non-approved variants are excluded by default
 
 ### Evaluation lane

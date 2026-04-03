@@ -47,7 +47,7 @@ Current contents focus on the first thin-distribution slice:
 - packaged custom config dir profile
 - packaged plugin for runtime guardrail hooks
 - guarded `implement` and `review` agents plus packaged `/implement`, `/review`, `/ship`, and `/handoff` workflow commands
-- declarative provider admission policy for `zai`, `openai`, and the isolated OpenRouter evaluation lane
+- declarative provider admission policy for `zai`, `zai-coding-plan`, `openai`, and the isolated OpenRouter evaluation lane
 - scenario coverage for managed config precedence, project-local asset compatibility, plugin behavior, and workflow safety defaults
 
 Planned next slices are tracked in the fork:
@@ -73,7 +73,7 @@ It respects an existing `OPENCODE_CONFIG_DIR` so project- or environment-specifi
 
 The packaged profile defaults to the `implement` agent. Review and release-readiness work should run through the packaged `/review`, `/ship`, and `/handoff` commands so the workflow stays read-only at the gate layer.
 
-Provider admission is also packaged here. Standard confidential-code work is admitted on the `zai` and `openai` lane. OpenRouter-backed candidates are available only through the dedicated `provider-eval` lane so evaluation traffic does not silently become the default implementation path.
+Provider admission is also packaged here. Standard confidential-code work is admitted on the `zai`, `zai-coding-plan`, and `openai` lane. `zai-coding-plan` is kept as a separate provider because Z.AI's official OpenCode guide tells Coding Plan subscribers to select `Z.AI Coding Plan` explicitly. OpenRouter-backed candidates are available only through the dedicated `provider-eval` lane so evaluation traffic does not silently become the default implementation path.
 
 ## Managed deployment
 
