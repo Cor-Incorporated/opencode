@@ -37,6 +37,14 @@ import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 
+// When launched via the bun fallback in bin/opencode, the subprocess CWD is set
+// to the opencode package directory (so ./src/index.ts resolves). The original
+// user CWD is passed via OPENCODE_ORIGINAL_CWD. Restore it early so all code
+// paths (including process.cwd() calls in CLI handlers) see the correct directory.
+if (process.env.OPENCODE_ORIGINAL_CWD) {
+  process.chdir(process.env.OPENCODE_ORIGINAL_CWD)
+}
+
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
     e: errorMessage(e),

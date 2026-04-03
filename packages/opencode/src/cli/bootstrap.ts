@@ -2,9 +2,8 @@ import { InstanceBootstrap } from "../project/bootstrap"
 import { Instance } from "../project/instance"
 
 export async function bootstrap<T>(directory: string, cb: () => Promise<T>) {
-  const resolvedDirectory = process.env.OPENCODE_ORIGINAL_CWD || directory
   return Instance.provide({
-    directory: resolvedDirectory,
+    directory,
     init: InstanceBootstrap,
     fn: async () => {
       try {

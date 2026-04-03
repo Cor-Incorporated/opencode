@@ -304,8 +304,6 @@ export const RunCommand = cmd({
       })
   },
   handler: async (args) => {
-    const effectiveCwd = process.env.OPENCODE_ORIGINAL_CWD || process.cwd()
-
     let message = [...args.message, ...(args["--"] || [])]
       .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
       .join(" ")
@@ -327,7 +325,7 @@ export const RunCommand = cmd({
       const list = Array.isArray(args.file) ? args.file : [args.file]
 
       for (const filePath of list) {
-        const resolvedPath = path.resolve(effectiveCwd, filePath)
+        const resolvedPath = path.resolve(process.cwd(), filePath)
         if (!(await Filesystem.exists(resolvedPath))) {
           UI.error(`File not found: ${filePath}`)
           process.exit(1)
