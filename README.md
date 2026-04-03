@@ -43,7 +43,31 @@
 
 ---
 
-### Installation
+### About This Fork
+
+This repository is the Cor-Incorporated fork of OpenCode.
+
+- It tracks upstream OpenCode and aims to keep compatibility wherever practical.
+- It adds an internal thin distribution layer rather than turning the fork into a deep rewrite.
+- Its current internal product work lives under `docs/ai-guardrails/` and `packages/guardrails/`.
+- It is not an official OpenCode team repository or release channel.
+
+The intended positioning is:
+
+> OpenCode-compatible foundation, evolved into a Cor-Incorporated internal tool through managed config, plugins, commands, permissions, and workflow policy.
+
+If you are reading this fork for internal implementation work, start here:
+
+- Plan and ADRs: `docs/ai-guardrails/README.md`
+- Migration inventory: `docs/ai-guardrails/migration/claude-code-skills-inventory.md`
+- Thin distribution package: `packages/guardrails/`
+- GitHub tracker: `Cor-Incorporated/opencode` issues `#1` to `#7`
+
+### Upstream Installation
+
+The commands below install official upstream OpenCode, not this fork-specific internal distribution.
+
+This fork currently preserves upstream compatibility and develops an additional internal layer on top. If and when Cor-Incorporated publishes its own install path or renamed distribution, that should be documented separately from the upstream install instructions below.
 
 ```bash
 # YOLO
@@ -134,6 +158,13 @@ If you're interested in contributing to OpenCode, please read our [contributing 
 ### Building on OpenCode
 
 If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+
+For this fork specifically, the right framing is:
+
+- forked from OpenCode
+- maintains compatibility with upstream where possible
+- extends it into a Cor-Incorporated internal tool through a separate guardrail layer
+- should not be presented as an official upstream OpenCode release
 
 ### FAQ
 

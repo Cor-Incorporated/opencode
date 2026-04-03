@@ -2,6 +2,19 @@
 
 This document defines the production plan for building an internal AI coding environment on top of OpenCode without turning the repo into a long-lived fork.
 
+## Product framing
+
+The target product should be described consistently across README, issues, and future docs as:
+
+- a Cor-Incorporated fork of OpenCode
+- intentionally upstream-compatible where practical
+- extended through a thin internal distribution layer
+- not an official upstream OpenCode release channel
+
+The migration goal is not to hide the upstream lineage. It is to make the fork legible:
+
+> forked from OpenCode, kept compatible where possible, and evolved into a Cor-Incorporated internal tool through managed config, plugins, commands, permissions, and workflow policy.
+
 ## Operating principles
 
 This plan inherits the key philosophy from `claude-code-skills` epic `#130`, its README, and its ADRs:
@@ -118,6 +131,16 @@ When continuing this work in future sessions:
 - preserve upstream compatibility unless a missing extension point proves otherwise
 - update docs and tests in the same change set when guardrail behavior changes
 - do not mark work complete unless runtime behavior is verified, not just implemented
+
+## Naming note
+
+Renaming the GitHub repository or any published package should be treated as a separate branding/distribution decision, not as part of the guardrail runtime work.
+
+Until that decision is made, the safer default is:
+
+- keep the repository technically close to upstream naming for compatibility
+- update README and planning docs so users understand this is a Cor-Incorporated fork
+- only introduce a new distribution name once install paths, package names, and release ownership are ready together
 
 ## Artifact map
 
