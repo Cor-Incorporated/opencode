@@ -4,9 +4,12 @@ import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { Command } from "../../src/command"
 import { Config } from "../../src/config/config"
+import { Env } from "../../src/env"
 import { Permission } from "../../src/permission"
 import { Plugin } from "../../src/plugin"
 import { Instance } from "../../src/project/instance"
+import { Provider } from "../../src/provider/provider"
+import { ProviderID } from "../../src/provider/schema"
 import { Skill } from "../../src/skill"
 import { Filesystem } from "../../src/util/filesystem"
 import { tmpdir } from "../fixture/fixture"
@@ -255,6 +258,115 @@ Use the project-local command.
         expect(map.handoff?.agent).toBe("review")
         expect(map.handoff?.subtask).toBe(true)
         expect(map["project-local"]?.name).toBe("project-local")
+      },
+    })
+  })
+})
+
+test("guardrail profile enforces provider admission lanes", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await write(dir, "opencode.json", {
+          $schema: "https://opencode.ai/config.json",
+          share: "auto",
+        })
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ZHIPU_API_KEY", "test-zai-key")
+        Env.set("OPENAI_API_KEY", "test-openai-key")
+        Env.set("OPENROUTER_API_KEY", "test-openrouter-key")
+      },
+      fn: async () => {
+        const cfg = await Config.get()
+        const providers = await Provider.list()
+        const cmds = await Command.list()
+        const evalAgent = await Agent.get("provider-eval")
+        const openrouter = providers[ProviderID.openrouter]
+        const zai = providers[ProviderID.make("zai")]
+        const openai = providers[ProviderID.openai]
+
+        expect(cfg.enabled_providers).toEqual(["zai", "openai", "openrouter"])
+        expect(zai).toBeDefined()
+        expect(openai).toBeDefined()
+        expect(openrouter).toBeDefined()
+        expect(Object.keys(zai.models).sort()).toEqual(["glm-4.5", "glm-4.5-air", "glm-5"])
+        expect(Object.keys(openai.models).sort()).toEqual(["gpt-4.1", "gpt-5", "gpt-5-mini", "gpt-5-nano"])
+        expect(Object.keys(openrouter.models).sort()).toEqual([
+          "anthropic/claude-sonnet-4.5",
+          "google/gemini-2.5-pro",
+          "openai/gpt-5",
+          "openai/gpt-5-mini",
+        ])
+        expect(evalAgent?.mode).toBe("subagent")
+        expect(cmds.some((item) => item.name === "provider-eval" && item.agent === "provider-eval")).toBe(true)
+
+        const evalModel = openrouter.models["openai/gpt-5-mini"]
+
+        await expect(
+          Plugin.trigger(
+            "chat.params",
+            {
+              sessionID: "session_test",
+              agent: "implement",
+              model: evalModel,
+            },
+            { temperature: undefined, topP: undefined, topK: undefined, options: {} },
+          ),
+        ).rejects.toThrow("evaluation-only")
+
+        await expect(
+          Plugin.trigger(
+            "chat.params",
+            {
+              sessionID: "session_test",
+              agent: "provider-eval",
+              model: openai.models["gpt-5-mini"],
+            },
+            { temperature: undefined, topP: undefined, topK: undefined, options: {} },
+          ),
+        ).rejects.toThrow("reserved for evaluation-lane providers")
+
+        await expect(
+          Plugin.trigger(
+            "chat.params",
+            {
+              sessionID: "session_test",
+              agent: "provider-eval",
+              model: {
+                ...evalModel,
+                id: "deepseek/deepseek-r1:free" as typeof evalModel.id,
+                cost: {
+                  ...evalModel.cost,
+                  input: 0,
+                  output: 0,
+                  cache: {
+                    read: 0,
+                    write: 0,
+                  },
+                },
+              },
+            },
+            { temperature: undefined, topP: undefined, topK: undefined, options: {} },
+          ),
+        ).rejects.toThrow("not admitted")
+
+        await expect(
+          Plugin.trigger(
+            "chat.params",
+            {
+              sessionID: "session_test",
+              agent: "provider-eval",
+              model: evalModel,
+            },
+            { temperature: undefined, topP: undefined, topK: undefined, options: {} },
+          ),
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
       },
     })
   })
