@@ -1,14 +1,41 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "default_agent": "implement",
+  "enabled_providers": [
+    "zai",
+    "openai",
+    "openrouter"
+  ],
   "share": "disabled",
   "server": {
     "hostname": "127.0.0.1",
     "mdns": false
   },
-  "plugin": [
-    "./plugins/guardrail.ts"
-  ],
+  "provider": {
+    "zai": {
+      "whitelist": [
+        "glm-5",
+        "glm-4.5",
+        "glm-4.5-air"
+      ]
+    },
+    "openai": {
+      "whitelist": [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-4.1"
+      ]
+    },
+    "openrouter": {
+      "whitelist": [
+        "openai/gpt-5",
+        "openai/gpt-5-mini",
+        "anthropic/claude-sonnet-4.5",
+        "google/gemini-2.5-pro"
+      ]
+    }
+  },
   "permission": {
     "edit": "ask",
     "task": "ask",

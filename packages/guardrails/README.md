@@ -47,6 +47,7 @@ Current contents focus on the first thin-distribution slice:
 - packaged custom config dir profile
 - packaged plugin for runtime guardrail hooks
 - guarded `implement` and `review` agents plus packaged `/implement`, `/review`, `/ship`, and `/handoff` workflow commands
+- declarative provider admission policy for `zai`, `openai`, and the isolated OpenRouter evaluation lane
 - scenario coverage for managed config precedence, project-local asset compatibility, plugin behavior, and workflow safety defaults
 
 Planned next slices are tracked in the fork:
@@ -71,6 +72,8 @@ opencode-guardrails
 It respects an existing `OPENCODE_CONFIG_DIR` so project- or environment-specific overrides can still replace the packaged profile when needed.
 
 The packaged profile defaults to the `implement` agent. Review and release-readiness work should run through the packaged `/review`, `/ship`, and `/handoff` commands so the workflow stays read-only at the gate layer.
+
+Provider admission is also packaged here. Standard confidential-code work is admitted on the `zai` and `openai` lane. OpenRouter-backed candidates are available only through the dedicated `provider-eval` lane so evaluation traffic does not silently become the default implementation path.
 
 ## Managed deployment
 

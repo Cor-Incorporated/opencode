@@ -80,14 +80,48 @@ function bash(cmd: string) {
   return mut.some((item) => item.test(cmd))
 }
 
+function list(data: unknown) {
+  return Array.isArray(data) ? data.filter((item): item is string => typeof item === "string" && item !== "") : []
+}
+
+function free(data: {
+  cost?: {
+    input?: number
+    output?: number
+    cache?: { read?: number; write?: number }
+  }
+}) {
+  const inCost = data.cost?.input ?? 0
+  const outCost = data.cost?.output ?? 0
+  const readCost = data.cost?.cache?.read ?? 0
+  const writeCost = data.cost?.cache?.write ?? 0
+  return inCost === 0 && outCost === 0 && readCost === 0 && writeCost === 0
+}
+
+function preview(data: {
+  id?: unknown
+  status?: unknown
+}) {
+  const id = typeof data.id === "string" ? data.id : ""
+  const status = typeof data.status === "string" ? data.status : ""
+  if (status && status !== "active") return true
+  return /(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i.test(id)
+}
+
 export default async function guardrail(input: {
   directory: string
   worktree: string
 }, opts?: Record<string, unknown>) {
   const mode = typeof opts?.mode === "string" ? opts.mode : "enforced"
+  const evals = new Set(["openrouter"])
+  const evalAgent = "provider-eval"
+  const conf = true
+  const denyFree = true
+  const denyPreview = true
   const root = path.join(input.directory, ".opencode", "guardrails")
   const log = path.join(root, "events.jsonl")
   const state = path.join(root, "state.json")
+  const allow: Record<string, Set<string>> = {}
 
   await mkdir(root, { recursive: true })
 
@@ -119,7 +153,52 @@ export default async function guardrail(input: {
     if (kind === "edit" && has(item, cfg)) return "linter or formatter configuration is policy-protected"
   }
 
+  function gate(data: {
+    agent?: string
+    model?: {
+      id?: unknown
+      providerID?: unknown
+      status?: unknown
+      cost?: {
+        input?: number
+        output?: number
+        cache?: { read?: number; write?: number }
+      }
+    }
+  }) {
+    const provider = typeof data.model?.providerID === "string" ? data.model.providerID : ""
+    const agent = typeof data.agent === "string" ? data.agent : ""
+    if (!provider) return
+
+    if (evals.has(provider) && agent !== evalAgent) {
+      return `${provider} is evaluation-only under confidential policy; use ${evalAgent}`
+    }
+    if (agent === evalAgent && !evals.has(provider)) {
+      return `${evalAgent} is reserved for evaluation-lane providers`
+    }
+
+    const ids = allow[provider]
+    const model = typeof data.model?.id === "string" ? data.model.id : ""
+    if (ids?.size && model && !ids.has(model)) {
+      return `${provider}/${model} is not admitted by provider policy`
+    }
+
+    if (!conf) return
+    if (denyFree && free(data.model ?? {})) return `${provider}/${model || "unknown"} is a free-tier model`
+    if (denyPreview && preview(data.model ?? {})) return `${provider}/${model || "unknown"} is preview-only`
+  }
+
   return {
+    config: async (cfg: {
+      provider?: Record<string, { whitelist?: string[] }>
+    }) => {
+      for (const key of Object.keys(allow)) delete allow[key]
+      for (const [key, val] of Object.entries(cfg.provider ?? {})) {
+        const ids = list(val.whitelist)
+        if (!ids.length) continue
+        allow[key] = new Set(ids)
+      }
+    },
     event: async ({ event }: { event: { type?: string; properties?: Record<string, unknown> } }) => {
       if (!event.type) return
       if (!["session.created", "permission.asked", "session.idle", "session.compacted"].includes(event.type)) return
@@ -173,6 +252,39 @@ export default async function guardrail(input: {
       out.env.OPENCODE_GUARDRAIL_MODE = mode
       out.env.OPENCODE_GUARDRAIL_ROOT = root
       out.env.OPENCODE_GUARDRAIL_STATE = state
+    },
+    "chat.params": async (
+      item: {
+        sessionID: string
+        agent: string
+        model: {
+          id: string
+          providerID: string
+          status: "alpha" | "beta" | "deprecated" | "active"
+          cost: {
+            input: number
+            output: number
+            cache: { read: number; write: number }
+          }
+        }
+      },
+      _out: {
+        temperature?: number
+        topP?: number
+        topK?: number
+        options: Record<string, unknown>
+      },
+    ) => {
+      const err = gate(item)
+      if (!err) return
+      await mark({
+        last_block: "chat.params",
+        last_provider: item.model.providerID,
+        last_model: item.model.id,
+        last_agent: item.agent,
+        last_reason: err,
+      })
+      throw new Error(text(err))
     },
     "experimental.session.compacting": async (
       _item: { sessionID: string },
