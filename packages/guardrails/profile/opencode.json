@@ -65,8 +65,8 @@
     }
   },
   "permission": {
-    "edit": "ask",
-    "task": "ask",
+    "edit": "allow",
+    "task": "allow",
     "webfetch": "allow",
     "external_directory": "ask",
     "bash": {
