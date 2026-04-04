@@ -6,9 +6,86 @@
     },
   },
   "permission": {
-    "edit": {
-      "packages/opencode/migration/*": "deny",
+    // Read operations: allow by default, deny sensitive files
+    // Mirrors Claude Code's Read allow + .env/.secrets deny
+    "read": {
+      "*": "allow",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      "secrets/**": "deny",
+      "**/secrets/**": "deny",
     },
+    // Edit operations: allow by default (Claude Code's acceptEdits mode)
+    // Deny migration files and sensitive configs
+    "edit": {
+      "*": "allow",
+      "packages/opencode/migration/*": "deny",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+    },
+    // File search: always allow (Claude Code allows Glob/Grep unconditionally)
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    // Bash: pattern-based control mirroring Claude Code's Bash whitelist
+    "bash": {
+      "*": "ask",
+      // Dev toolchain (Claude Code allows: node, npm, pnpm, bun, python, pip)
+      "node *": "allow",
+      "npm *": "allow",
+      "pnpm *": "allow",
+      "bun *": "allow",
+      "python *": "allow",
+      "python3 *": "allow",
+      "pip *": "allow",
+      "pip3 install *": "allow",
+      // Git operations (Claude Code allows: git, gh)
+      "git *": "allow",
+      "gh *": "allow",
+      // System utilities (Claude Code allows: ls, wc, lsof, test, set, dig, etc.)
+      "ls *": "allow",
+      "wc *": "allow",
+      "lsof *": "allow",
+      "test *": "allow",
+      "set *": "allow",
+      "dig *": "allow",
+      "nslookup *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "which *": "allow",
+      "echo *": "allow",
+      // Network (Claude Code allows: curl, openssl)
+      "curl *": "allow",
+      "openssl *": "allow",
+      // Container (Claude Code allows: docker)
+      "docker *": "allow",
+      // Cloud CLI
+      "vercel *": "allow",
+      "supabase *": "allow",
+      // Dangerous operations: deny (Claude Code denies: rm -rf, sudo, force-push)
+      "rm -rf *": "deny",
+      "sudo *": "deny",
+      "git push --force*": "deny",
+      "curl * | sh*": "deny",
+    },
+    // Web operations: allow (Claude Code allows WebSearch, WebFetch)
+    "websearch": "allow",
+    "webfetch": "allow",
+    "codesearch": "allow",
+    // Tool integrations: allow
+    "lsp": "allow",
+    "task": "allow",
+    "skill": "allow",
+    // External directory access: ask (security boundary)
+    "external_directory": "ask",
   },
   "mcp": {},
   "tools": {
