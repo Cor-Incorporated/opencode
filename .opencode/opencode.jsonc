@@ -104,9 +104,9 @@
       "curl * | sh*": "deny",
       "curl * | bash*": "deny",
     },
-    // Remote web access is useful, but keep it explicit because it can exfiltrate code/context.
-    "websearch": "ask",
-    "webfetch": "ask",
+    // Low-risk research tools should stay automatic to reduce unnecessary prompts.
+    "websearch": "allow",
+    "webfetch": "allow",
     "codesearch": "allow",
     // Tool integrations: allow
     "lsp": "allow",
