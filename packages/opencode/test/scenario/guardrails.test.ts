@@ -373,6 +373,7 @@ test("guardrail profile enforces provider admission lanes", async () => {
 
         const evalModel = openrouter.models["openai/gpt-5.4-mini"]
 
+        // With evals set empty, openrouter is NOT evaluation-only, so implement can use it
         await expect(
           Plugin.trigger(
             "chat.params",
@@ -383,8 +384,9 @@ test("guardrail profile enforces provider admission lanes", async () => {
             },
             { temperature: undefined, topP: undefined, topK: undefined, options: {} },
           ),
-        ).rejects.toThrow("evaluation-only")
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
 
+        // With evals set empty, provider-eval is open to any provider
         await expect(
           Plugin.trigger(
             "chat.params",
@@ -395,8 +397,9 @@ test("guardrail profile enforces provider admission lanes", async () => {
             },
             { temperature: undefined, topP: undefined, topK: undefined, options: {} },
           ),
-        ).rejects.toThrow("reserved for evaluation-lane providers")
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
 
+        // Whitelist-based admission still blocks unadmitted models on openrouter
         await expect(
           Plugin.trigger(
             "chat.params",
