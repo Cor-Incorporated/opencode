@@ -6,9 +6,116 @@
     },
   },
   "permission": {
-    "edit": {
-      "packages/opencode/migration/*": "deny",
+    // Read operations: allow by default, deny sensitive files
+    // Mirrors Claude Code's Read allow + .env/.secrets deny
+    "read": {
+      "*": "allow",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+      "secrets/**": "deny",
+      "**/secrets/**": "deny",
     },
+    // Edit operations: allow by default (Claude Code's acceptEdits mode)
+    // Deny migration files and sensitive configs
+    "edit": {
+      "*": "allow",
+      "packages/opencode/migration/*": "deny",
+      ".env": "deny",
+      ".env.*": "deny",
+      "**/.env": "deny",
+      "**/.env.*": "deny",
+    },
+    // File search: always allow (Claude Code allows Glob/Grep unconditionally)
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    // Bash: pattern-based control mirroring Claude Code's Bash whitelist
+    "bash": {
+      "*": "ask",
+      // JS/TS toolchain
+      "node *": "allow",
+      "npm *": "allow",
+      "npx *": "allow",
+      "pnpm *": "allow",
+      "bun *": "allow",
+      "bunx *": "allow",
+      "yarn *": "allow",
+      "turbo *": "allow",
+      "tsc *": "allow",
+      // Python toolchain
+      "python *": "allow",
+      "python3 *": "allow",
+      "pip *": "allow",
+      "pip3 install *": "allow",
+      "uv *": "allow",
+      // Linters/formatters
+      "eslint *": "allow",
+      "prettier *": "allow",
+      "biome *": "allow",
+      // Test runners
+      "jest *": "allow",
+      "vitest *": "allow",
+      "playwright *": "allow",
+      // Git operations
+      "git *": "allow",
+      "gh *": "allow",
+      // System utilities
+      "ls *": "allow",
+      "wc *": "allow",
+      "lsof *": "allow",
+      "test *": "allow",
+      "set *": "allow",
+      "dig *": "allow",
+      "nslookup *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "touch *": "allow",
+      "chmod *": "allow",
+      "which *": "allow",
+      "echo *": "allow",
+      "pwd": "allow",
+      "env *": "allow",
+      "sort *": "allow",
+      "uniq *": "allow",
+      "diff *": "allow",
+      "grep *": "allow",
+      "find *": "allow",
+      "sed *": "allow",
+      "awk *": "allow",
+      "xargs *": "allow",
+      // Network
+      "curl *": "allow",
+      "openssl *": "allow",
+      // Container/Cloud
+      "docker *": "allow",
+      "vercel *": "allow",
+      "supabase *": "allow",
+      // Dangerous operations: deny
+      "rm -rf *": "deny",
+      "sudo *": "deny",
+      "git push --force*": "deny",
+      "git push -f *": "deny",
+      "curl * | sh*": "deny",
+      "curl * | bash*": "deny",
+    },
+    // Web operations: allow (Claude Code allows WebSearch, WebFetch)
+    "websearch": "allow",
+    "webfetch": "allow",
+    "codesearch": "allow",
+    // Tool integrations: allow
+    "lsp": "allow",
+    "task": "allow",
+    "skill": "allow",
+    "question": "allow",
+    "todowrite": "allow",
+    // External directory access: ask (security boundary)
+    "external_directory": "ask",
   },
   "mcp": {},
   "tools": {
