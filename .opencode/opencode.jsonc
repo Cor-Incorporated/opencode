@@ -34,19 +34,34 @@
     // Bash: pattern-based control mirroring Claude Code's Bash whitelist
     "bash": {
       "*": "ask",
-      // Dev toolchain (Claude Code allows: node, npm, pnpm, bun, python, pip)
+      // JS/TS toolchain
       "node *": "allow",
       "npm *": "allow",
+      "npx *": "allow",
       "pnpm *": "allow",
       "bun *": "allow",
+      "bunx *": "allow",
+      "yarn *": "allow",
+      "turbo *": "allow",
+      "tsc *": "allow",
+      // Python toolchain
       "python *": "allow",
       "python3 *": "allow",
       "pip *": "allow",
       "pip3 install *": "allow",
-      // Git operations (Claude Code allows: git, gh)
+      "uv *": "allow",
+      // Linters/formatters
+      "eslint *": "allow",
+      "prettier *": "allow",
+      "biome *": "allow",
+      // Test runners
+      "jest *": "allow",
+      "vitest *": "allow",
+      "playwright *": "allow",
+      // Git operations
       "git *": "allow",
       "gh *": "allow",
-      // System utilities (Claude Code allows: ls, wc, lsof, test, set, dig, etc.)
+      // System utilities
       "ls *": "allow",
       "wc *": "allow",
       "lsof *": "allow",
@@ -60,21 +75,34 @@
       "mkdir *": "allow",
       "cp *": "allow",
       "mv *": "allow",
+      "touch *": "allow",
+      "chmod *": "allow",
       "which *": "allow",
       "echo *": "allow",
-      // Network (Claude Code allows: curl, openssl)
+      "pwd": "allow",
+      "env *": "allow",
+      "sort *": "allow",
+      "uniq *": "allow",
+      "diff *": "allow",
+      "grep *": "allow",
+      "find *": "allow",
+      "sed *": "allow",
+      "awk *": "allow",
+      "xargs *": "allow",
+      // Network
       "curl *": "allow",
       "openssl *": "allow",
-      // Container (Claude Code allows: docker)
+      // Container/Cloud
       "docker *": "allow",
-      // Cloud CLI
       "vercel *": "allow",
       "supabase *": "allow",
-      // Dangerous operations: deny (Claude Code denies: rm -rf, sudo, force-push)
+      // Dangerous operations: deny
       "rm -rf *": "deny",
       "sudo *": "deny",
       "git push --force*": "deny",
+      "git push -f *": "deny",
       "curl * | sh*": "deny",
+      "curl * | bash*": "deny",
     },
     // Web operations: allow (Claude Code allows WebSearch, WebFetch)
     "websearch": "allow",
