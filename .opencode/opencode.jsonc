@@ -112,6 +112,8 @@
     "lsp": "allow",
     "task": "allow",
     "skill": "allow",
+    "question": "allow",
+    "todowrite": "allow",
     // External directory access: ask (security boundary)
     "external_directory": "ask",
   },
