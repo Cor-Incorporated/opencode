@@ -42,7 +42,10 @@ type Stat = {
 
 type Client = {
   session: {
-    create(input: { body: { parentID: string; title: string }; query: { directory: string } }): Promise<{ data: { id: string } }>
+    create(input: {
+      body: { parentID: string; title: string }
+      query: { directory: string }
+    }): Promise<{ data: { id: string } }>
     promptAsync(input: {
       path: { id: string }
       query: { directory: string }
@@ -158,9 +161,10 @@ function big(text: string) {
   const data = text.trim()
   if (!data) return false
   const plan = (data.match(/^\s*([-*]|\d+\.)\s+/gm) ?? []).length
-  const impl = /(implement|implementation|build|create|add|fix|refactor|rewrite|patch|parallel|subagent|team|background|worker|修正|実装|追加|改修|並列|サブエージェント|チーム)/i.test(
-    data,
-  )
+  const impl =
+    /(implement|implementation|build|create|add|fix|refactor|rewrite|patch|parallel|subagent|team|background|worker|修正|実装|追加|改修|並列|サブエージェント|チーム)/i.test(
+      data,
+    )
   const wide =
     data.length >= 500 ||
     plan >= 3 ||
@@ -237,19 +241,24 @@ async function save(dir: string, run: Run) {
 }
 
 async function load(dir: string, id: string) {
-  const data = await Bun.file(file(dir, id)).json().catch(() => undefined)
+  const data = await Bun.file(file(dir, id))
+    .json()
+    .catch(() => undefined)
   return isRun(data) ? data : undefined
 }
 
 async function scan(dir: string) {
   await mkdir(root(dir), { recursive: true })
   const list = await readdir(root(dir)).catch(() => [])
-  return Promise.all(list.filter((item) => item.endsWith(".json")).map((item) => Bun.file(path.join(root(dir), item)).json().catch(() => undefined))).then(
-    (list) =>
-      list
-        .filter(isRun)
-        .toSorted((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))),
-  )
+  return Promise.all(
+    list
+      .filter((item) => item.endsWith(".json"))
+      .map((item) =>
+        Bun.file(path.join(root(dir), item))
+          .json()
+          .catch(() => undefined),
+      ),
+  ).then((list) => list.filter(isRun).toSorted((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))))
 }
 
 async function yardadd(dir: string, id: string) {
@@ -365,11 +374,7 @@ async function stop(client: Client, run: Run) {
   ).catch(() => undefined)
 }
 
-export default async function team(input: {
-  client: Client
-  worktree: string
-  directory: string
-}) {
+export default async function team(input: { client: Client; worktree: string; directory: string }) {
   const job = async (ctx: Ctx, run: Run, item: Step) => {
     const push = write(item.prompt, item.write)
     const box = push && item.worktree ? await yardadd(ctx.worktree, `${run.id}-${item.id}`) : ctx.directory
@@ -467,7 +472,10 @@ export default async function team(input: {
     },
     async execute(args, ctx) {
       defs(args.tasks)
-      if (args.tasks.length < 2) throw new Error("team requires at least two tasks")
+      if (!args.tasks.length) throw new Error("team requires at least one task")
+      if (args.tasks.length < 2 && args.tasks.some((item) => write(item.prompt, item.write))) {
+        throw new Error("team requires at least two tasks when any task can mutate files")
+      }
       ctx.metadata({
         title: "team run",
         metadata: {
@@ -529,7 +537,9 @@ export default async function team(input: {
 
       try {
         for (;;) {
-          const ready = list.filter((item) => item.state === "pending" && item.depends.every((dep) => done.has(dep)) && !active.has(item.id))
+          const ready = list.filter(
+            (item) => item.state === "pending" && item.depends.every((dep) => done.has(dep)) && !active.has(item.id),
+          )
 
           if (args.strategy === "wave" && ready.length) {
             ready.forEach((item) => todo(run, item.id, { state: "queued" }))
@@ -676,7 +686,9 @@ export default async function team(input: {
       run_id: z.string().optional(),
     },
     async execute(args, ctx) {
-      const list = args.run_id ? [live.get(args.run_id) ?? (await load(ctx.worktree, args.run_id))].filter(isRun) : await scan(ctx.worktree)
+      const list = args.run_id
+        ? [live.get(args.run_id) ?? (await load(ctx.worktree, args.run_id))].filter(isRun)
+        : await scan(ctx.worktree)
       if (!list.length) return "No team runs found."
       return list.map((item) => note(item)).join("\n\n")
     },
@@ -729,8 +741,7 @@ export default async function team(input: {
         sessionID: out.message.sessionID,
         messageID: out.message.id,
         type: "text",
-        text:
-          "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least two worker tasks. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
+        text: "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least two worker tasks. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
       })
     },
     "tool.execute.before": async (
@@ -745,6 +756,12 @@ export default async function team(input: {
       const gate = need.get(item.sessionID)
       if (!gate || gate.done) return
       if (item.tool === "team") return
+      if (item.tool === "background") {
+        if (!write(String(out.args.prompt ?? ""), out.args.write === true)) return
+        throw new Error(
+          `Parallel implementation is enforced for this turn. Use the team tool with at least two tasks before starting write-capable background workers. Reason: ${gate.reason}`,
+        )
+      }
       if (item.tool !== "edit" && item.tool !== "write" && item.tool !== "apply_patch" && item.tool !== "bash") return
       if (item.tool === "bash" && !mut(String(out.args.command ?? ""))) return
       throw new Error(

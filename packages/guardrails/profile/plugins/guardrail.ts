@@ -109,7 +109,7 @@ function ext(file: string) {
 function stash(file: string) {
   return Bun.file(file)
     .json()
-    .catch(() => ({} as Record<string, unknown>))
+    .catch(() => ({}) as Record<string, unknown>)
 }
 
 async function save(file: string, data: Record<string, unknown>) {
@@ -117,7 +117,9 @@ async function save(file: string, data: Record<string, unknown>) {
 }
 
 async function line(file: string, data: Record<string, unknown>) {
-  const prev = await Bun.file(file).text().catch(() => "")
+  const prev = await Bun.file(file)
+    .text()
+    .catch(() => "")
   await Bun.write(file, prev + JSON.stringify(data) + "\n")
 }
 
@@ -168,10 +170,7 @@ function free(data: {
   return !(ids && ids.has(str(data.id)))
 }
 
-function preview(data: {
-  id?: unknown
-  status?: unknown
-}) {
+function preview(data: { id?: unknown; status?: unknown }) {
   const id = str(data.id)
   const status = str(data.status)
   if (status && status !== "active") return true
@@ -197,10 +196,13 @@ function cmp(left: string, right: string) {
   return a[2] - b[2]
 }
 
-export default async function guardrail(input: {
-  directory: string
-  worktree: string
-}, opts?: Record<string, unknown>) {
+export default async function guardrail(
+  input: {
+    directory: string
+    worktree: string
+  },
+  opts?: Record<string, unknown>,
+) {
   const mode = typeof opts?.mode === "string" ? opts.mode : "enforced"
   const evals = new Set<string>([])
   const evalAgent = "provider-eval"
@@ -322,7 +324,9 @@ export default async function guardrail(input: {
       return baseline(args.oldString, args.newString)
     }
     if (typeof args.content !== "string") return
-    const prev = await Bun.file(file).text().catch(() => "")
+    const prev = await Bun.file(file)
+      .text()
+      .catch(() => "")
     if (!prev) return
     return baseline(prev, args.content)
   }
@@ -368,9 +372,7 @@ export default async function guardrail(input: {
   }
 
   return {
-    config: async (cfg: {
-      provider?: Record<string, { whitelist?: string[] }>
-    }) => {
+    config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
       for (const key of Object.keys(allow)) delete allow[key]
       for (const [key, val] of Object.entries(cfg.provider ?? {})) {
         const ids = list(val.whitelist)
@@ -415,10 +417,7 @@ export default async function guardrail(input: {
         })
       }
     },
-    "tool.execute.before": async (
-      item: { tool: string; args?: unknown },
-      out: { args: Record<string, unknown> },
-    ) => {
+    "tool.execute.before": async (item: { tool: string; args?: unknown }, out: { args: Record<string, unknown> }) => {
       const file = pick(out.args ?? item.args)
       if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write")) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
@@ -437,7 +436,7 @@ export default async function guardrail(input: {
       if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
-          const err = `context budget exceeded after ${count} source reads; narrow scope or delegate before editing`
+          const err = `context budget exceeded after ${count} source reads; narrow scope or delegate with the team tool before editing`
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }
