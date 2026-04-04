@@ -246,6 +246,7 @@ Use the project-local command.
         expect(review?.mode).toBe("subagent")
         expect(perm(impl, "question")).toBe("allow")
         expect(perm(impl, "plan_enter")).toBe("allow")
+        expect(perm(impl, "webfetch", "https://example.com")).toBe("allow")
         expect(perm(impl, "edit")).toBe("ask")
         expect(perm(impl, "bash", "git reset --hard HEAD")).toBe("deny")
         expect(perm(impl, "bash", "git push origin --force-with-lease")).toBe("deny")
