@@ -2,9 +2,7 @@ name: nix-eval
 
 on:
   push:
-    branches: [dev]
-  pull_request:
-    branches: [dev]
+    branches: [dev, fix/guardrails-bootstrap-and-openrouter]
   workflow_dispatch:
 
 concurrency:
