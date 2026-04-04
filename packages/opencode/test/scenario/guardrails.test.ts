@@ -781,6 +781,81 @@ test("guardrail profile plugin records lifecycle events and compaction context",
   })
 })
 
+test("team plugin skips parallel enforcement on HEAD-less repos", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: false,
+      init: async (dir) => {
+        const $ = Bun.$
+        await $`git init`.cwd(dir).quiet()
+        await $`git config core.fsmonitor false`.cwd(dir).quiet()
+        await $`git config user.email "test@opencode.test"`.cwd(dir).quiet()
+        await $`git config user.name "Test"`.cwd(dir).quiet()
+        // Intentionally NO initial commit — HEAD does not exist
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const bigRequest =
+          "Implement the following multi-file refactoring across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Extract shared types into a common module\n" +
+          "- 2. Update all imports across the three packages\n" +
+          "- 3. Add barrel exports for the new module\n" +
+          "- 4. Fix downstream consumers\n" +
+          "This is a large plan that touches multiple packages."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text: bigRequest },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          {
+            sessionID: "session_headless",
+            agent: "implement",
+          },
+          {
+            message: {
+              id: "msg_headless",
+              sessionID: "session_headless",
+              role: "user",
+            },
+            parts,
+          },
+        )
+
+        const injected = parts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Bootstrap mode"),
+        )
+        expect(injected).toBeDefined()
+        expect(injected!.text).toContain("Parallel implementation policy is suspended")
+
+        const parallelInjected = parts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+        )
+        expect(parallelInjected).toBeUndefined()
+
+        // Mutations should NOT be blocked — no need gate was set
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_headless", callID: "call_headless_edit" },
+            {
+              args: {
+                filePath: path.join(tmp.path, "src", "index.ts"),
+                oldString: "const a = 1",
+                newString: "const a = 2",
+              },
+            },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
 for (const replay of Object.values(replays)) {
   it.live(`guardrail replay keeps ${replay.command} executable`, () =>
     run(replay).pipe(
