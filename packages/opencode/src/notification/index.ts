@@ -2,8 +2,9 @@ import { platform } from "os"
 import { Process } from "@/util/process"
 import { which } from "@/util/which"
 
-const TERMINAL_APPS = [
+const APPS = new Set([
   "terminal",
+  "terminalapp",
   "iterm",
   "iterm2",
   "warp",
@@ -16,12 +17,29 @@ const TERMINAL_APPS = [
   "wave",
   "tmux",
   "zellij",
-  "vscode",
+  "visualstudiocode",
+  "visualstudiocodeinsiders",
   "code",
-]
+  "codeinsiders",
+  "cursor",
+  "vscodium",
+  "windsurf",
+])
+
+function norm(s: string) {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "")
+}
 
 function escapeForOsascript(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+export function terminal(name: string) {
+  return APPS.has(norm(name))
+}
+
+export function xml(title: string, message: string) {
+  return `<toast><visual><binding template='ToastText02'><text id='1'>${escapeXml(title)}</text><text id='2'>${escapeXml(message)}</text></binding></visual></toast>`
 }
 
 export namespace Notification {
@@ -36,8 +54,7 @@ export namespace Notification {
       ],
       { nothrow: true },
     )
-    const frontmost = result.text.trim().toLowerCase()
-    return TERMINAL_APPS.some((app) => frontmost.includes(app))
+    return terminal(result.text.trim())
   }
 
   export async function show(title: string, message: string): Promise<void> {
@@ -70,16 +87,32 @@ export namespace Notification {
     }
 
     if (os === "win32") {
-      const script = [
-        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
-        "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null",
-        `$template = "<toast><visual><binding template='ToastText02'><text id='1'>${escapeXml(title)}</text><text id='2'>${escapeXml(message)}</text></binding></visual></toast>"`,
-        "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
-        "$xml.LoadXml($template)",
-        "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)",
-        '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("opencode").Show($toast)',
-      ].join("; ")
-      await Process.run(["powershell.exe", "-NonInteractive", "-NoProfile", "-Command", script], { nothrow: true })
+      const proc = Process.spawn(
+        [
+          "powershell.exe",
+          "-NonInteractive",
+          "-NoProfile",
+          "-Command",
+          [
+            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null",
+            "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
+            "$xml.LoadXml([Console]::In.ReadToEnd())",
+            "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)",
+            '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("opencode").Show($toast)',
+          ].join("; "),
+        ],
+        {
+          stdin: "pipe",
+          stdout: "ignore",
+          stderr: "ignore",
+        },
+      )
+      if (!proc.stdin) return
+      proc.stdin.write(xml(title, message))
+      proc.stdin.end()
+      await proc.exited.catch(() => {})
       return
     }
   }
