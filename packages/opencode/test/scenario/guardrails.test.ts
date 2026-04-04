@@ -17,6 +17,7 @@ import { Filesystem } from "../../src/util/filesystem"
 import { tmpdir } from "../fixture/fixture"
 import { assertReplay, it, run } from "./harness"
 import { replays } from "./replay"
+import TeamPlugin from "../../../guardrails/profile/plugins/team"
 
 const managed = process.env.OPENCODE_TEST_MANAGED_CONFIG_DIR!
 const profile = path.resolve(import.meta.dir, "../../../guardrails/profile")
@@ -696,6 +697,85 @@ test("guardrail profile blocks write-capable background workers until team runs"
         })
       },
     })
+  })
+})
+
+test("project-specific bash allows beat profile wildcard asks", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await write(dir, "opencode.json", {
+          $schema: "https://opencode.ai/config.json",
+          permission: {
+            bash: {
+              "*": "ask",
+              "supabase *": "allow",
+            },
+          },
+        })
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const agent = await Agent.get("build")
+        expect(perm(agent, "bash", "supabase db query")).toBe("allow")
+        expect(perm(agent, "bash", "unknown cmd")).toBe("ask")
+      },
+    })
+  })
+})
+
+test("team tool allows a single read-only task", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true, config: { share: "auto" } })
+
+    const plugin = await TeamPlugin({
+      client: {
+        session: {
+          create: async () => ({ data: { id: "child" } }),
+          promptAsync: async () => ({}),
+          prompt: async () => ({}),
+          status: async () => ({ data: { child: { type: "idle" } } }),
+          messages: async () => ({
+            data: [{ info: { role: "assistant" }, parts: [{ type: "text", text: "ok" }] }],
+          }),
+          abort: async () => ({}),
+        },
+      },
+      worktree: tmp.path,
+      directory: tmp.path,
+    })
+
+    const result = await plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "inspect",
+            description: "inspect only",
+            prompt: "Inspect src/index.ts and report findings without editing files.",
+            write: false,
+            worktree: false,
+          },
+        ],
+      },
+      {
+        sessionID: "session_team_single",
+        messageID: "",
+        agent: "build",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: AbortSignal.any([]),
+        metadata: () => {},
+        ask: async () => {},
+      },
+    )
+
+    expect(result).toContain("run_id:")
   })
 })
 

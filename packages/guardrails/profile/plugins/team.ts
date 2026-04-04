@@ -472,7 +472,10 @@ export default async function team(input: { client: Client; worktree: string; di
     },
     async execute(args, ctx) {
       defs(args.tasks)
-      if (args.tasks.length < 2) throw new Error("team requires at least two tasks")
+      if (!args.tasks.length) throw new Error("team requires at least one task")
+      if (args.tasks.length < 2 && args.tasks.some((item) => write(item.prompt, item.write))) {
+        throw new Error("team requires at least two tasks when any task can mutate files")
+      }
       ctx.metadata({
         title: "team run",
         metadata: {
