@@ -104,9 +104,9 @@
       "curl * | sh*": "deny",
       "curl * | bash*": "deny",
     },
-    // Web operations: allow (Claude Code allows WebSearch, WebFetch)
-    "websearch": "allow",
-    "webfetch": "allow",
+    // Remote web access is useful, but keep it explicit because it can exfiltrate code/context.
+    "websearch": "ask",
+    "webfetch": "ask",
     "codesearch": "allow",
     // Tool integrations: allow
     "lsp": "allow",
