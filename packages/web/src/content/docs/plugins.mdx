@@ -225,14 +225,14 @@ export const NotificationPlugin = async ({ project, client, $, directory, worktr
     event: async ({ event }) => {
       // Send notification on session completion
       if (event.type === "session.idle") {
-        await $`osascript -e 'display notification "Session completed!" with title "opencode"'`
+        await $`osascript -e 'tell application "Terminal" to display notification "Session completed!" with title "opencode"'`
       }
     },
   }
 }
 ```
 
-We are using `osascript` to run AppleScript on macOS. Here we are using it to send notifications.
+We are using `osascript` to run AppleScript on macOS. Here we are using it to send notifications. If you want this without a plugin, OpenCode's TUI also has built-in system notifications via `"notifications": true` in `tui.json`.
 
 :::note
 If you’re using the OpenCode desktop app, it can send system notifications automatically when a response is ready or when a session errors.
