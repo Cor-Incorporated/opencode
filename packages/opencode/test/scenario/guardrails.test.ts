@@ -408,14 +408,14 @@ test("guardrail profile enforces provider admission lanes", async () => {
               agent: "provider-eval",
               model: {
                 ...evalModel,
-                  id: "google/gemini-3-pro-preview" as typeof evalModel.id,
-                  cost: {
-                    ...evalModel.cost,
-                    input: 0.1,
-                    output: 0.2,
-                    cache: { read: 0, write: 0 },
-                  },
+                id: "google/gemini-3-pro-preview" as typeof evalModel.id,
+                cost: {
+                  ...evalModel.cost,
+                  input: 0.1,
+                  output: 0.2,
+                  cache: { read: 0, write: 0 },
                 },
+              },
             },
             { temperature: undefined, topP: undefined, topK: undefined, options: {} },
           ),
@@ -453,7 +453,11 @@ test("guardrail profile plugin injects shell env and blocks protected files", as
         )
         const vars = env.env as Record<string, string>
 
-        expect(cfg.plugin_origins?.some((item) => String(Array.isArray(item.spec) ? item.spec[0] : item.spec).includes("/plugins/guardrail.ts"))).toBe(true)
+        expect(
+          cfg.plugin_origins?.some((item) =>
+            String(Array.isArray(item.spec) ? item.spec[0] : item.spec).includes("/plugins/guardrail.ts"),
+          ),
+        ).toBe(true)
         expect(vars.OPENCODE_GUARDRAIL_MODE).toBe("enforced")
         expect(vars.OPENCODE_GUARDRAIL_ROOT).toBe(files.root)
         expect(vars.OPENCODE_GUARDRAIL_STATE).toBe(files.state)
@@ -619,7 +623,77 @@ test("guardrail profile plugin enforces version baselines and context budget", a
               },
             },
           ),
-        ).rejects.toThrow("context budget exceeded")
+        ).rejects.toThrow("delegate with the team tool")
+      },
+    })
+  })
+})
+
+test("guardrail profile blocks write-capable background workers until team runs", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          {
+            type: "text",
+            text:
+              "Implement the following multi-file refactor across packages/a and packages/b.\n" +
+              "1. Add a shared helper.\n" +
+              "2. Update both packages.\n" +
+              "3. Fix downstream imports.\n" +
+              "This is a broad multi-file implementation.",
+          },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          {
+            sessionID: "session_team_gate",
+            agent: "implement",
+          },
+          {
+            message: {
+              id: "msg_team_gate",
+              sessionID: "session_team_gate",
+              role: "user",
+            },
+            parts,
+          },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "background", sessionID: "session_team_gate", callID: "call_bg_write" },
+            {
+              args: {
+                prompt: "Edit src/a.ts to add the new helper",
+                write: true,
+              },
+            },
+          ),
+        ).rejects.toThrow("Use the team tool with at least two tasks")
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "background", sessionID: "session_team_gate", callID: "call_bg_read" },
+            {
+              args: {
+                prompt: "Inspect src/a.ts and summarize it",
+                write: false,
+              },
+            },
+          ),
+        ).resolves.toEqual({
+          args: {
+            prompt: "Inspect src/a.ts and summarize it",
+            write: false,
+          },
+        })
       },
     })
   })
@@ -766,9 +840,9 @@ test("guardrail profile plugin records lifecycle events and compaction context",
           { context: [], prompt: undefined },
         )
 
-        expect(log).toContain("\"type\":\"session.created\"")
-        expect(log).toContain("\"type\":\"permission.asked\"")
-        expect(log).toContain("\"type\":\"session.idle\"")
+        expect(log).toContain('"type":"session.created"')
+        expect(log).toContain('"type":"permission.asked"')
+        expect(log).toContain('"type":"session.idle"')
         expect(state.last_session).toBe("session_test")
         expect(state.read_count).toBe(0)
         expect(state.factchecked).toBe(false)
@@ -833,7 +907,10 @@ test("team plugin skips parallel enforcement on HEAD-less repos", async () => {
         expect(injected!.text).toContain("Parallel implementation policy is suspended")
 
         const parallelInjected = parts.find(
-          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+          (item) =>
+            item.type === "text" &&
+            typeof item.text === "string" &&
+            item.text.includes("Parallel implementation policy is active"),
         )
         expect(parallelInjected).toBeUndefined()
 
