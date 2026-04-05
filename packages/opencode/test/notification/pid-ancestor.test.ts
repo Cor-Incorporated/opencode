@@ -3,8 +3,8 @@ import { isAncestorPid } from "../../src/notification"
 
 // Build a fake /proc/<pid>/stat line.  Field index 3 (0-based) is the ppid.
 // Real format: "pid (comm) S ppid pgrp session ..."
-function procStat(pid: number, ppid: number): string {
-  return `${pid} (bash) S ${ppid} ${pid} ${pid} 0 -1 4194304`
+function procStat(pid: number, ppid: number, comm = "bash"): string {
+  return `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304`
 }
 
 type ReadFileFn = (path: string, encoding: "utf8") => Promise<string>
@@ -79,6 +79,17 @@ describe("isAncestorPid", () => {
     const reader = mockReadFile({})
     const result = await isAncestorPid(100, 1, reader)
     expect(result).toBe(false)
+  })
+
+  test("handles process names with spaces (e.g. tmux: server)", async () => {
+    const reader: ReadFileFn = async (filePath: string) => {
+      if (filePath === "/proc/300/stat")
+        return "300 (tmux: server) S 200 300 300 0 -1 4194304"
+      if (filePath === "/proc/200/stat")
+        return "200 (bash) S 100 200 200 0 -1 4194304"
+      throw new Error("ENOENT")
+    }
+    expect(await isAncestorPid(100, 300, reader)).toBe(true)
   })
 
   test("walks deep process trees correctly", async () => {

@@ -49,7 +49,13 @@ export async function isAncestorPid(
     visited.add(pid)
     try {
       const stat = await readFileFn(`/proc/${pid}/stat`, "utf8")
-      const ppid = parseInt(stat.split(" ")[3], 10)
+      // The comm field is wrapped in parentheses and may contain spaces.
+      // The only safe delimiter is the last ')' in the line.
+      const closeParenIdx = stat.lastIndexOf(")")
+      if (closeParenIdx === -1) break
+      const afterComm = stat.substring(closeParenIdx + 2) // skip ") "
+      const fields = afterComm.split(" ")
+      const ppid = parseInt(fields[1], 10) // fields: [state, ppid, pgrp, ...]
       if (isNaN(ppid)) break
       pid = ppid
     } catch {
