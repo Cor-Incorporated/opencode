@@ -1,7 +1,7 @@
 import path from "path"
 import { Instance } from "@/project/instance"
 import { Log } from "@/util/log"
-import type { Memory } from "./types"
+import { Memory } from "./types"
 
 const log = Log.create({ service: "memory.file" })
 
@@ -35,6 +35,8 @@ function parseFrontmatter(raw: string): { frontmatter: Memory.Frontmatter; conte
     fm[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
   }
   if (!fm.topic || !fm.type) return undefined
+  const validTypes: readonly string[] = Memory.TYPES
+  if (!validTypes.includes(fm.type)) return undefined
   return {
     frontmatter: {
       topic: fm.topic,
