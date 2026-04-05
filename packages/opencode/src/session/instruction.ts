@@ -1,3 +1,4 @@
+import { realpath as fsRealpath } from "node:fs/promises"
 import os from "os"
 import path from "path"
 import { Effect, Layer, ServiceMap } from "effect"
@@ -144,20 +145,46 @@ export namespace Instruction {
           // Rules files from global and project directories
           const globalRulesDir = path.join(Global.Path.home, ".opencode", "rules")
 
-          const globalRuleFiles = yield* fs
+          const rawGlobalRuleFiles = yield* fs
             .glob("*.md", { cwd: globalRulesDir, absolute: true, include: "file" })
             .pipe(Effect.catch(() => Effect.succeed([] as string[])))
 
+          // Symlink containment: reject files whose real path escapes the rules directory.
+          // This prevents a symlink like rules/evil.md -> ~/.ssh/id_rsa from injecting
+          // arbitrary content into the LLM context.
+          const filterSymlinkEscapes = async (files: string[], rulesDir: string): Promise<string[]> => {
+            const resolvedDir = await fsRealpath(rulesDir).catch(() => rulesDir)
+            const safe: string[] = []
+            for (const file of files) {
+              try {
+                const resolvedPath = await fsRealpath(file)
+                if (resolvedPath.startsWith(resolvedDir + path.sep) || resolvedPath === resolvedDir) {
+                  safe.push(file)
+                }
+              } catch {
+                // broken symlink or permission error — skip
+              }
+            }
+            return safe
+          }
+
+          const globalRuleFiles = yield* Effect.promise(() => filterSymlinkEscapes(rawGlobalRuleFiles, globalRulesDir))
+
           // Project rules only load when project config is not disabled (trust boundary)
-          const projectRuleFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+          const projectRulesDir = path.join(Instance.directory, ".opencode", "rules")
+          const rawProjectRuleFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG
             ? []
             : yield* fs
                 .glob("*.md", {
-                  cwd: path.join(Instance.directory, ".opencode", "rules"),
+                  cwd: projectRulesDir,
                   absolute: true,
                   include: "file",
                 })
                 .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+
+          const projectRuleFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+            ? []
+            : yield* Effect.promise(() => filterSymlinkEscapes(rawProjectRuleFiles, projectRulesDir))
 
           // Project rules override global by filename
           const projectFilenames = new Set(projectRuleFiles.map((p) => path.basename(p)))

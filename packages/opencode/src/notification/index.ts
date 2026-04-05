@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises"
 import { platform } from "os"
 import { Process } from "@/util/process"
 import { which } from "@/util/which"
@@ -25,6 +26,44 @@ const APPS = new Set([
   "vscodium",
   "windsurf",
 ])
+
+type ReadFileFn = (path: string, encoding: "utf8") => Promise<string>
+
+/**
+ * Walk the process tree via /proc/<pid>/stat to check whether `ancestorPid`
+ * is an ancestor of `currentPid`.  On non-Linux systems (where /proc is
+ * unavailable) this gracefully returns false.
+ *
+ * The optional `readFileFn` parameter allows tests to inject a mock without
+ * patching the global `node:fs/promises` module.
+ */
+export async function isAncestorPid(
+  ancestorPid: number,
+  currentPid: number,
+  readFileFn: ReadFileFn = readFile as ReadFileFn,
+): Promise<boolean> {
+  let pid = currentPid
+  const visited = new Set<number>()
+  while (pid > 1 && !visited.has(pid)) {
+    if (pid === ancestorPid) return true
+    visited.add(pid)
+    try {
+      const stat = await readFileFn(`/proc/${pid}/stat`, "utf8")
+      // The comm field is wrapped in parentheses and may contain spaces.
+      // The only safe delimiter is the last ')' in the line.
+      const closeParenIdx = stat.lastIndexOf(")")
+      if (closeParenIdx === -1) break
+      const afterComm = stat.substring(closeParenIdx + 2) // skip ") "
+      const fields = afterComm.split(" ")
+      const ppid = parseInt(fields[1], 10) // fields: [state, ppid, pgrp, ...]
+      if (isNaN(ppid)) break
+      pid = ppid
+    } catch {
+      break
+    }
+  }
+  return false
+}
 
 function norm(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -68,7 +107,7 @@ export namespace Notification {
       if (result.code !== 0) return true
       const pid = parseInt(result.text.trim(), 10)
       if (isNaN(pid)) return true
-      return pid === process.pid || pid === process.ppid
+      return await isAncestorPid(pid, process.pid)
     }
 
     if (os === "win32") return false
