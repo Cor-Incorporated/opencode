@@ -43,18 +43,37 @@ export function xml(title: string, message: string) {
 }
 
 export namespace Notification {
-  export async function terminalIsFocused(): Promise<boolean> {
-    if (platform() !== "darwin") return false
+  export async function terminalIsFocused(
+    overridePlatform?: NodeJS.Platform,
+  ): Promise<boolean> {
+    const os = overridePlatform ?? platform()
 
-    const result = await Process.text(
-      [
-        "osascript",
-        "-e",
-        'tell application "System Events" to get name of first application process whose frontmost is true',
-      ],
-      { nothrow: true },
-    )
-    return terminal(result.text.trim())
+    if (os === "darwin") {
+      const result = await Process.text(
+        [
+          "osascript",
+          "-e",
+          'tell application "System Events" to get name of first application process whose frontmost is true',
+        ],
+        { nothrow: true },
+      )
+      return terminal(result.text.trim())
+    }
+
+    if (os === "linux") {
+      const result = await Process.text(
+        ["xdotool", "getactivewindow", "getwindowpid"],
+        { nothrow: true },
+      )
+      if (result.code !== 0) return true
+      const pid = parseInt(result.text.trim(), 10)
+      if (isNaN(pid)) return true
+      return pid === process.pid || pid === process.ppid
+    }
+
+    if (os === "win32") return false
+
+    return true
   }
 
   export async function show(title: string, message: string): Promise<void> {
