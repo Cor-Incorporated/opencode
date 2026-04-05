@@ -122,4 +122,16 @@
     "github-triage": false,
     "github-pr-search": false,
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "command": ".opencode/hooks/enforce-factcheck-before-edit.sh",
+        "matcher": "write",
+      },
+      {
+        "command": ".opencode/hooks/enforce-factcheck-before-edit.sh",
+        "matcher": "edit",
+      },
+    ],
+  },
 }
