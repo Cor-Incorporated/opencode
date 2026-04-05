@@ -100,11 +100,10 @@ test("managed config overrides weaker project defaults", async () => {
   })
 })
 
-test("guardrails package pins the runtime to the packaged opencode version", async () => {
+test("guardrails package depends on opencode workspace package", async () => {
   const guardrails = await Bun.file(path.resolve(import.meta.dir, "../../../guardrails/package.json")).json()
-  const opencode = await Bun.file(path.resolve(import.meta.dir, "../../package.json")).json()
 
-  expect(guardrails.dependencies.opencode).toBe(opencode.version)
+  expect(guardrails.dependencies.opencode).toBe("workspace:*")
 })
 
 test("claude-compatible skills remain discoverable and command-addressable", async () => {
