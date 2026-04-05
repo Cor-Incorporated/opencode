@@ -120,6 +120,13 @@ describe("guardrails hook", () => {
       expect(result.message).toContain("GUARDRAIL BLOCKED")
       expect(result.message).toContain("Database destruction")
     })
+
+    test("rm -rf /tmp/../../etc is blocked (path traversal)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf /tmp/../../etc"}'))
+      expect(result.action).toBe("block")
+      expect(result.message).toContain("GUARDRAIL BLOCKED")
+      expect(result.message).toContain("Path traversal")
+    })
   })
 
   describe("warns on force operations (exit 0 with stderr)", () => {
@@ -165,6 +172,12 @@ describe("guardrails hook", () => {
 
     test("rm -rf /tmp/test passes (safe allowlisted path)", async () => {
       const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf /tmp/test"}'))
+      expect(result.action).toBe("pass")
+      expect(result.message).toBeUndefined()
+    })
+
+    test("rm -rf /tmp passes (bare safe path)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf /tmp"}'))
       expect(result.action).toBe("pass")
       expect(result.message).toBeUndefined()
     })

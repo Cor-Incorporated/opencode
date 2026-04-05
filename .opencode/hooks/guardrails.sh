@@ -21,7 +21,14 @@ esac
 # NOTE (HIGH-1): This may produce false positives on string literals containing these
 # patterns (e.g. grep patterns, documentation). This is intentional -- the guardrail
 # prioritizes safety over convenience. Users can restructure commands to avoid matches.
-SAFE_RM='(/tmp|/var/tmp)(/|$|\s)'
+SAFE_RM='/(tmp|var/tmp)([/"'"'"'\s}]|$)'
+
+# Block path traversal attempts
+if printf '%s\n' "$INPUT" | grep -qE 'rm\s+.*-r.*\.\.' ; then
+  printf 'GUARDRAIL BLOCKED: Path traversal in rm command detected\n' >&2
+  exit 2
+fi
+
 # Check combined flags: -rf, -fr, and variants with extra flags
 if printf '%s\n' "$INPUT" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive)\s+/'; then
   if ! printf '%s\n' "$INPUT" | grep -qE "rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive)\s+${SAFE_RM}"; then
