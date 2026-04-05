@@ -14,5 +14,5 @@
 - Use `namespace` + `interface` pattern consistent with this codebase (e.g., `Foo.Info`)
 
 ## Formatting
-- Run `bun format` before committing
+- Run `bunx prettier --write .` before committing (config in root `package.json`)
 - Follow existing file structure conventions — check neighbors before creating new patterns

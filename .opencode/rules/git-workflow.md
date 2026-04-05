@@ -7,7 +7,7 @@
 
 ## Commits
 - Format: `<type>: <description>` or `<type>(<scope>): <description>`
-- Types: feat / fix / refactor / docs / test / chore / perf / ci / release
+- Types: feat / fix / docs / chore / refactor / test (enforced by `pr-standards.yml`)
 - One intent per commit — do not mix unrelated changes
 
 ## Pull Requests
