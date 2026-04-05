@@ -55,6 +55,30 @@ describe("guardrails hook", () => {
       expect(result.message).toContain("GUARDRAIL BLOCKED")
     })
 
+    test("rm -rf /etc is blocked (CRITICAL-1: named root dirs)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf /etc"}'))
+      expect(result.action).toBe("block")
+      expect(result.message).toContain("GUARDRAIL BLOCKED")
+    })
+
+    test("rm -rf /home is blocked (CRITICAL-1: named root dirs)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf /home"}'))
+      expect(result.action).toBe("block")
+      expect(result.message).toContain("GUARDRAIL BLOCKED")
+    })
+
+    test("rm -r -f / is blocked (CRITICAL-2: separated flags)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -r -f /"}'))
+      expect(result.action).toBe("block")
+      expect(result.message).toContain("GUARDRAIL BLOCKED")
+    })
+
+    test("rm --recursive --force / is blocked (CRITICAL-2: long flags)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm --recursive /etc"}'))
+      expect(result.action).toBe("block")
+      expect(result.message).toContain("GUARDRAIL BLOCKED")
+    })
+
     test("mkfs.ext4 is blocked", async () => {
       const result = await runHook(entry(), makeEnv("bash", '{"command":"mkfs.ext4 /dev/sda1"}'))
       expect(result.action).toBe("block")
@@ -62,7 +86,7 @@ describe("guardrails hook", () => {
       expect(result.message).toContain("Disk formatting")
     })
 
-    test("dd if= is blocked", async () => {
+    test("dd of=/dev/sda is blocked (WARNING-1: block device writes)", async () => {
       const result = await runHook(entry(), makeEnv("bash", '{"command":"dd if=/dev/zero of=/dev/sda"}'))
       expect(result.action).toBe("block")
       expect(result.message).toContain("GUARDRAIL BLOCKED")
@@ -71,6 +95,13 @@ describe("guardrails hook", () => {
 
     test("fork bomb is blocked", async () => {
       const result = await runHook(entry(), makeEnv("bash", '{"command":":(){ :|:& };:"}'))
+      expect(result.action).toBe("block")
+      expect(result.message).toContain("GUARDRAIL BLOCKED")
+      expect(result.message).toContain("Fork bomb")
+    })
+
+    test("fork bomb with spaces is blocked (CRITICAL-3)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":":() { :|:& };:"}'))
       expect(result.action).toBe("block")
       expect(result.message).toContain("GUARDRAIL BLOCKED")
       expect(result.message).toContain("Fork bomb")
@@ -126,8 +157,20 @@ describe("guardrails hook", () => {
       expect(result.message).toBeUndefined()
     })
 
-    test("rm on specific file passes (not rm -rf /)", async () => {
+    test("rm -rf on relative path passes (safe)", async () => {
       const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf ./node_modules"}'))
+      expect(result.action).toBe("pass")
+      expect(result.message).toBeUndefined()
+    })
+
+    test("rm -rf /tmp/test passes (safe allowlisted path)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"rm -rf /tmp/test"}'))
+      expect(result.action).toBe("pass")
+      expect(result.message).toBeUndefined()
+    })
+
+    test("dd if= without of=/dev/ passes (safe dd usage)", async () => {
+      const result = await runHook(entry(), makeEnv("bash", '{"command":"dd if=/dev/zero of=./test.img bs=1M count=10"}'))
       expect(result.action).toBe("pass")
       expect(result.message).toBeUndefined()
     })

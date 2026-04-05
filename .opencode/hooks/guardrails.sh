@@ -15,20 +15,36 @@ case "$TOOL" in
   *) exit 0 ;;
 esac
 
-# Block destructive filesystem operations (rm -rf / or rm -rf /*)
-if printf '%s\n' "$INPUT" | grep -qE 'rm\s+-rf\s+/[^a-zA-Z]|rm\s+-rf\s+/\s*$'; then
-  printf 'GUARDRAIL BLOCKED: Destructive rm -rf / detected\n' >&2
-  exit 2
+# --- CRITICAL-1/2: Block rm with recursive+force on root paths ---
+# Allowlist approach: block ANY rm -rf / pattern, then allow safe exceptions.
+# Catches combined flags (-rf, -fr), separated flags (-r -f), and long flags (--recursive --force).
+# NOTE (HIGH-1): This may produce false positives on string literals containing these
+# patterns (e.g. grep patterns, documentation). This is intentional -- the guardrail
+# prioritizes safety over convenience. Users can restructure commands to avoid matches.
+SAFE_RM='(/tmp|/var/tmp)(/|$|\s)'
+# Check combined flags: -rf, -fr, and variants with extra flags
+if printf '%s\n' "$INPUT" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive)\s+/'; then
+  if ! printf '%s\n' "$INPUT" | grep -qE "rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*|--recursive)\s+${SAFE_RM}"; then
+    printf 'GUARDRAIL BLOCKED: Destructive rm -rf on root path detected\n' >&2
+    exit 2
+  fi
+fi
+# Check separated flags: rm -r -f / or rm -f -r /
+if printf '%s\n' "$INPUT" | grep -qE 'rm\s+.*-r.*-f.*\s+/' || printf '%s\n' "$INPUT" | grep -qE 'rm\s+.*-f.*-r.*\s+/'; then
+  if ! printf '%s\n' "$INPUT" | grep -qE "rm\s+.*-[rf].*-[rf].*\s+${SAFE_RM}"; then
+    printf 'GUARDRAIL BLOCKED: Destructive rm -rf on root path detected\n' >&2
+    exit 2
+  fi
 fi
 
-# Block disk formatting
-if printf '%s\n' "$INPUT" | grep -qE 'mkfs\.|dd\s+if='; then
+# Block disk formatting and writes to block devices
+if printf '%s\n' "$INPUT" | grep -qE 'mkfs\.|dd\s+.*of=/dev/'; then
   printf 'GUARDRAIL BLOCKED: Disk formatting command detected\n' >&2
   exit 2
 fi
 
-# Block fork bombs
-if printf '%s\n' "$INPUT" | grep -qE ':\(\)\{|\.fork\s*bomb'; then
+# Block fork bombs (CRITICAL-3: space-tolerant regex)
+if printf '%s\n' "$INPUT" | grep -qE ':\(\)\s*\{|\.fork\s*bomb'; then
   printf 'GUARDRAIL BLOCKED: Fork bomb pattern detected\n' >&2
   exit 2
 fi
