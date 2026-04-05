@@ -1,5 +1,3 @@
-import { Bus } from "@/bus"
-import { Config } from "@/config/config"
 import { Log } from "@/util/log"
 import { MemoryStore } from "./store"
 import type { Memory } from "./types"
@@ -23,6 +21,18 @@ export namespace MemoryExtractor {
   const sessions = new Map<string, SessionState>()
 
   function getState(sessionID: string): SessionState {
+    // Evict oldest session if map exceeds 100 entries
+    if (sessions.size >= 100) {
+      let oldest: string | undefined
+      let oldestTime = Infinity
+      for (const [id, s] of sessions) {
+        if (s.lastFlush < oldestTime) {
+          oldestTime = s.lastFlush
+          oldest = id
+        }
+      }
+      if (oldest) sessions.delete(oldest)
+    }
     const existing = sessions.get(sessionID)
     if (existing) return existing
     const state: SessionState = {
@@ -103,7 +113,9 @@ export namespace MemoryExtractor {
   function maybeFlush(sessionID: string) {
     const state = getState(sessionID)
     if (Date.now() - state.lastFlush < FLUSH_INTERVAL) return
-    flush(sessionID)
+    flush(sessionID).catch((err) => {
+      log.warn("background flush failed", { error: err, sessionID })
+    })
   }
 
   export async function flush(sessionID: string) {
