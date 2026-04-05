@@ -61,6 +61,28 @@ import { TuiConfig } from "@/config/tui"
 import { createTuiApi, TuiPluginRuntime, type RouteMap } from "./plugin"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { Notification } from "@/notification"
+import { Config } from "@/config/config"
+import { runHooks, type HookEnv } from "@/hook"
+
+async function runNotificationHook(opts: {
+  title: string
+  body: string
+  sessionID: string
+  projectDir: string
+}): Promise<"pass" | "block"> {
+  const cfg = await Config.get().catch(() => undefined)
+  const hookEntries = cfg?.hooks?.Notification
+  if (!hookEntries || hookEntries.length === 0) return "pass"
+
+  const hookEnv: HookEnv = {
+    OPENCODE_HOOK_EVENT: "Notification",
+    OPENCODE_TOOL_INPUT: JSON.stringify({ title: opts.title, body: opts.body }),
+    OPENCODE_PROJECT_DIR: opts.projectDir,
+    OPENCODE_SESSION_ID: opts.sessionID,
+  }
+  const hookResult = await runHooks(hookEntries, "", hookEnv)
+  return hookResult.action
+}
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -841,7 +863,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     if (focused) return
 
     const sessionID = evt.properties.sessionID
-    Notification.show("opencode", `${sessionID} completed`).catch(() => {})
+    const title = "opencode"
+    const body = `${sessionID} completed`
+
+    if ((await runNotificationHook({ title, body, sessionID, projectDir: sdk.directory ?? "" })) === "block") return
+
+    Notification.show(title, body).catch(() => {})
   })
 
   sdk.event.on("session.error", (evt) => {
@@ -855,11 +882,22 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       duration: 5000,
     })
 
-    void Notification.terminalIsFocused().then((focused) => {
-      if (focused) return
-      if (tuiConfig.notifications === false) return
-      Notification.show("opencode", `Error: ${message}`)
-    })
+    void Notification.terminalIsFocused()
+      .then(async (focused) => {
+        if (focused) return
+        if (tuiConfig.notifications === false) return
+
+        const title = "opencode"
+        const body = `Error: ${message}`
+        // sessionID is optional on session.error (see Session.Event.Error schema);
+        // fall back to empty string when the server omits it.
+        const sessionID = evt.properties.sessionID ?? ""
+
+        if ((await runNotificationHook({ title, body, sessionID, projectDir: sdk.directory ?? "" })) === "block") return
+
+        Notification.show(title, body).catch(() => {})
+      })
+      .catch(() => {})
   })
 
   sdk.event.on("installation.update-available", async (evt) => {
