@@ -103,7 +103,7 @@ const TIPS = [
   "Create {highlight}.ts{/highlight} files in {highlight}.opencode/tools/{/highlight} to define new LLM tools",
   "Tool definitions can invoke scripts written in Python, Go, etc",
   "Add {highlight}.ts{/highlight} files to {highlight}.opencode/plugin/{/highlight} for event hooks",
-  "Use plugins to send OS notifications when sessions complete",
+  'Use built-in {highlight}"notifications": true{/highlight} in {highlight}tui.json{/highlight} for session-complete alerts',
   "Create a plugin to prevent OpenCode from reading sensitive files",
   "Use {highlight}opencode run{/highlight} for non-interactive scripting",
   "Use {highlight}opencode --continue{/highlight} to resume the last session",
