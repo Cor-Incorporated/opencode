@@ -437,7 +437,7 @@ export default async function guardrail(input: {
       if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
-          const err = `context budget exceeded after ${count} source reads; narrow scope or delegate before editing`
+          const err = `context budget exceeded after ${count} source reads; call the team tool to delegate this edit to an isolated worker, or narrow scope`
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }

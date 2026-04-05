@@ -5,18 +5,12 @@ permission:
   question: allow
   plan_enter: allow
   bash:
-    "*": ask
     "git checkout -- *": deny
     "git merge *": deny
     "git push --force*": deny
     "git push * --force*": deny
     "git reset --hard*": deny
     "gh pr merge *": deny
-    "rm -rf *": deny
-    "rm -r *": deny
-    "sudo *": deny
-    "curl * | sh*": deny
-    "wget * | sh*": deny
 ---
 
 Implement changes in bounded increments.
