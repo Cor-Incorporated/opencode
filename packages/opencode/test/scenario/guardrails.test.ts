@@ -373,6 +373,7 @@ test("guardrail profile enforces provider admission lanes", async () => {
 
         const evalModel = openrouter.models["openai/gpt-5.4-mini"]
 
+        // With evals set empty, openrouter is NOT evaluation-only, so implement can use it
         await expect(
           Plugin.trigger(
             "chat.params",
@@ -383,8 +384,9 @@ test("guardrail profile enforces provider admission lanes", async () => {
             },
             { temperature: undefined, topP: undefined, topK: undefined, options: {} },
           ),
-        ).rejects.toThrow("evaluation-only")
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
 
+        // With evals set empty, provider-eval is open to any provider
         await expect(
           Plugin.trigger(
             "chat.params",
@@ -395,8 +397,9 @@ test("guardrail profile enforces provider admission lanes", async () => {
             },
             { temperature: undefined, topP: undefined, topK: undefined, options: {} },
           ),
-        ).rejects.toThrow("reserved for evaluation-lane providers")
+        ).resolves.toEqual({ temperature: undefined, topP: undefined, topK: undefined, options: {} })
 
+        // Whitelist-based admission still blocks unadmitted models on openrouter
         await expect(
           Plugin.trigger(
             "chat.params",
@@ -773,6 +776,148 @@ test("guardrail profile plugin records lifecycle events and compaction context",
         expect(state.last_permission).toBe("bash")
         expect(compact.context.join("\n")).toContain("Guardrail mode: enforced.")
         expect(compact.context.join("\n")).toContain(".opencode/guardrails/state.json")
+      },
+    })
+  })
+})
+
+test("team plugin allows fd-only bash redirection while still blocking file redirects", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const text =
+          "Implement the following multi-file refactoring across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Extract shared types into a common module\n" +
+          "- 2. Update all imports across the three packages\n" +
+          "- 3. Add barrel exports for the new module\n" +
+          "- 4. Fix downstream consumers\n" +
+          "This is a large plan that touches multiple packages."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          {
+            sessionID: "session_team_bash",
+            agent: "implement",
+          },
+          {
+            message: {
+              id: "msg_team_bash",
+              sessionID: "session_team_bash",
+              role: "user",
+            },
+            parts,
+          },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_team_bash", callID: "call_team_fd" },
+            {
+              args: {
+                command: "gcloud secrets list --format=json 2>&1",
+              },
+            },
+          ),
+        ).resolves.toEqual({
+          args: {
+            command: "gcloud secrets list --format=json 2>&1",
+          },
+        })
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_team_bash", callID: "call_team_file" },
+            {
+              args: {
+                command: "echo test > output.txt",
+              },
+            },
+          ),
+        ).rejects.toThrow("Call the team tool before mutating the worktree")
+      },
+    })
+  })
+})
+
+test("team plugin skips parallel enforcement on HEAD-less repos", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: false,
+      init: async (dir) => {
+        const $ = Bun.$
+        await $`git init`.cwd(dir).quiet()
+        await $`git config core.fsmonitor false`.cwd(dir).quiet()
+        await $`git config user.email "test@opencode.test"`.cwd(dir).quiet()
+        await $`git config user.name "Test"`.cwd(dir).quiet()
+        // Intentionally NO initial commit — HEAD does not exist
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const bigRequest =
+          "Implement the following multi-file refactoring across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Extract shared types into a common module\n" +
+          "- 2. Update all imports across the three packages\n" +
+          "- 3. Add barrel exports for the new module\n" +
+          "- 4. Fix downstream consumers\n" +
+          "This is a large plan that touches multiple packages."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text: bigRequest },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          {
+            sessionID: "session_headless",
+            agent: "implement",
+          },
+          {
+            message: {
+              id: "msg_headless",
+              sessionID: "session_headless",
+              role: "user",
+            },
+            parts,
+          },
+        )
+
+        const injected = parts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Bootstrap mode"),
+        )
+        expect(injected).toBeDefined()
+        expect(injected!.text).toContain("Parallel implementation policy is suspended")
+
+        const parallelInjected = parts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+        )
+        expect(parallelInjected).toBeUndefined()
+
+        // Mutations should NOT be blocked — no need gate was set
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_headless", callID: "call_headless_edit" },
+            {
+              args: {
+                filePath: path.join(tmp.path, "src", "index.ts"),
+                oldString: "const a = 1",
+                newString: "const a = 2",
+              },
+            },
+          ),
+        ).resolves.toBeDefined()
       },
     })
   })

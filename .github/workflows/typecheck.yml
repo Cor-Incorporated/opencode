@@ -3,7 +3,7 @@ name: typecheck
 on:
   push:
     branches: [dev]
-  pull_request:
+  pull_request_target:
     branches: [dev]
   workflow_dispatch:
 
@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun

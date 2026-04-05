@@ -202,7 +202,7 @@ export default async function guardrail(input: {
   worktree: string
 }, opts?: Record<string, unknown>) {
   const mode = typeof opts?.mode === "string" ? opts.mode : "enforced"
-  const evals = new Set(["openrouter"])
+  const evals = new Set<string>([])
   const evalAgent = "provider-eval"
   const conf = true
   const denyFree = true
@@ -349,10 +349,10 @@ export default async function guardrail(input: {
     const agent = str(data.agent)
     if (!provider) return
 
-    if (evals.has(provider) && agent !== evalAgent) {
+    if (evals.size > 0 && evals.has(provider) && agent !== evalAgent) {
       return `${provider} is evaluation-only under confidential policy; use ${evalAgent}`
     }
-    if (agent === evalAgent && !evals.has(provider)) {
+    if (evals.size > 0 && agent === evalAgent && !evals.has(provider)) {
       return `${evalAgent} is reserved for evaluation-lane providers`
     }
 

@@ -25,11 +25,11 @@ import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionStatus } from "../../src/session/status"
 import { Snapshot } from "../../src/snapshot"
+import { Question } from "../../src/question"
+import { Todo } from "../../src/session/todo"
 import { ToolRegistry } from "../../src/tool/registry"
 import { Truncate } from "../../src/tool/truncate"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
-import { Question } from "../../src/question"
-import { Todo } from "../../src/session/todo"
 import { Instance } from "../../src/project/instance"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -113,7 +113,13 @@ function make() {
     AppFileSystem.defaultLayer,
     status,
   ).pipe(Layer.provideMerge(infra))
-  const reg = ToolRegistry.layer.pipe(Layer.provideMerge(deps))
+  const question = Question.layer.pipe(Layer.provideMerge(deps))
+  const todo = Todo.layer.pipe(Layer.provideMerge(deps))
+  const reg = ToolRegistry.layer.pipe(
+    Layer.provideMerge(todo),
+    Layer.provideMerge(question),
+    Layer.provideMerge(deps),
+  )
   const trunc = Truncate.layer.pipe(Layer.provideMerge(deps))
   const proc = SessionProcessor.layer.pipe(Layer.provideMerge(deps))
   const compact = SessionCompaction.layer.pipe(Layer.provideMerge(proc), Layer.provideMerge(deps))

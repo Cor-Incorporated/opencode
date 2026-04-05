@@ -10,4 +10,4 @@
 - Treat `.opencode/guardrails/` as plugin-owned runtime state, not a manual editing surface.
 - Use `implement` as the guarded default primary agent. Route review, ship, and handoff work through the packaged `/review`, `/ship`, and `/handoff` commands instead of freeform release flows.
 - Keep review paths read-only. If a workflow needs edits, return to `implement` or a project-local implementation agent instead of widening the review agent.
-- Keep provider admission explicit. Standard confidential-code work stays on the admitted `zai` and `openai` lane; OpenRouter-backed evaluation belongs on `provider-eval` or `/provider-eval` only.
+- All configured providers are available for standard work. The `provider-eval` agent and `/provider-eval` command remain available for dedicated evaluation workflows.
