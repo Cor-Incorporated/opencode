@@ -3,6 +3,7 @@ import path from "path"
 import fs from "fs/promises"
 import { Instance } from "../../src/project/instance"
 import { MemoryFile } from "../../src/memory/file"
+import { Memory } from "../../src/memory/types"
 import { tmpdir } from "../fixture/fixture"
 
 describe("memory.file", () => {
@@ -189,6 +190,54 @@ describe("memory.file", () => {
         await fs.mkdir(dir, { recursive: true })
         await Bun.write(path.join(dir, "bad.md"), "no frontmatter here")
         const read = await MemoryFile.readEntry("bad.md")
+        expect(read).toBeUndefined()
+      },
+    })
+  })
+
+  test.each(Memory.TYPES.map((t) => [t]))("readEntry parses valid type: %s", async (validType) => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const dir = MemoryFile.getMemoryDir()
+        await fs.mkdir(dir, { recursive: true })
+        const raw = `---\ntopic: test\ntype: ${validType}\n---\nsome content`
+        await Bun.write(path.join(dir, "valid-type.md"), raw)
+        const read = await MemoryFile.readEntry("valid-type.md")
+        expect(read).toBeDefined()
+        expect(read!.frontmatter.type).toBe(validType)
+        expect(read!.frontmatter.topic).toBe("test")
+        expect(read!.content).toBe("some content")
+      },
+    })
+  })
+
+  test("readEntry returns undefined for invalid type in frontmatter", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const dir = MemoryFile.getMemoryDir()
+        await fs.mkdir(dir, { recursive: true })
+        const raw = "---\ntopic: test\ntype: invalid-type\n---\nsome content"
+        await Bun.write(path.join(dir, "invalid-type.md"), raw)
+        const read = await MemoryFile.readEntry("invalid-type.md")
+        expect(read).toBeUndefined()
+      },
+    })
+  })
+
+  test("readEntry returns undefined for missing type in frontmatter", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const dir = MemoryFile.getMemoryDir()
+        await fs.mkdir(dir, { recursive: true })
+        const raw = "---\ntopic: test\n---\nsome content"
+        await Bun.write(path.join(dir, "no-type.md"), raw)
+        const read = await MemoryFile.readEntry("no-type.md")
         expect(read).toBeUndefined()
       },
     })

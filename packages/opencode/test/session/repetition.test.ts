@@ -1,29 +1,6 @@
 import { describe, test, expect } from "bun:test"
-
-// detectRepetition is a namespace-internal function in SessionProcessor.
-// We replicate the algorithm here to test it in isolation.
-// Constants match processor.ts: REPETITION_THRESHOLD=50, REPETITION_WINDOW=8000
-
-const REPETITION_THRESHOLD = 50
-const REPETITION_WINDOW = 8000
-
-function detectRepetition(text: string): boolean {
-  if (text.length < REPETITION_WINDOW) return false
-  const tail = text.slice(-REPETITION_WINDOW)
-  for (let len = 4; len <= 200; len++) {
-    const pattern = tail.slice(-len)
-    let count = 0
-    let pos = tail.length - len
-    while (pos >= 0) {
-      if (tail.slice(pos, pos + len) === pattern) {
-        count++
-        pos -= len
-      } else break
-    }
-    if (count >= REPETITION_THRESHOLD) return true
-  }
-  return false
-}
+import { detectRepetition } from "../../src/session/repetition"
+import { REPETITION_THRESHOLD, REPETITION_WINDOW } from "../../src/session/repetition"
 
 describe("session.detectRepetition", () => {
   test("no repetition returns false", () => {
