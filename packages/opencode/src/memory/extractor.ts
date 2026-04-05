@@ -1,5 +1,6 @@
 import { Log } from "@/util/log"
 import { MemoryStore } from "./store"
+import { MemoryFile } from "./file"
 import type { Memory } from "./types"
 import { Instance } from "@/project/instance"
 
@@ -118,19 +119,60 @@ export namespace MemoryExtractor {
     })
   }
 
+  function slugify(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 80)
+  }
+
   export async function flush(sessionID: string) {
     const state = sessions.get(sessionID)
     if (!state || state.pending.length === 0) return
     const batch = [...state.pending]
-    state.pending = []
     state.lastFlush = Date.now()
 
+    const failed: Memory.Create[] = []
     for (const entry of batch) {
-      await MemoryStore.runPromise((svc) => svc.create(entry)).catch((err) => {
+      try {
+        await MemoryStore.runPromise((svc) => svc.create(entry))
+        // Sync to filesystem so MemoryInjector picks up extracted entries
+        await MemoryFile.writeEntry({
+          filename: slugify(entry.topic) + ".md",
+          frontmatter: { topic: entry.topic, type: entry.type },
+          content: entry.content,
+        }).catch((err) => {
+          log.warn("failed to sync memory to file", { error: err, topic: entry.topic })
+        })
+      } catch (err) {
         log.warn("failed to flush memory entry", { error: err, topic: entry.topic })
+        failed.push(entry)
+      }
+    }
+    // Re-queue failed entries for retry; only successfully written entries are removed
+    state.pending = [...failed, ...state.pending.slice(batch.length)]
+
+    // Update MEMORY.md index with all current entries
+    if (batch.length > failed.length) {
+      await updateIndex().catch((err) => {
+        log.warn("failed to update memory index", { error: err })
       })
     }
-    log.info("flushed memory entries", { sessionID, count: batch.length })
+
+    log.info("flushed memory entries", { sessionID, count: batch.length - failed.length, failed: failed.length })
+  }
+
+  async function updateIndex() {
+    const entries = await MemoryFile.listEntries()
+    if (entries.length === 0) return
+    const lines = [
+      "# Memory Index",
+      "",
+      ...entries.map((e) => `- [${e.frontmatter.topic}](${e.filename}) — ${e.frontmatter.type}`),
+      "",
+    ]
+    await MemoryFile.writeIndex(lines.join("\n"))
   }
 
   export async function cleanup(sessionID: string) {

@@ -67,7 +67,14 @@ export namespace MemoryStore {
             .where(eq(MemoryTable.id, id))
             .run(),
         )
-        return toInfo(row)
+        const updated = yield* db((d) =>
+          d
+            .select()
+            .from(MemoryTable)
+            .where(eq(MemoryTable.id, id))
+            .get(),
+        )
+        return updated ? toInfo(updated) : toInfo(row)
       })
 
       const create = Effect.fn("MemoryStore.create")(function* (input: Memory.Create) {

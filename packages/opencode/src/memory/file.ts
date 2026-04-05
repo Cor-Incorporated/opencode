@@ -19,7 +19,7 @@ function indexPath() {
 function entryPath(filename: string) {
   const dir = memoryDir()
   const resolved = path.resolve(dir, filename)
-  if (!resolved.startsWith(dir + path.sep) && resolved !== dir)
+  if (!resolved.startsWith(dir + path.sep))
     throw new Error("path traversal detected")
   return resolved
 }

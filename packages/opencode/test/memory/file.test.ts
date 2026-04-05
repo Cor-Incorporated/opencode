@@ -96,6 +96,17 @@ describe("memory.file", () => {
     })
   })
 
+  test("empty filename is rejected", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        expect(() => MemoryFile.readEntry("")).toThrow("path traversal detected")
+        expect(() => MemoryFile.readEntry(".")).toThrow("path traversal detected")
+      },
+    })
+  })
+
   test("removeEntry deletes file", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({

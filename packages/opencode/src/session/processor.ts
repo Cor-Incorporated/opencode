@@ -113,10 +113,18 @@ export namespace SessionProcessor {
       const status = yield* SessionStatus.Service
 
       // Fire-and-forget memory extraction helper, gated by config
+      // Cache enabled/auto_extract flags to avoid per-event Config.get() overhead
+      let memoryExtractCached: boolean | undefined
+      async function shouldExtractMemory(): Promise<boolean> {
+        if (memoryExtractCached !== undefined) return memoryExtractCached
+        const cfg = await Config.get()
+        memoryExtractCached = cfg.memory?.enabled !== false && cfg.memory?.auto_extract !== false
+        return memoryExtractCached
+      }
       const memoryExtract = (fn: () => void | Promise<void>) => {
-        void Config.get()
-          .then((cfg) => {
-            if (cfg.memory?.auto_extract === false) return
+        void shouldExtractMemory()
+          .then((enabled) => {
+            if (!enabled) return
             return fn()
           })
           .catch((err) => log.warn("memory extractor error", { error: err }))
