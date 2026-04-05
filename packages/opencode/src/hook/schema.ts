@@ -4,7 +4,7 @@ export const HOOK_EVENTS = ["PreToolUse", "PostToolUse", "SessionStart", "Notifi
 export type HookEvent = (typeof HOOK_EVENTS)[number]
 
 export const HookEntry = z.object({
-  command: z.string().describe("Shell command or path to script"),
+  command: z.string().min(1).describe("Shell command or path to script"),
   matcher: z.string().optional().describe("Tool name glob pattern (PreToolUse/PostToolUse only)"),
   timeout: z.number().int().positive().optional().describe("Timeout in ms (default: 10000)"),
 })

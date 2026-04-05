@@ -48,7 +48,7 @@ import { Shell } from "@/shell/shell"
 import { AppFileSystem } from "@/filesystem"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
-import { runHooks, type HookEnv } from "../hook"
+import { runHooks, safeToolInput, type HookEnv } from "../hook"
 import { Config } from "../config/config"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Layer, Option, Scope, ServiceMap } from "effect"
@@ -467,7 +467,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   const hookEnv: HookEnv = {
                     OPENCODE_HOOK_EVENT: "PreToolUse",
                     OPENCODE_TOOL_NAME: item.id,
-                    OPENCODE_TOOL_INPUT: JSON.stringify(args),
+                    OPENCODE_TOOL_INPUT: safeToolInput(args),
                     OPENCODE_PROJECT_DIR: Instance.directory,
                     OPENCODE_SESSION_ID: ctx.sessionID,
                   }
@@ -504,12 +504,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   )
 
                   // PostToolUse hooks
-                  yield* Effect.promise(() =>
+                  const postHookResult = yield* Effect.promise(() =>
                     runHooks(hookCfg.hooks?.PostToolUse, item.id, {
                       ...hookEnv,
                       OPENCODE_HOOK_EVENT: "PostToolUse",
-                    }),
+                    }).catch((): { action: "pass" } => ({ action: "pass" })),
                   )
+
+                  if (postHookResult.action === "block") {
+                    return {
+                      title: "Blocked by post-execution hook",
+                      output: postHookResult.message ?? "Tool output suppressed by hook",
+                      metadata: {} as any,
+                    }
+                  }
 
                   return output
                 }),
@@ -535,7 +543,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 const mcpHookEnv: HookEnv = {
                   OPENCODE_HOOK_EVENT: "PreToolUse",
                   OPENCODE_TOOL_NAME: key,
-                  OPENCODE_TOOL_INPUT: JSON.stringify(args),
+                  OPENCODE_TOOL_INPUT: safeToolInput(args),
                   OPENCODE_PROJECT_DIR: Instance.directory,
                   OPENCODE_SESSION_ID: ctx.sessionID,
                 }
@@ -569,12 +577,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 )
 
                 // PostToolUse hooks
-                yield* Effect.promise(() =>
+                const mcpPostResult = yield* Effect.promise(() =>
                   runHooks(mcpHookCfg.hooks?.PostToolUse, key, {
                     ...mcpHookEnv,
                     OPENCODE_HOOK_EVENT: "PostToolUse",
-                  }),
+                  }).catch((): { action: "pass" } => ({ action: "pass" })),
                 )
+
+                if (mcpPostResult.action === "block") {
+                  return {
+                    content: [{ type: "text" as const, text: mcpPostResult.message ?? "Tool output suppressed by hook" }],
+                  }
+                }
 
                 const textParts: string[] = []
                 const attachments: Omit<MessageV2.FilePart, "id" | "sessionID" | "messageID">[] = []

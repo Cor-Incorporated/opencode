@@ -48,6 +48,11 @@ describe("hook.schema", () => {
       const result = HookEntrySchema.safeParse({ command: "echo", timeout: 1.5 })
       expect(result.success).toBe(false)
     })
+
+    test("rejects empty command string", () => {
+      const result = HookEntrySchema.safeParse({ command: "" })
+      expect(result.success).toBe(false)
+    })
   })
 
   describe("HookConfig", () => {
