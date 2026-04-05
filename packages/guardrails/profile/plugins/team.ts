@@ -137,7 +137,15 @@ function body(parts: Note[]) {
     .join("\n\n")
 }
 
+function scrub(cmd: string) {
+  return cmd
+    .replace(/(?:\d*>>?|\&>>?|\&>)\s*\/dev\/null\b/g, " ")
+    .replace(/\d*>\s*&\s*\d+\b/g, " ")
+    .replace(/\d*>\s*&-/g, " ")
+}
+
 function mut(cmd: string) {
+  const data = scrub(cmd)
   return [
     /\brm\b/i,
     /\bmv\b/i,
@@ -151,7 +159,7 @@ function mut(cmd: string) {
     /\bperl\s+-pi\b/i,
     />/,
     /\bgit\s+(apply|am|merge|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
-  ].some((item) => item.test(cmd))
+  ].some((item) => item.test(data))
 }
 
 function big(text: string) {

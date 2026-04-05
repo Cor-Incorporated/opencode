@@ -781,6 +781,73 @@ test("guardrail profile plugin records lifecycle events and compaction context",
   })
 })
 
+test("team plugin allows fd-only bash redirection while still blocking file redirects", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const text =
+          "Implement the following multi-file refactoring across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Extract shared types into a common module\n" +
+          "- 2. Update all imports across the three packages\n" +
+          "- 3. Add barrel exports for the new module\n" +
+          "- 4. Fix downstream consumers\n" +
+          "This is a large plan that touches multiple packages."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          {
+            sessionID: "session_team_bash",
+            agent: "implement",
+          },
+          {
+            message: {
+              id: "msg_team_bash",
+              sessionID: "session_team_bash",
+              role: "user",
+            },
+            parts,
+          },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_team_bash", callID: "call_team_fd" },
+            {
+              args: {
+                command: "gcloud secrets list --format=json 2>&1",
+              },
+            },
+          ),
+        ).resolves.toEqual({
+          args: {
+            command: "gcloud secrets list --format=json 2>&1",
+          },
+        })
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_team_bash", callID: "call_team_file" },
+            {
+              args: {
+                command: "echo test > output.txt",
+              },
+            },
+          ),
+        ).rejects.toThrow("Call the team tool before mutating the worktree")
+      },
+    })
+  })
+})
+
 test("team plugin skips parallel enforcement on HEAD-less repos", async () => {
   await withProfile(async () => {
     await using tmp = await tmpdir({
