@@ -1,3 +1,15 @@
+const THINK_TAG_PATTERN = /<(?:think|thinking)>([\s\S]*?)<\/(?:think|thinking)>\s*/g
+
+export function stripThinkTags(text: string): { reasoning: string; content: string } {
+  const segments: string[] = []
+  const stripped = text.replace(THINK_TAG_PATTERN, (_match, captured) => {
+    segments.push(captured.trim())
+    return ""
+  })
+  const content = stripped.replace(/<(?:think|thinking)>[\s\S]*/g, "").trimStart()
+  return { reasoning: segments.join("\n"), content }
+}
+
 export function formatDuration(secs: number) {
   if (secs <= 0) return ""
   if (secs < 60) return `${secs}s`

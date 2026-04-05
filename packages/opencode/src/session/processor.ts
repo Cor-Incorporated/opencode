@@ -21,7 +21,35 @@ import { Question } from "@/question"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
+  // 50+ consecutive repeats of a 4-200 char pattern in the last 8KB indicates a model generation loop
+  const REPETITION_THRESHOLD = 50
+  const REPETITION_WINDOW = 8000
   const log = Log.create({ service: "session.processor" })
+
+  class RepetitionError extends Error {
+    constructor(pattern: string) {
+      super(`Repetition loop detected: "${pattern.substring(0, 80)}..." repeated ${REPETITION_THRESHOLD}+ times. Aborting to prevent context exhaustion.`)
+      this.name = "RepetitionError"
+    }
+  }
+
+  function detectRepetition(text: string): boolean {
+    if (text.length < REPETITION_WINDOW) return false
+    const tail = text.slice(-REPETITION_WINDOW)
+    for (let len = 4; len <= 200; len++) {
+      const pattern = tail.slice(-len)
+      let count = 0
+      let pos = tail.length - len
+      while (pos >= 0) {
+        if (tail.slice(pos, pos + len) === pattern) {
+          count++
+          pos -= len
+        } else break
+      }
+      if (count >= REPETITION_THRESHOLD) return true
+    }
+    return false
+  }
 
   export type Result = "compact" | "stop" | "continue"
 
@@ -132,6 +160,9 @@ export namespace SessionProcessor {
               if (!(value.id in ctx.reasoningMap)) return
               ctx.reasoningMap[value.id].text += value.text
               if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
+              if (detectRepetition(ctx.reasoningMap[value.id].text)) {
+                yield* Effect.fail(new RepetitionError(ctx.reasoningMap[value.id].text.slice(-80)))
+              }
               yield* session.updatePartDelta({
                 sessionID: ctx.reasoningMap[value.id].sessionID,
                 messageID: ctx.reasoningMap[value.id].messageID,
@@ -328,6 +359,9 @@ export namespace SessionProcessor {
               if (!ctx.currentText) return
               ctx.currentText.text += value.text
               if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
+              if (detectRepetition(ctx.currentText.text)) {
+                yield* Effect.fail(new RepetitionError(ctx.currentText.text.slice(-80)))
+              }
               yield* session.updatePartDelta({
                 sessionID: ctx.currentText.sessionID,
                 messageID: ctx.currentText.messageID,
