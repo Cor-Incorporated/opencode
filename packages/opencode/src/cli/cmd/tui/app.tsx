@@ -61,6 +61,8 @@ import { TuiConfig } from "@/config/tui"
 import { createTuiApi, TuiPluginRuntime, type RouteMap } from "./plugin"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { Notification } from "@/notification"
+import { Config } from "@/config/config"
+import { runHooks, type HookEnv } from "@/hook"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -841,7 +843,23 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     if (focused) return
 
     const sessionID = evt.properties.sessionID
-    Notification.show("opencode", `${sessionID} completed`).catch(() => {})
+    const title = "opencode"
+    const body = `${sessionID} completed`
+
+    const cfg = await Config.get().catch(() => undefined)
+    const hookEntries = cfg?.hooks?.Notification
+    if (hookEntries && hookEntries.length > 0) {
+      const hookEnv: HookEnv = {
+        OPENCODE_HOOK_EVENT: "Notification",
+        OPENCODE_TOOL_INPUT: JSON.stringify({ title, body }),
+        OPENCODE_PROJECT_DIR: sdk.directory ?? "",
+        OPENCODE_SESSION_ID: sessionID,
+      }
+      const hookResult = await runHooks(hookEntries, "", hookEnv)
+      if (hookResult.action === "block") return
+    }
+
+    Notification.show(title, body).catch(() => {})
   })
 
   sdk.event.on("session.error", (evt) => {
@@ -855,10 +873,27 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       duration: 5000,
     })
 
-    void Notification.terminalIsFocused().then((focused) => {
+    void Notification.terminalIsFocused().then(async (focused) => {
       if (focused) return
       if (tuiConfig.notifications === false) return
-      Notification.show("opencode", `Error: ${message}`)
+
+      const title = "opencode"
+      const body = `Error: ${message}`
+
+      const cfg = await Config.get().catch(() => undefined)
+      const hookEntries = cfg?.hooks?.Notification
+      if (hookEntries && hookEntries.length > 0) {
+        const hookEnv: HookEnv = {
+          OPENCODE_HOOK_EVENT: "Notification",
+          OPENCODE_TOOL_INPUT: JSON.stringify({ title, body }),
+          OPENCODE_PROJECT_DIR: sdk.directory ?? "",
+          OPENCODE_SESSION_ID: "",
+        }
+        const hookResult = await runHooks(hookEntries, "", hookEnv)
+        if (hookResult.action === "block") return
+      }
+
+      Notification.show(title, body)
     })
   })
 
