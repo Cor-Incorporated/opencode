@@ -483,7 +483,7 @@ export namespace SessionProcessor {
         const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
           log.error("process", { error: e, stack: e instanceof Error ? e.stack : undefined })
           const error = parse(e)
-          if (MessageV2.ContextOverflowError.isInstance(error)) {
+          if (MessageV2.ContextOverflowError.isInstance(error) || e instanceof RepetitionError) {
             ctx.needsCompaction = true
             yield* bus.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
             return
