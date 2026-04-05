@@ -48,6 +48,8 @@ import { Shell } from "@/shell/shell"
 import { AppFileSystem } from "@/filesystem"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
+import { runHooks, type HookEnv } from "../hook"
+import { Config } from "../config/config"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Layer, Option, Scope, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
@@ -100,6 +102,7 @@ export namespace SessionPrompt {
       const filetime = yield* FileTime.Service
       const registry = yield* ToolRegistry.Service
       const truncate = yield* Truncate.Service
+      const config = yield* Config.Service
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const scope = yield* Scope.Scope
       const instruction = yield* Instruction.Service
@@ -458,6 +461,27 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               return Effect.runPromise(
                 Effect.gen(function* () {
                   const ctx = context(args, options)
+
+                  // Config hooks (shell scripts) — before plugin hooks
+                  const hookCfg = yield* config.get()
+                  const hookEnv: HookEnv = {
+                    OPENCODE_HOOK_EVENT: "PreToolUse",
+                    OPENCODE_TOOL_NAME: item.id,
+                    OPENCODE_TOOL_INPUT: JSON.stringify(args),
+                    OPENCODE_PROJECT_DIR: Instance.directory,
+                    OPENCODE_SESSION_ID: ctx.sessionID,
+                  }
+                  const hookResult = yield* Effect.promise(() =>
+                    runHooks(hookCfg.hooks?.PreToolUse, item.id, hookEnv),
+                  )
+                  if (hookResult.action === "block") {
+                    return {
+                      title: "Blocked by hook",
+                      output: hookResult.message ?? "Tool execution blocked by hook",
+                      metadata: {} as any,
+                    }
+                  }
+
                   yield* plugin.trigger(
                     "tool.execute.before",
                     { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
@@ -478,6 +502,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
                     output,
                   )
+
+                  // PostToolUse hooks
+                  yield* Effect.promise(() =>
+                    runHooks(hookCfg.hooks?.PostToolUse, item.id, {
+                      ...hookEnv,
+                      OPENCODE_HOOK_EVENT: "PostToolUse",
+                    }),
+                  )
+
                   return output
                 }),
               )
@@ -496,6 +529,30 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             Effect.runPromise(
               Effect.gen(function* () {
                 const ctx = context(args, opts)
+
+                // Config hooks (shell scripts) — before plugin hooks
+                const mcpHookCfg = yield* config.get()
+                const mcpHookEnv: HookEnv = {
+                  OPENCODE_HOOK_EVENT: "PreToolUse",
+                  OPENCODE_TOOL_NAME: key,
+                  OPENCODE_TOOL_INPUT: JSON.stringify(args),
+                  OPENCODE_PROJECT_DIR: Instance.directory,
+                  OPENCODE_SESSION_ID: ctx.sessionID,
+                }
+                const mcpHookResult = yield* Effect.promise(() =>
+                  runHooks(mcpHookCfg.hooks?.PreToolUse, key, mcpHookEnv),
+                )
+                if (mcpHookResult.action === "block") {
+                  return {
+                    content: [
+                      {
+                        type: "text" as const,
+                        text: mcpHookResult.message ?? "Tool execution blocked by hook",
+                      },
+                    ],
+                  }
+                }
+
                 yield* plugin.trigger(
                   "tool.execute.before",
                   { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
@@ -509,6 +566,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   "tool.execute.after",
                   { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
                   result,
+                )
+
+                // PostToolUse hooks
+                yield* Effect.promise(() =>
+                  runHooks(mcpHookCfg.hooks?.PostToolUse, key, {
+                    ...mcpHookEnv,
+                    OPENCODE_HOOK_EVENT: "PostToolUse",
+                  }),
                 )
 
                 const textParts: string[] = []
@@ -1330,6 +1395,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
           }
 
+          // SessionStart hooks
+          const startHookCfg = yield* config.get()
+          yield* Effect.promise(() =>
+            runHooks(startHookCfg.hooks?.SessionStart, "", {
+              OPENCODE_HOOK_EVENT: "SessionStart",
+              OPENCODE_PROJECT_DIR: Instance.directory,
+              OPENCODE_SESSION_ID: input.sessionID,
+            }),
+          )
+
           if (input.noReply === true) return message
           return yield* loop({ sessionID: input.sessionID })
         },
@@ -1744,6 +1819,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         Layer.provide(Agent.defaultLayer),
         Layer.provide(Bus.layer),
         Layer.provide(CrossSpawnSpawner.defaultLayer),
+        Layer.provide(Config.defaultLayer),
       ),
     ),
   )

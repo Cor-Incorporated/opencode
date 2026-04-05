@@ -999,6 +999,17 @@ export namespace Config {
       layout: Layout.optional().describe("@deprecated Always uses stretch layout."),
       permission: Permission.optional(),
       tools: z.record(z.string(), z.boolean()).optional(),
+      hooks: z
+        .object({
+          PreToolUse: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
+          PostToolUse: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
+          SessionStart: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
+          Notification: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
+        })
+        .strict()
+        .partial()
+        .optional()
+        .describe("Shell script hooks for lifecycle events"),
       enterprise: z
         .object({
           url: z.string().optional().describe("Enterprise URL"),
