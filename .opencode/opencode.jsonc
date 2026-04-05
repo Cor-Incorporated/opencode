@@ -118,6 +118,14 @@
     "external_directory": "ask",
   },
   "mcp": {},
+  "hooks": {
+    "PreToolUse": [
+      {
+        "command": ".opencode/hooks/guardrails.sh",
+        "matcher": "bash",
+      },
+    ],
+  },
   "tools": {
     "github-triage": false,
     "github-pr-search": false,
