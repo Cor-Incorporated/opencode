@@ -503,11 +503,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     output,
                   )
 
-                  // Inject PreToolUse hook context into output
-                  if (hookResult.message) {
-                    output.output = `<hook-context>\n${hookResult.message}\n</hook-context>\n\n${output.output}`
-                  }
-
                   // PostToolUse hooks
                   const postHookResult = yield* Effect.promise(() =>
                     runHooks(hookCfg.hooks?.PostToolUse, item.id, {
@@ -524,12 +519,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     }
                   }
 
-                  // Inject PostToolUse hook context into output
+                  // Inject hook context into output (immutable)
+                  let finalOutput = output.output
+                  if (hookResult.message) {
+                    finalOutput = `<hook-context>\n${hookResult.message}\n</hook-context>\n\n${finalOutput}`
+                  }
                   if (postHookResult.message) {
-                    output.output = `${output.output}\n\n<hook-context>\n${postHookResult.message}\n</hook-context>`
+                    finalOutput = `${finalOutput}\n\n<hook-context>\n${postHookResult.message}\n</hook-context>`
                   }
 
-                  return output
+                  return { ...output, output: finalOutput }
                 }),
               )
             },
