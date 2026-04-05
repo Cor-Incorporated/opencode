@@ -503,6 +503,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     output,
                   )
 
+                  // Inject PreToolUse hook context into output
+                  if (hookResult.message) {
+                    output.output = `<hook-context>\n${hookResult.message}\n</hook-context>\n\n${output.output}`
+                  }
+
                   // PostToolUse hooks
                   const postHookResult = yield* Effect.promise(() =>
                     runHooks(hookCfg.hooks?.PostToolUse, item.id, {
@@ -517,6 +522,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                       output: postHookResult.message ?? "Tool output suppressed by hook",
                       metadata: {} as any,
                     }
+                  }
+
+                  // Inject PostToolUse hook context into output
+                  if (postHookResult.message) {
+                    output.output = `${output.output}\n\n<hook-context>\n${postHookResult.message}\n</hook-context>`
                   }
 
                   return output
@@ -621,10 +631,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   ...(truncated.truncated && { outputPath: truncated.outputPath }),
                 }
 
+                // Inject hook context from PreToolUse and PostToolUse
+                let mcpOutput = truncated.content
+                if (mcpHookResult.message) {
+                  mcpOutput = `<hook-context>\n${mcpHookResult.message}\n</hook-context>\n\n${mcpOutput}`
+                }
+                if (mcpPostResult.message) {
+                  mcpOutput = `${mcpOutput}\n\n<hook-context>\n${mcpPostResult.message}\n</hook-context>`
+                }
+
                 return {
                   title: "",
                   metadata,
-                  output: truncated.content,
+                  output: mcpOutput,
                   attachments: attachments.map((attachment) => ({
                     ...attachment,
                     id: PartID.ascending(),
