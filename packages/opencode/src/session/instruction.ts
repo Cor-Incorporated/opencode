@@ -141,6 +141,35 @@ export namespace Instruction {
             }
           }
 
+          // Rules files from global and project directories
+          const globalRulesDir = path.join(Global.Path.home, ".opencode", "rules")
+
+          const globalRuleFiles = yield* fs
+            .glob("*.md", { cwd: globalRulesDir, absolute: true, include: "file" })
+            .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+
+          // Project rules only load when project config is not disabled (trust boundary)
+          const projectRuleFiles = Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+            ? []
+            : yield* fs
+                .glob("*.md", {
+                  cwd: path.join(Instance.directory, ".opencode", "rules"),
+                  absolute: true,
+                  include: "file",
+                })
+                .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+
+          // Project rules override global by filename
+          const projectFilenames = new Set(projectRuleFiles.map((p) => path.basename(p)))
+          for (const rule of globalRuleFiles) {
+            if (!projectFilenames.has(path.basename(rule))) {
+              paths.add(path.resolve(rule))
+            }
+          }
+          for (const rule of projectRuleFiles) {
+            paths.add(path.resolve(rule))
+          }
+
           if (config.instructions) {
             for (const raw of config.instructions) {
               if (raw.startsWith("https://") || raw.startsWith("http://")) continue
