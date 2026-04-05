@@ -28,6 +28,8 @@ import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "../../src/tool/registry"
 import { Truncate } from "../../src/tool/truncate"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
+import { Question } from "../../src/question"
+import { Todo } from "../../src/session/todo"
 import { Instance } from "../../src/project/instance"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -106,6 +108,8 @@ function make() {
     filetime,
     lsp,
     mcp,
+    Question.defaultLayer,
+    Todo.defaultLayer,
     AppFileSystem.defaultLayer,
     status,
   ).pipe(Layer.provideMerge(infra))

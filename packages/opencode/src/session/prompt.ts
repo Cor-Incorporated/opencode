@@ -4,6 +4,7 @@ import z from "zod"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Log } from "../util/log"
+import { stripThinkTags } from "../util/format"
 import { SessionRevert } from "./revert"
 import { Session } from "."
 import { Agent } from "../agent/agent"
@@ -16,6 +17,7 @@ import { Bus } from "../bus"
 import { ProviderTransform } from "../provider/transform"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
+import { MemoryInjector } from "@/memory/injector"
 import { Plugin } from "../plugin"
 import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
@@ -233,9 +235,8 @@ export namespace SessionPrompt {
           })
           return result.text
         })
-        const cleaned = text
-          .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
-          .split("\n")
+        const cleaned = stripThinkTags(text)
+          .content.split("\n")
           .map((line) => line.trim())
           .find((line) => line.length > 0)
         if (!cleaned) return
@@ -1498,13 +1499,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
                 yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-                const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+                const [skills, env, instructions, modelMsgs, memory] = yield* Effect.all([
                   Effect.promise(() => SystemPrompt.skills(agent)),
                   Effect.promise(() => SystemPrompt.environment(model)),
                   instruction.system().pipe(Effect.orDie),
                   Effect.promise(() => MessageV2.toModelMessages(msgs, model)),
+                  Effect.promise(() => MemoryInjector.load()),
                 ])
-                const system = [...env, ...(skills ? [skills] : []), ...instructions]
+                const system = [...env, ...(skills ? [skills] : []), ...instructions, ...(memory ? [memory] : [])]
                 const format = lastUser.format ?? { type: "text" as const }
                 if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
                 const result = yield* handle.process({

@@ -3,6 +3,7 @@ import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
+import { MemoryExtractor } from "@/memory/extractor"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
@@ -21,7 +22,35 @@ import { Question } from "@/question"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
+  // 50+ consecutive repeats of a 4-200 char pattern in the last 8KB indicates a model generation loop
+  const REPETITION_THRESHOLD = 50
+  const REPETITION_WINDOW = 8000
   const log = Log.create({ service: "session.processor" })
+
+  class RepetitionError extends Error {
+    constructor(pattern: string) {
+      super(`Repetition loop detected: "${pattern.substring(0, 80)}..." repeated ${REPETITION_THRESHOLD}+ times. Aborting to prevent context exhaustion.`)
+      this.name = "RepetitionError"
+    }
+  }
+
+  function detectRepetition(text: string): boolean {
+    if (text.length < REPETITION_WINDOW) return false
+    const tail = text.slice(-REPETITION_WINDOW)
+    for (let len = 4; len <= 200; len++) {
+      const pattern = tail.slice(-len)
+      let count = 0
+      let pos = tail.length - len
+      while (pos >= 0) {
+        if (tail.slice(pos, pos + len) === pattern) {
+          count++
+          pos -= len
+        } else break
+      }
+      if (count >= REPETITION_THRESHOLD) return true
+    }
+    return false
+  }
 
   export type Result = "compact" | "stop" | "continue"
 
@@ -83,6 +112,24 @@ export namespace SessionProcessor {
       const plugin = yield* Plugin.Service
       const status = yield* SessionStatus.Service
 
+      // Fire-and-forget memory extraction helper, gated by config
+      // Cache enabled/auto_extract flags to avoid per-event Config.get() overhead
+      let memoryExtractCached: boolean | undefined
+      async function shouldExtractMemory(): Promise<boolean> {
+        if (memoryExtractCached !== undefined) return memoryExtractCached
+        const cfg = await Config.get()
+        memoryExtractCached = cfg.memory?.enabled !== false && cfg.memory?.auto_extract !== false
+        return memoryExtractCached
+      }
+      const memoryExtract = (fn: () => void | Promise<void>) => {
+        void shouldExtractMemory()
+          .then((enabled) => {
+            if (!enabled) return
+            return fn()
+          })
+          .catch((err) => log.warn("memory extractor error", { error: err }))
+      }
+
       const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
         // Pre-capture snapshot before the LLM stream starts. The AI SDK
         // may execute tools internally before emitting start-step events,
@@ -132,6 +179,9 @@ export namespace SessionProcessor {
               if (!(value.id in ctx.reasoningMap)) return
               ctx.reasoningMap[value.id].text += value.text
               if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
+              if (detectRepetition(ctx.reasoningMap[value.id].text)) {
+                yield* Effect.fail(new RepetitionError(ctx.reasoningMap[value.id].text.slice(-80)))
+              }
               yield* session.updatePartDelta({
                 sessionID: ctx.reasoningMap[value.id].sessionID,
                 messageID: ctx.reasoningMap[value.id].messageID,
@@ -184,6 +234,11 @@ export namespace SessionProcessor {
                 metadata: value.providerMetadata,
               } satisfies MessageV2.ToolPart)
 
+              // Fire-and-forget: track bash commands for memory extraction
+              if (value.toolName === "bash" && value.input && typeof value.input === "object" && "command" in value.input) {
+                memoryExtract(() => MemoryExtractor.trackCommand(ctx.sessionID, String((value.input as Record<string, unknown>).command)))
+              }
+
               const parts = MessageV2.parts(ctx.assistantMessage.id)
               const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
 
@@ -227,6 +282,10 @@ export namespace SessionProcessor {
                   attachments: value.output.attachments,
                 },
               })
+              // Fire-and-forget: track successful tool results as potential fixes
+              if (value.output.output) {
+                memoryExtract(() => MemoryExtractor.trackFix(ctx.sessionID, String(value.output.output)))
+              }
               delete ctx.toolcalls[value.toolCallId]
               return
             }
@@ -246,6 +305,9 @@ export namespace SessionProcessor {
               if (value.error instanceof Permission.RejectedError || value.error instanceof Question.RejectedError) {
                 ctx.blocked = ctx.shouldBreak
               }
+              // Fire-and-forget: track tool errors for memory extraction
+              const errorMsg = value.error instanceof Error ? value.error.message : String(value.error)
+              memoryExtract(() => MemoryExtractor.trackError(ctx.sessionID, errorMsg))
               delete ctx.toolcalls[value.toolCallId]
               return
             }
@@ -328,6 +390,9 @@ export namespace SessionProcessor {
               if (!ctx.currentText) return
               ctx.currentText.text += value.text
               if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
+              if (detectRepetition(ctx.currentText.text)) {
+                yield* Effect.fail(new RepetitionError(ctx.currentText.text.slice(-80)))
+              }
               yield* session.updatePartDelta({
                 sessionID: ctx.currentText.sessionID,
                 messageID: ctx.currentText.messageID,
@@ -411,6 +476,8 @@ export namespace SessionProcessor {
           }
           ctx.assistantMessage.time.completed = Date.now()
           yield* session.updateMessage(ctx.assistantMessage)
+          // Fire-and-forget: flush and clean up memory extraction state
+          memoryExtract(() => MemoryExtractor.cleanup(ctx.sessionID))
         })
 
         const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {

@@ -1015,6 +1015,13 @@ export namespace Config {
             .describe("Token buffer for compaction. Leaves enough window to avoid overflow during compaction."),
         })
         .optional(),
+      memory: z
+        .object({
+          enabled: z.boolean().optional().describe("Enable or disable memory system"),
+          auto_extract: z.boolean().optional().describe("Enable automatic memory extraction from sessions"),
+          max_memory_lines: z.number().optional().describe("Maximum number of lines to load from MEMORY.md"),
+        })
+        .optional(),
       experimental: z
         .object({
           disable_paste_summary: z.boolean().optional(),
