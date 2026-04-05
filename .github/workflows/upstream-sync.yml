@@ -1,0 +1,57 @@
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Weekly on Monday 9am UTC
+  workflow_dispatch:       # Manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/anomalyco/opencode.git || true
+          git fetch upstream dev
+
+      - name: Merge upstream (exclude workflows)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Merge upstream/dev but don't commit yet
+          git merge upstream/dev --no-commit --no-ff || true
+
+          # Restore our fork's workflows (discard upstream workflow changes)
+          git checkout HEAD -- .github/workflows/ || true
+
+          # Check if there are actual changes to commit
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "No changes to sync"
+            exit 0
+          fi
+
+          git commit -m "chore: sync upstream changes (excluding workflows)"
+
+      - name: Create PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="chore/upstream-sync-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          git push origin "$BRANCH"
+          gh pr create \
+            --base dev \
+            --head "$BRANCH" \
+            --title "chore: sync upstream $(date +%Y-%m-%d)" \
+            --body "Automated upstream sync from anomalyco/opencode (workflows excluded)."
