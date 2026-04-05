@@ -90,7 +90,15 @@ export namespace MemoryStore {
       })
 
       const update = Effect.fn("MemoryStore.update")(function* (input: Memory.Update) {
-        const existing = yield* get(input.id)
+        // Use direct select to check existence without incrementing access_count
+        // (the public get() method has a side effect of incrementing access_count)
+        const existing = yield* db((d) =>
+          d
+            .select()
+            .from(MemoryTable)
+            .where(eq(MemoryTable.id, input.id))
+            .get(),
+        )
         if (!existing) return undefined
         const values: Record<string, unknown> = { time_updated: Date.now() }
         if (input.topic !== undefined) values.topic = input.topic
@@ -98,7 +106,15 @@ export namespace MemoryStore {
         if (input.content !== undefined) values.content = input.content
         yield* db((d) => d.update(MemoryTable).set(values).where(eq(MemoryTable.id, input.id)).run())
         log.info("memory updated", { id: input.id })
-        return yield* get(input.id)
+        // Return updated row without incrementing access_count
+        const updated = yield* db((d) =>
+          d
+            .select()
+            .from(MemoryTable)
+            .where(eq(MemoryTable.id, input.id))
+            .get(),
+        )
+        return updated ? toInfo(updated) : undefined
       })
 
       const remove = Effect.fn("MemoryStore.remove")(function* (id: string) {

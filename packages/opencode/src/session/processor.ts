@@ -3,6 +3,7 @@ import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
+import { MemoryExtractor } from "@/memory/extractor"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
@@ -111,6 +112,16 @@ export namespace SessionProcessor {
       const plugin = yield* Plugin.Service
       const status = yield* SessionStatus.Service
 
+      // Fire-and-forget memory extraction helper, gated by config
+      const memoryExtract = (fn: () => void | Promise<void>) => {
+        void Config.get()
+          .then((cfg) => {
+            if (cfg.memory?.auto_extract === false) return
+            return fn()
+          })
+          .catch((err) => log.warn("memory extractor error", { error: err }))
+      }
+
       const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
         // Pre-capture snapshot before the LLM stream starts. The AI SDK
         // may execute tools internally before emitting start-step events,
@@ -215,6 +226,11 @@ export namespace SessionProcessor {
                 metadata: value.providerMetadata,
               } satisfies MessageV2.ToolPart)
 
+              // Fire-and-forget: track bash commands for memory extraction
+              if (value.toolName === "bash" && value.input && typeof value.input === "object" && "command" in value.input) {
+                memoryExtract(() => MemoryExtractor.trackCommand(ctx.sessionID, String((value.input as Record<string, unknown>).command)))
+              }
+
               const parts = MessageV2.parts(ctx.assistantMessage.id)
               const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
 
@@ -258,6 +274,10 @@ export namespace SessionProcessor {
                   attachments: value.output.attachments,
                 },
               })
+              // Fire-and-forget: track successful tool results as potential fixes
+              if (value.output.output) {
+                memoryExtract(() => MemoryExtractor.trackFix(ctx.sessionID, String(value.output.output)))
+              }
               delete ctx.toolcalls[value.toolCallId]
               return
             }
@@ -277,6 +297,9 @@ export namespace SessionProcessor {
               if (value.error instanceof Permission.RejectedError || value.error instanceof Question.RejectedError) {
                 ctx.blocked = ctx.shouldBreak
               }
+              // Fire-and-forget: track tool errors for memory extraction
+              const errorMsg = value.error instanceof Error ? value.error.message : String(value.error)
+              memoryExtract(() => MemoryExtractor.trackError(ctx.sessionID, errorMsg))
               delete ctx.toolcalls[value.toolCallId]
               return
             }
@@ -445,6 +468,8 @@ export namespace SessionProcessor {
           }
           ctx.assistantMessage.time.completed = Date.now()
           yield* session.updateMessage(ctx.assistantMessage)
+          // Fire-and-forget: flush and clean up memory extraction state
+          memoryExtract(() => MemoryExtractor.cleanup(ctx.sessionID))
         })
 
         const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
