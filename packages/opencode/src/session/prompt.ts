@@ -126,7 +126,7 @@ export namespace SessionPrompt {
             yield* status.set(sessionID, { type: "idle" })
           }),
           onBusy: status.set(sessionID, { type: "busy" }),
-          onInterrupt: lastAssistant(sessionID),
+          onInterrupt: latestAssistant(sessionID),
           busy: () => {
             throw new Session.BusyError(sessionID)
           },
@@ -249,6 +249,17 @@ export namespace SessionPrompt {
             ),
           )
       })
+
+      const sanitize = (msgs: MessageV2.WithParts[]) => {
+        const drop = msgs.filter((msg) => msg.info.role === "assistant" && msg.info.summary !== true && !msg.info.finish)
+        if (drop.length === 0) return msgs
+        const ids = new Set(drop.map((msg) => msg.info.id))
+        log.warn("ignoring incomplete assistant messages", {
+          sessionID: drop[0]?.info.sessionID,
+          ids: [...ids],
+        })
+        return msgs.filter((msg) => !ids.has(msg.info.id))
+      }
 
       const insertReminders = Effect.fn("SessionPrompt.insertReminders")(function* (input: {
         messages: MessageV2.WithParts[]
@@ -1324,7 +1335,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         },
       )
 
-      const lastAssistant = (sessionID: SessionID) =>
+      const latestAssistant: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts> = (sessionID) =>
         Effect.promise(async () => {
           let latest: MessageV2.WithParts | undefined
           for await (const item of MessageV2.stream(sessionID)) {
@@ -1346,7 +1357,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             yield* status.set(sessionID, { type: "busy" })
             log.info("loop", { step, sessionID })
 
-            let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+            let msgs = sanitize(yield* MessageV2.filterCompactedEffect(sessionID))
 
             let lastUser: MessageV2.User | undefined
             let lastAssistant: MessageV2.Assistant | undefined
@@ -1378,7 +1389,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               lastUser.id < lastAssistant.id
             ) {
               log.info("exiting loop", { sessionID })
-              break
+              return lastAssistantMsg ?? (yield* latestAssistant(sessionID))
             }
 
             step++
@@ -1563,7 +1574,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           }
 
           yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-          return yield* lastAssistant(sessionID)
+          const msgs = sanitize(yield* MessageV2.filterCompactedEffect(sessionID))
+          return msgs.findLast((msg) => msg.info.role === "assistant") ?? (yield* latestAssistant(sessionID))
         },
       )
 

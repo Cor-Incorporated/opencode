@@ -284,6 +284,34 @@ const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { fi
   return { user: msg, assistant }
 })
 
+const broken = Effect.fn("test.broken")(function* (sessionID: SessionID, text: string, parentID?: MessageID) {
+  const session = yield* Session.Service
+  const id = parentID ?? (yield* user(sessionID, "hello")).id
+  const msg: MessageV2.Assistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    parentID: id,
+    sessionID,
+    mode: "build",
+    agent: "build",
+    cost: 0,
+    path: { cwd: "/tmp", root: "/tmp" },
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: ref.modelID,
+    providerID: ref.providerID,
+    time: { created: Date.now(), completed: Date.now() },
+  }
+  yield* session.updateMessage(msg)
+  yield* session.updatePart({
+    id: PartID.ascending(),
+    messageID: msg.id,
+    sessionID,
+    type: "text",
+    text,
+  })
+  return msg
+})
+
 const addSubtask = (sessionID: SessionID, messageID: MessageID, model = ref) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -319,6 +347,54 @@ it.live("loop exits immediately when last assistant has stop finish", () =>
       const result = yield* prompt.loop({ sessionID: chat.id })
       expect(result.info.role).toBe("assistant")
       if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+      expect(yield* llm.calls).toBe(0)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("loop ignores unfinished assistant pollution when building the next turn", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const msg = yield* user(chat.id, "check PR #412")
+      yield* broken(
+        chat.id,
+        "`apps/liff` `StatusPage` `LiffProvider` `Wave 1B` `apps/liff` `StatusPage` `LiffProvider`",
+        msg.id,
+      )
+      yield* llm.text("PR #412 is still open.")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "PR #412 is still open.")).toBe(true)
+
+      const [hit] = yield* llm.inputs
+      expect(JSON.stringify(hit)).not.toContain("apps/liff")
+      expect(JSON.stringify(hit)).not.toContain("LiffProvider")
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("loop returns the last finished assistant when a stale unfinished assistant trails it", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      yield* broken(chat.id, "stale broken thinking output", seeded.user.id)
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.role).toBe("assistant")
+      expect(result.info.id).toBe(seeded.assistant.id)
+      expect(result.parts.some((part) => part.type === "text" && part.text === "hi there")).toBe(true)
       expect(yield* llm.calls).toBe(0)
     }),
     { git: true, config: providerCfg },
