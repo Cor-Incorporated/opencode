@@ -5,6 +5,13 @@ import type { HookEntry } from "./schema"
 const log = Log.create({ service: "hook" })
 const DEFAULT_TIMEOUT = 10_000
 
+const MAX_HOOK_INPUT_ENV = 128 * 1024 // 128KB
+export function safeToolInput(args: unknown): string {
+  const raw = JSON.stringify(args)
+  if (raw.length <= MAX_HOOK_INPUT_ENV) return raw
+  return raw.slice(0, MAX_HOOK_INPUT_ENV) + "\n[truncated]"
+}
+
 export interface HookEnv {
   OPENCODE_HOOK_EVENT: string
   OPENCODE_TOOL_NAME?: string

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { runHook, runHooks, matchesTool, type HookEnv } from "../../src/hook"
+import { runHook, runHooks, matchesTool, safeToolInput, type HookEnv } from "../../src/hook"
 import type { HookEntry } from "../../src/hook"
 
 function makeEnv(overrides?: Partial<HookEnv>): HookEnv {
@@ -147,6 +147,29 @@ describe("hook.execute", () => {
       const result = await runHooks(entries, "any_tool", makeEnv())
       expect(result.action).toBe("pass")
       expect(result.message).toBe("global")
+    })
+  })
+
+  describe("safeToolInput", () => {
+    test("returns JSON for small input", () => {
+      const result = safeToolInput({ key: "value" })
+      expect(result).toBe('{"key":"value"}')
+    })
+
+    test("truncates input exceeding 128KB", () => {
+      const largeArgs = { data: "x".repeat(256 * 1024) }
+      const result = safeToolInput(largeArgs)
+      expect(result.length).toBeLessThanOrEqual(128 * 1024 + 12) // 128KB + "\n[truncated]"
+      expect(result).toEndWith("\n[truncated]")
+    })
+
+    test("does not truncate input exactly at 128KB", () => {
+      // Create input that serializes to exactly 128KB
+      const targetLen = 128 * 1024
+      const overhead = '{"d":""}'.length
+      const filler = "a".repeat(targetLen - overhead)
+      const result = safeToolInput({ d: filler })
+      expect(result).not.toContain("[truncated]")
     })
   })
 })

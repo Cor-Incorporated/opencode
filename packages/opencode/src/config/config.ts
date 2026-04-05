@@ -41,6 +41,7 @@ import { Duration, Effect, Layer, Option, ServiceMap } from "effect"
 import { Flock } from "@/util/flock"
 import { isPathPluginSpec, parsePluginSpecifier, resolvePathPluginTarget } from "@/plugin/shared"
 import { Npm } from "@/npm"
+import { HookConfig } from "../hook/schema"
 
 export namespace Config {
   const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
@@ -999,17 +1000,7 @@ export namespace Config {
       layout: Layout.optional().describe("@deprecated Always uses stretch layout."),
       permission: Permission.optional(),
       tools: z.record(z.string(), z.boolean()).optional(),
-      hooks: z
-        .object({
-          PreToolUse: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
-          PostToolUse: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
-          SessionStart: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
-          Notification: z.array(z.object({ command: z.string(), matcher: z.string().optional(), timeout: z.number().int().positive().optional() })),
-        })
-        .strict()
-        .partial()
-        .optional()
-        .describe("Shell script hooks for lifecycle events"),
+      hooks: HookConfig,
       enterprise: z
         .object({
           url: z.string().optional().describe("Enterprise URL"),
