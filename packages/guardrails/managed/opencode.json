@@ -104,9 +104,9 @@
     },
     "read": {
       "*": "allow",
-      "*.env.example": "allow",
       "*.env": "deny",
       "*.env.*": "deny",
+      "*.env.example": "allow",
       "*id_rsa*": "deny",
       "*id_ed25519*": "deny",
       "*.pem": "deny",
