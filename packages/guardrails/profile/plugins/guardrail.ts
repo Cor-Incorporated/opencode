@@ -150,6 +150,19 @@ function str(data: unknown) {
   return typeof data === "string" ? data : ""
 }
 
+async function git(dir: string, args: string[]) {
+  const proc = Bun.spawn(["git", "-C", dir, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  return { stdout, stderr }
+}
+
 function free(data: {
   id?: unknown
   providerID?: unknown
@@ -399,6 +412,8 @@ export default async function guardrail(input: {
           edits_since_review: 0,
           last_block: "",
           last_reason: "",
+          git_freshness_checked: false,
+          review_state: "",
         })
       }
       if (event.type === "permission.asked") {
@@ -413,6 +428,44 @@ export default async function guardrail(input: {
           last_compacted: event.properties?.sessionID,
           last_event: event.type,
         })
+      }
+    },
+    "chat.message": async (
+      item: {
+        sessionID: string
+      },
+      out: {
+        message: {
+          id: string
+          sessionID: string
+          role: string
+        }
+        parts: {
+          id: string
+          sessionID: string
+          messageID?: string
+          type: string
+          text: string
+        }[]
+      },
+    ) => {
+      if (out.message.role !== "user") return
+      const data = await stash(state)
+      if (flag(data.git_freshness_checked)) return
+      await mark({ git_freshness_checked: true })
+      try {
+        const fetchCheck = await git(input.worktree, ["fetch", "--dry-run"])
+        if (fetchCheck.stdout.trim() || fetchCheck.stderr.includes("From")) {
+          out.parts.push({
+            id: crypto.randomUUID(),
+            sessionID: out.message.sessionID,
+            messageID: out.message.id,
+            type: "text",
+            text: "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes.",
+          })
+        }
+      } catch {
+        // git fetch may fail in offline or no-remote scenarios; skip silently
       }
     },
     "tool.execute.before": async (
@@ -450,6 +503,13 @@ export default async function guardrail(input: {
           await mark({ last_block: "bash", last_command: cmd, last_reason: "shell access to protected files" })
           throw new Error(text("shell access to protected files"))
         }
+        if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
+          const data = await stash(state)
+          if (str(data.review_state) !== "done") {
+            await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
+            throw new Error(text("merge blocked: run /review before merging"))
+          }
+        }
         if (!bash(cmd)) return
         if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
@@ -458,7 +518,7 @@ export default async function guardrail(input: {
     },
     "tool.execute.after": async (
       item: { tool: string; args?: Record<string, unknown> },
-      _out: { title: string; output: string; metadata: Record<string, unknown> },
+      out: { title: string; output: string; metadata: Record<string, unknown> },
     ) => {
       const now = new Date().toISOString()
       const file = pick(item.args)
@@ -508,13 +568,23 @@ export default async function guardrail(input: {
       if ((item.tool === "edit" || item.tool === "write") && file) {
         const seen = list(data.edited_files)
         const next = seen.includes(rel(input.worktree, file)) ? seen : [...seen, rel(input.worktree, file)]
+        const nextEditCount = num(data.edit_count) + 1
         await mark({
           edited_files: next,
-          edit_count: num(data.edit_count) + 1,
+          edit_count: nextEditCount,
           edit_count_since_check: num(data.edit_count_since_check) + 1,
           edits_since_review: num(data.edits_since_review) + 1,
           last_edit: rel(input.worktree, file),
+          review_state: "",
         })
+
+        if (/\.(test|spec)\.(ts|tsx|js|jsx)$|^test_.*\.py$|_test\.go$/.test(rel(input.worktree, file))) {
+          out.output += "\n\n🧪 Test file modified. Verify this test actually FAILS without the fix (test falsifiability)."
+        }
+
+        if (code(file) && nextEditCount > 0 && nextEditCount % 3 === 0) {
+          out.output += "\n\n📝 Source code edited (3+ operations). Check if related documentation (README, AGENTS.md, ADRs) needs updating."
+        }
       }
 
       if (item.tool === "task") {
@@ -525,6 +595,7 @@ export default async function guardrail(input: {
             reviewed: true,
             review_at: now,
             review_agent: agent,
+            review_state: "done",
             edits_since_review: 0,
           })
         }
