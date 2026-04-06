@@ -165,6 +165,11 @@ function mut(cmd: string) {
 function big(text: string) {
   const data = text.trim()
   if (!data) return false
+  // Exempt read-only investigation requests that start with investigation verbs
+  // and do NOT contain write-intent keywords
+  const readOnly = /^\s*(investigate|diagnose|explain|analyze|check|status|report|describe|show|list|review|audit|inspect|確認|調査|分析|説明|レビュー)/i.test(data)
+    && !/(implement|create|rewrite|patch|refactor|fix|add|edit|write|modify|実装|改修|修正|追加)/i.test(data)
+  if (readOnly) return false
   const plan = (data.match(/^\s*([-*]|\d+\.)\s+/gm) ?? []).length
   const impl = /(implement|implementation|build|create|add|fix|refactor|rewrite|patch|parallel|subagent|team|background|worker|修正|実装|追加|改修|並列|サブエージェント|チーム)/i.test(
     data,
@@ -475,7 +480,7 @@ export default async function team(input: {
     },
     async execute(args, ctx) {
       defs(args.tasks)
-      if (args.tasks.length < 2) throw new Error("team requires at least two tasks")
+      if (args.tasks.length < 1) throw new Error("team requires at least one task")
       ctx.metadata({
         title: "team run",
         metadata: {
@@ -738,7 +743,7 @@ export default async function team(input: {
         messageID: out.message.id,
         type: "text",
         text:
-          "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least two worker tasks. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
+          "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least one worker task. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
       })
     },
     "tool.execute.before": async (
