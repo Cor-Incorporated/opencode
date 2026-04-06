@@ -6,8 +6,9 @@
 TOOL="$OPENCODE_TOOL_NAME"
 INPUT="$OPENCODE_TOOL_INPUT"
 
-# Only apply to write/edit tools
-case "$TOOL" in
+# Only apply to write/edit tools (case-insensitive)
+TOOL_LOWER=$(printf '%s' "$TOOL" | tr '[:upper:]' '[:lower:]')
+case "$TOOL_LOWER" in
   write|edit) ;;
   *) exit 0 ;;
 esac
