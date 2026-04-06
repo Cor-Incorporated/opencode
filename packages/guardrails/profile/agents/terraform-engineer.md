@@ -7,10 +7,16 @@ permission:
     "*.env*": deny
     "*credentials*": deny
     "*.tfvars": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   grep:
     "*": allow
     "*.env*": deny
     "*.tfvars": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   glob: allow
   edit:
     "*": allow
