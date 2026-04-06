@@ -9,7 +9,13 @@ permission:
     "*.pem": deny
     "*.key": deny
     "*secret*": deny
-  grep: allow
+  grep:
+    "*": allow
+    "*.env*": deny
+    "*credentials*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   glob: allow
   edit:
     "*": deny

@@ -20,8 +20,6 @@ permission:
     "rm -rf *": deny
     "rm -r *": deny
     "sudo *": deny
-    "curl * | sh*": deny
-    "wget * | sh*": deny
     "git log*": allow
     "git diff*": allow
     "git show*": allow
@@ -33,6 +31,8 @@ permission:
     "pwd": allow
     "which *": allow
     "curl *": ask
+    "curl * | sh*": deny
+    "wget * | sh*": deny
     "node *": allow
     "bun *": allow
 ---
