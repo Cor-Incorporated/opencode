@@ -1,5 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
   "default_agent": "implement",
   "enabled_providers": [
     "zai",
@@ -11,6 +12,12 @@
   "server": {
     "hostname": "127.0.0.1",
     "mdns": false
+  },
+  "formatter": {
+    "prettier": {
+      "command": ["npx", "prettier", "--write"],
+      "extensions": ["ts", "tsx", "js", "jsx", "json", "md", "css"]
+    }
   },
   "provider": {
     "zai": {
