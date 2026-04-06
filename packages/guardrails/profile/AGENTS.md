@@ -88,3 +88,8 @@
 | `cloud-architect` | Architecture design, Well-Architected reviews | Read-only cloud architecture analyst for system design, scalability, and compliance. |
 | `deployment-engineer` | CI/CD pipeline, container deployments | Write-capable deployment specialist for zero-downtime releases with Docker and Kubernetes read commands. |
 | `api-designer` | API design, OpenAPI specs | API design specialist for REST, GraphQL, and OpenAPI specification creation. Write-capable with ask-mode curl. |
+| `python-pro` | Python development tasks | Python specialist for modern 3.10+ patterns, async services, and data pipelines. Write-capable with Python toolchain commands. |
+| `swift-expert` | Swift/iOS/macOS development | Swift specialist for SwiftUI, async/await concurrency, and protocol-oriented design. Write-capable with Swift and Xcode CLI commands. |
+| `websocket-engineer` | Real-time communication tasks | WebSocket and Socket.IO specialist for bidirectional protocols, scaling, and reconnection patterns. Write-capable with Node/Bun runtime. |
+| `backend-developer` | Server-side application tasks | Backend specialist for APIs, microservices, auth, caching, and message queues. Write-capable with ask-mode curl. |
+| `sql-pro` | SQL and database schema tasks | SQL specialist for query optimization, schema design, migrations, and cross-platform SQL. Write-capable with no direct DB execution. |
