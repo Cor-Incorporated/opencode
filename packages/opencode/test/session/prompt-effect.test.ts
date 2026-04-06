@@ -858,6 +858,8 @@ it.live(
           .pipe(Effect.forkChild)
 
         yield* llm.wait(1)
+        // Allow the first prompt loop to settle into the held LLM call
+        yield* Effect.sleep(50)
 
         const id = MessageID.ascending()
         const b = yield* prompt
@@ -882,6 +884,8 @@ it.live(
         })
 
         gate.resolve()
+        // Allow fibers to process the gate resolution
+        yield* Effect.sleep(50)
 
         const [ea, eb] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
         expect(Exit.isSuccess(ea)).toBe(true)
