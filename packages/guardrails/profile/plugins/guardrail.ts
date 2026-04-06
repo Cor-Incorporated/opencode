@@ -455,7 +455,8 @@ export default async function guardrail(input: {
           review_state: "",
           // Delegation gates
           active_task_count: 0,
-          session_cost: 0,
+          last_task_start_at: 0,
+          llm_call_count: 0,
           consecutive_failures: 0,
           consecutive_fix_prs: 0,
           last_merge_at: "",
@@ -643,13 +644,21 @@ export default async function guardrail(input: {
       // Delegation: parallel execution gate for task tool
       if (item.tool === "task") {
         const data = await stash(state)
-        const activeTasks = num(data.active_task_count)
+        let activeTasks = num(data.active_task_count)
+        // Staleness recovery: if last task started >5min ago, reset counter
+        // This prevents permanent lockout when tasks crash without triggering after hook
+        const lastStart = num(data.last_task_start_at)
+        if (activeTasks > 0 && lastStart > 0 && (Date.now() - lastStart > 5 * 60 * 1000)) {
+          activeTasks = 0
+          await mark({ active_task_count: 0 })
+          await seen("delegation.stale_reset", { previous: num(data.active_task_count) })
+        }
         if (activeTasks >= maxParallelTasks) {
           const err = `parallel task limit reached (${activeTasks}/${maxParallelTasks}); wait for a running task to complete before delegating more`
           await mark({ last_block: "task", last_reason: err })
           throw new Error(text(err))
         }
-        await mark({ active_task_count: activeTasks + 1 })
+        await mark({ active_task_count: activeTasks + 1, last_task_start_at: Date.now() })
       }
       // Domain naming advisory for new file creation
       if (item.tool === "write" && file) {
@@ -795,15 +804,17 @@ export default async function guardrail(input: {
         }
       }
 
-      // Tool failure recovery: detect consecutive failures and suggest recovery
-      if (out.output && /error|failed|exception/i.test(out.output) && !/⚠️|advisory/i.test(out.output)) {
+      // Tool failure recovery: detect consecutive failures via metadata exit code
+      const exitCode = typeof out.metadata?.exitCode === "number" ? out.metadata.exitCode : undefined
+      const isBashFail = item.tool === "bash" && exitCode !== undefined && exitCode !== 0
+      const isToolError = out.title === "Error" || (typeof out.metadata?.error === "string" && out.metadata.error !== "")
+      if (isBashFail || isToolError) {
         const failures = num(data.consecutive_failures) + 1
         await mark({ consecutive_failures: failures, last_failure_tool: item.tool })
         if (failures >= 3) {
           out.output = (out.output || "") + "\n⚠️ " + failures + " consecutive tool failures detected. Consider: (1) checking error root cause, (2) trying alternate approach, (3) delegating to a specialist agent."
         }
       } else if (item.tool !== "read") {
-        // Reset failure counter on success (excluding reads)
         if (num(data.consecutive_failures) > 0) {
           await mark({ consecutive_failures: 0 })
         }
@@ -812,8 +823,6 @@ export default async function guardrail(input: {
       // Post-merge: track merge timestamp for soak time and suggest issue close
       if (item.tool === "bash" && /\bgh\s+pr\s+merge\b/i.test(str(item.args?.command))) {
         await mark({ last_merge_at: now })
-        const cmd = str(item.args?.command)
-        // Check for "Fixes #N" or "Closes #N" patterns in recent context
         if (/\b(fix(es)?|close[sd]?|resolve[sd]?)\s+#\d+/i.test(out.output)) {
           out.output = (out.output || "") + "\n📋 Detected issue reference in merge output. Verify referenced issues are closed."
         }
@@ -948,16 +957,10 @@ export default async function guardrail(input: {
         }
       }
 
-      // Cost tracking: accumulate per-session cost
+      // Cost tracking: count LLM invocations per session (actual cost requires post-call data)
       const data = await stash(state)
-      const sessionCost = num(data.session_cost)
-      const modelCost = (item.model.cost?.input ?? 0) + (item.model.cost?.output ?? 0)
-      if (modelCost > 0) {
-        await mark({ session_cost: sessionCost + modelCost })
-      }
-      if (sessionCost > maxSessionCost) {
-        await seen("delegation.cost_warning", { session_cost: sessionCost, max: maxSessionCost })
-      }
+      const llmCalls = num(data.llm_call_count) + 1
+      await mark({ llm_call_count: llmCalls })
     },
     "experimental.session.compacting": async (
       _item: { sessionID: string },
@@ -975,7 +978,7 @@ export default async function guardrail(input: {
           `Fact-check state: ${factLine(data)}.`,
           `Review state: ${reviewLine(data)}.`,
           `Active tasks: ${num(data.active_task_count)}.`,
-          `Session cost: $${num(data.session_cost).toFixed(4)}.`,
+          `LLM calls: ${num(data.llm_call_count)}.`,
           `Consecutive failures: ${num(data.consecutive_failures)}.`,
         ].join(" "),
       )

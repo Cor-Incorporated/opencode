@@ -950,7 +950,7 @@ test("guardrail delegation gates and quality hooks fire correctly", async () => 
         // 1. Verify delegation state fields are initialized
         let state = await Bun.file(files.state).json()
         expect(state.active_task_count).toBe(0)
-        expect(state.session_cost).toBe(0)
+        expect(state.llm_call_count).toBe(0)
         expect(state.consecutive_failures).toBe(0)
         expect(state.consecutive_fix_prs).toBe(0)
         expect(state.issue_verification_done).toBe(false)
@@ -1020,12 +1020,12 @@ test("guardrail delegation gates and quality hooks fire correctly", async () => 
         )
         expect(endpointOut.output).toContain("Endpoint modification detected")
 
-        // 8. Tool failure recovery: consecutive failures
+        // 8. Tool failure recovery: consecutive failures (uses exit code, not regex)
         for (let i = 0; i < 3; i++) {
           await Plugin.trigger(
             "tool.execute.after",
             { tool: "bash", sessionID: "session_delegation_test", callID: `call_fail_${i}`, args: { command: "npm build" } },
-            { title: "bash", output: "Error: build failed with exception", metadata: {} },
+            { title: "bash", output: "build output", metadata: { exitCode: 1 } },
           )
         }
         state = await Bun.file(files.state).json()
@@ -1039,7 +1039,7 @@ test("guardrail delegation gates and quality hooks fire correctly", async () => 
         )
         const ctx = compact.context.join("\n")
         expect(ctx).toContain("Active tasks:")
-        expect(ctx).toContain("Session cost:")
+        expect(ctx).toContain("LLM calls:")
         expect(ctx).toContain("Consecutive failures: 3")
       },
     })
