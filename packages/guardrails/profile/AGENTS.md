@@ -11,3 +11,34 @@
 - Use `implement` as the guarded default primary agent. Route review, ship, and handoff work through the packaged `/review`, `/ship`, and `/handoff` commands instead of freeform release flows.
 - Keep review paths read-only. If a workflow needs edits, return to `implement` or a project-local implementation agent instead of widening the review agent.
 - All configured providers are available for standard work. The `provider-eval` agent and `/provider-eval` command remain available for dedicated evaluation workflows.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/review` | Run a read-only code review on the current diff or PR. |
+| `/ship` | Merge-ready workflow: CI check, review gate, and push. |
+| `/handoff` | Generate a handoff document for cross-session continuity. |
+| `/plan` | Analyze requirements, assess risks, and produce a phased implementation plan. |
+| `/investigate` | Systematic debugging with root cause analysis — spawns an exploration subagent. |
+| `/test` | Run the TDD workflow: RED, GREEN, IMPROVE, then verify coverage. |
+| `/delegate` | Route work to parallel subagents or Codex CLI based on task shape. |
+| `/provider-eval` | Dedicated evaluation workflow for comparing configured providers. |
+
+## Agents
+
+### Primary agents
+
+| Agent | Description |
+|-------|-------------|
+| `implement` | Default guarded agent for all implementation work. Edits, tests, and commits code within permission boundaries. |
+| `provider-eval` | Evaluation-only agent for benchmarking and comparing LLM providers. |
+
+### Subagents
+
+| Agent | Trigger | Description |
+|-------|---------|-------------|
+| `planner` | `/plan`, complex feature requests | Read-only planning agent. Produces phased plans with risk assessment without modifying code. |
+| `investigate` | `/investigate`, debugging tasks | Deep exploration subagent. Reads code, traces data flow, and identifies root causes without edits. |
+| `security` | `/review` (security scope), OWASP checks | Security-focused review subagent. Scans for OWASP Top 10 vulnerabilities, credential leaks, and injection risks. |
+| `code-reviewer` | `/review`, PR review pipeline | Read-only review agent. Analyzes diffs for quality, correctness, and style issues. |
