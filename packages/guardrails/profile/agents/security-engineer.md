@@ -4,6 +4,13 @@ mode: subagent
 permission:
   read:
     "*": allow
+    "*.env*": deny
+    "*credentials*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
+  grep: allow
+  glob: allow
   edit:
     "*": deny
   write:
@@ -15,8 +22,6 @@ permission:
     "git show*": allow
     "git blame*": allow
     "git status*": allow
-    "grep *": allow
-    "find *": allow
     "ls *": allow
     "wc *": allow
     "pwd": allow

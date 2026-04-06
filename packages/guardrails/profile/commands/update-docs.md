@@ -1,7 +1,6 @@
 ---
 description: Update documentation to match current code state.
-agent: review
-subtask: true
+agent: implement
 ---
 
 Review and update documentation affected by recent code changes.

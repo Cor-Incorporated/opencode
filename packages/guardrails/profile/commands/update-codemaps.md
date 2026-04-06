@@ -1,7 +1,6 @@
 ---
 description: Regenerate code maps and architecture documentation.
-agent: review
-subtask: true
+agent: implement
 ---
 
 Update code maps to reflect the current codebase structure.

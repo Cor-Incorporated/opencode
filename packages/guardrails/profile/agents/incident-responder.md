@@ -4,22 +4,35 @@ mode: subagent
 permission:
   read:
     "*": allow
+    "*.env*": deny
+    "*credentials*": deny
   edit:
     "*": allow
   write:
     "*": allow
   bash:
     "*": deny
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
     "git log*": allow
     "git diff*": allow
     "git show*": allow
     "git blame*": allow
     "git status*": allow
-    "git stash*": allow
+    "git stash list": allow
+    "git stash show*": allow
     "ls *": allow
     "pwd": allow
     "which *": allow
-    "curl *": allow
+    "curl *": ask
     "node *": allow
     "bun *": allow
 ---
