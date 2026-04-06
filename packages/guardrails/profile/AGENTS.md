@@ -39,7 +39,7 @@
 
 ## Git Workflow
 
-- Protected branches: develop, main, master — no direct push, PR only
+- Protected branches: dev, develop, main, master — no direct push, PR only
 - Branch naming: `feat/<desc>`, `fix/<desc>`, `refactor/<desc>`, `chore/<desc>`
 - Commits: `<type>: <description>` — types: feat/fix/refactor/docs/test/chore/perf/ci/release
 - PR granularity: 1 PR = 1 intent, branch type matches PR title type, feat PR includes tests
@@ -49,10 +49,9 @@
 ## Delegation
 
 - Dialog, judgment, design → main agent
-- 2+ independent tasks → team tool (TeamCreate)
-- Review → code-reviewer agent + optional Codex CLI
-- Parallel limits: subagents 5-7, Bash 3-4, total ≤ 7
-- See `docs/adr/004-codex-delegation-model.md` for full routing rules
+- 1+ independent tasks → `team` tool via `/delegate` (1-5 tasks, supports single-task isolation)
+- Review → `/review` command (stays read-only; uses `code-reviewer` subagent internally)
+- Parallel limits: subagents 1-5, Bash 3-4, total ≤ 7
 
 ## Commands
 
