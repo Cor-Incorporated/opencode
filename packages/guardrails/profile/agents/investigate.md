@@ -3,7 +3,6 @@ description: Deep codebase investigation. Read-only, no structured output requir
 mode: subagent
 permission:
   "*": deny
-  read: allow
   grep: allow
   glob: allow
   list: allow

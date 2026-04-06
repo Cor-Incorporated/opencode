@@ -2,15 +2,10 @@
 description: Bounded planning agent. Read-only exploration with plan file output.
 mode: primary
 permission:
-  "*": deny
   plan_enter: allow
-  read: allow
-  grep: allow
-  glob: allow
-  list: allow
-  lsp: allow
+  plan_exit: allow
+  question: allow
   bash:
-    "*": deny
     "git log *": allow
     "git diff *": allow
     "git show *": allow
@@ -19,6 +14,11 @@ permission:
     "ls *": allow
     "pwd": allow
     "which *": allow
+    "*": deny
+  edit:
+    "*": deny
+  write:
+    "*": deny
 ---
 
 You are a planning agent. Your job is to explore the codebase, understand the request, and produce an implementation plan.

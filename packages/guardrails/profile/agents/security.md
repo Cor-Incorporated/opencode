@@ -3,7 +3,6 @@ description: Security review specialist. OWASP Top 10, secrets detection, auth a
 mode: subagent
 permission:
   "*": deny
-  read: allow
   grep: allow
   glob: allow
   list: allow
