@@ -2,6 +2,8 @@
 description: Deep codebase investigation. Read-only, no structured output requirement.
 mode: subagent
 permission:
+  read:
+    "*": allow
   edit:
     "*": deny
   write:
