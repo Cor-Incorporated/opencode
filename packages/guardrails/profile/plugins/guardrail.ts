@@ -706,7 +706,7 @@ export default async function guardrail(input: {
           await mark({ last_block: "task", last_reason: err, active_tasks: activeTasks })
           throw new Error(text(err))
         }
-        const callID = str((item.args as Record<string, unknown>)?.callID) || `task_${Date.now()}`
+        const callID = str((item as Record<string, unknown>).callID) || str((item.args as Record<string, unknown>)?.callID) || `task_${Date.now()}`
         activeTasks[callID] = Date.now()
         await mark({ active_tasks: activeTasks, active_task_count: Object.keys(activeTasks).length })
       }
@@ -840,7 +840,7 @@ export default async function guardrail(input: {
         }
         // Delegation: remove completed task from active tasks map
         const activeTasks = json(data.active_tasks)
-        const callID = str(item.args?.callID) || ""
+        const callID = str((item as Record<string, unknown>).callID) || str(item.args?.callID) || ""
         if (callID && activeTasks[callID]) {
           delete activeTasks[callID]
           await mark({ active_tasks: activeTasks, active_task_count: Object.keys(activeTasks).length })
