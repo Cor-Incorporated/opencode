@@ -835,7 +835,10 @@ it.live(
   3_000,
 )
 
-it.live(
+// Skip on 2vCPU CI runners — requires 4vCPU dedicated runners (blacksmith) for reliable fiber scheduling.
+// See Issue #129: https://github.com/Cor-Incorporated/opencode/issues/129
+const hasDedicatedRunner = !process.env.CI || process.env.BLACKSMITH === "1"
+;(hasDedicatedRunner ? it.live : it.live.skip)(
   "prompt submitted during an active run is included in the next LLM input",
   () =>
     provideTmpdirServer(
