@@ -510,6 +510,29 @@ export default async function guardrail(input: {
             throw new Error(text("merge blocked: run /review before merging"))
           }
         }
+        // Direct push to protected branches
+        const protectedBranch = /^(main|master|develop|dev)$/
+        if (/\bgit\s+push\b/i.test(cmd)) {
+          // Check explicit branch target
+          const explicitMatch = cmd.match(/\bgit\s+push\s+\S+\s+(?:HEAD:)?(\S+)/i)
+          if (explicitMatch && protectedBranch.test(explicitMatch[1])) {
+            throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
+          }
+          // Check refspec form HEAD:branch
+          const refspecMatch = cmd.match(/HEAD:(main|master|develop|dev)(?:\s|$)/i)
+          if (refspecMatch) {
+            throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
+          }
+          // Plain `git push` with no branch — check current branch
+          if (!/\bgit\s+push\s+\S+\s+\S+/i.test(cmd)) {
+            try {
+              const result = await git(input.worktree, ["branch", "--show-current"])
+              if (result.stdout && protectedBranch.test(result.stdout.trim())) {
+                throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
+              }
+            } catch (e) { if (String(e).includes("blocked")) throw e }
+          }
+        }
         if (!bash(cmd)) return
         if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
@@ -585,6 +608,15 @@ export default async function guardrail(input: {
         if (code(file) && nextEditCount > 0 && nextEditCount % 3 === 0) {
           out.output += "\n\n📝 Source code edited (3+ operations). Check if related documentation (README, AGENTS.md, ADRs) needs updating."
         }
+        // Auto-format reminder after 3+ source edits
+        if (nextEditCount >= 3 && nextEditCount % 3 === 0) {
+          out.output = (out.output || "") + "\n🎨 " + nextEditCount + " source edits — consider running formatter (`prettier --write`, `biome format`, `go fmt`)."
+        }
+      }
+
+      // CI status advisory after push/PR create
+      if (item.tool === "bash" && /\b(git\s+push|gh\s+pr\s+create)\b/i.test(str(item.args?.command))) {
+        out.output = (out.output || "") + "\n⚠️ Remember to verify CI status: `gh pr checks`"
       }
 
       if (item.tool === "task") {
