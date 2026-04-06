@@ -60,7 +60,7 @@ Examples:
 
     const session = await opencode.client.session.create()
     if (!session.data) {
-      console.log("No session available — skipping duplicate check")
+      process.stderr.write("No session available — skipping duplicate check\n")
       return
     }
     const result = await opencode.client.session
