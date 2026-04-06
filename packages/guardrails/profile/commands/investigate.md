@@ -1,6 +1,6 @@
 ---
 description: Read-only codebase investigation without editing files.
-agent: review
+agent: investigate
 subtask: true
 ---
 

@@ -2,6 +2,7 @@
 description: Bounded planning agent. Read-only exploration with plan file output.
 mode: primary
 permission:
+  "*": deny
   plan_enter: allow
   read: allow
   grep: allow

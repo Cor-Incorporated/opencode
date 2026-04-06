@@ -1,6 +1,6 @@
 ---
 description: Enter bounded planning mode with guardrail state awareness.
-agent: implement
+agent: plan
 ---
 
 Plan the implementation before writing code.
