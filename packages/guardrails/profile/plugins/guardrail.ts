@@ -602,12 +602,13 @@ export default async function guardrail(input: {
               // EXEMPT: CI green only (already checked by CI hard block above)
               await seen("pre_merge.tier", { branch, tier, result: "pass" })
             } else if (tier === "LIGHT") {
-              // LIGHT: 3-pass OR (code-reviewer done OR C/H=0 OR manual verified)
+              // LIGHT: 2-pass OR (code-reviewer done OR review checks with C/H=0)
               const codeReviewDone = str(d.review_state) === "done"
-              const noSevere = num(d.review_critical_count) === 0 && num(d.review_high_count) === 0 && flag(d.review_checks_at ? true : false)
+              const checksRan = Boolean(str(d.review_checks_at))
+              const noSevere = checksRan && num(d.review_critical_count) === 0 && num(d.review_high_count) === 0
               if (!codeReviewDone && !noSevere) {
                 await mark({ last_block: "bash", last_command: cmd, last_reason: "LIGHT tier: review or C/H=0 required" })
-                throw new Error(text("merge blocked (LIGHT tier): run code-reviewer agent OR ensure CRITICAL=0 HIGH=0"))
+                throw new Error(text("merge blocked (LIGHT tier): run code-reviewer agent OR run `gh pr checks` with CRITICAL=0 HIGH=0"))
               }
             } else {
               // FULL: code-reviewer AND review state done
@@ -820,10 +821,11 @@ export default async function guardrail(input: {
               }
             } catch (e) { if (String(e).includes("blocked")) throw e }
           }
-          // Block: missing issue reference (Closes/Fixes/Resolves #XX)
-          if (!/\b(closes?|fixes?|resolves?)\s*#\d+/i.test(cmd)) {
-            await mark({ last_block: "bash", last_command: cmd, last_reason: "PR missing issue reference" })
-            throw new Error(text("PR must reference an issue: include 'Closes #XX' in the body for auto-close on merge"))
+          // Advisory: missing issue reference (Closes/Fixes/Resolves #XX)
+          // Note: cmd may not contain --body content (editor-based flow), so advisory not hard block
+          if (!/\b(closes?|fixes?|resolves?)\s*#\d+/i.test(cmd) && !/#\d+/i.test(cmd)) {
+            await mark({ pr_guard_issue_ref_warning: true })
+            await seen("pr_guard.missing_issue_ref", { command: cmd.slice(0, 200) })
           }
           // Advisory: preflight checks
           const data = await stash(state)
@@ -1276,13 +1278,13 @@ export default async function guardrail(input: {
         const stateContent = await Bun.file(state).text().catch(() => "")
         if (stateContent) {
           const stateData = JSON.parse(stateContent) as Record<string, unknown>
-          if (!stateData || typeof stateData !== "object") {
-            await seen("state_integrity.corrupted", { reason: "non-object state" })
-            await mark({ last_event: "state_integrity_repair", repaired_at: now })
+          if (!stateData || typeof stateData !== "object" || Array.isArray(stateData)) {
+            await seen("state_integrity.corrupted", { reason: Array.isArray(stateData) ? "array state" : "non-object state" })
+            await save(state, { mode, repaired_at: now, repair_reason: "corrupted state repaired" })
           } else {
-            // Compute SHA-256 of current state (excluding the sha field itself)
-            const { state_sha256: _prev, ...rest } = stateData
-            const contentForHash = JSON.stringify(rest, null, 2)
+            // Compute SHA-256 of current state (excluding volatile fields)
+            const { state_sha256: _prev, updated_at: _ua, ...rest } = stateData
+            const contentForHash = JSON.stringify(rest)
             const hasher = new Bun.CryptoHasher("sha256")
             hasher.update(contentForHash)
             const currentSha = hasher.digest("hex")
@@ -1291,8 +1293,9 @@ export default async function guardrail(input: {
             if (prevSha && prevSha !== currentSha) {
               await seen("state_integrity.toctou_detected", { expected: prevSha, actual: currentSha })
             }
-            // Update SHA after every hook cycle
-            await save(state, { ...stateData, state_sha256: currentSha, updated_at: now })
+            // Write SHA and timestamp atomically
+            const finalState = { ...stateData, state_sha256: currentSha, updated_at: now }
+            await save(state, finalState)
           }
         }
       } catch {
