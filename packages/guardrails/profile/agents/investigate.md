@@ -4,6 +4,19 @@ mode: subagent
 permission:
   read:
     "*": allow
+    "*.env": deny
+    "*.env.*": deny
+    "*id_rsa*": deny
+    "*id_ed25519*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*.p12": deny
+    "*.pfx": deny
+    "*.cer": deny
+    "*.crt": deny
+    "*.der": deny
+    "*.kdbx": deny
+    "*credentials*": deny
   edit:
     "*": deny
   write:
