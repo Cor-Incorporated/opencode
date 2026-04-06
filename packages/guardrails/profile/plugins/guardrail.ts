@@ -225,6 +225,45 @@ export default async function guardrail(input: {
   const state = path.join(root, "state.json")
   const allow: Record<string, Set<string>> = {}
 
+  // --- Delegation gate config ---
+  const maxParallelTasks = 5
+  const maxSessionCost = 10.0 // USD
+  const agentModelTier: Record<string, "high" | "standard" | "low"> = {
+    implement: "high",
+    security: "high",
+    "security-engineer": "high",
+    "security-reviewer": "high",
+    review: "standard",
+    "code-reviewer": "standard",
+    explore: "low",
+    planner: "standard",
+    architect: "high",
+    "build-error-resolver": "standard",
+    "tdd-guide": "standard",
+    investigate: "low",
+    "provider-eval": "low",
+    "doc-updater": "low",
+    "technical-writer": "low",
+    "refactor-cleaner": "standard",
+    "e2e-runner": "standard",
+  }
+  const tierModels: Record<string, string[]> = {
+    high: ["glm-5.1", "glm-5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
+    standard: ["glm-4.7", "glm-4.6", "gpt-5.2", "gpt-5.1-codex", "gpt-5.1-codex-mini"],
+    low: ["glm-4.5-flash", "glm-4.5-air", "gpt-5-mini", "gpt-5-nano"],
+  }
+
+  // --- Domain naming patterns ---
+  const domainDirs: Record<string, RegExp> = {
+    "src/ui/": /^[A-Z][a-zA-Z]*\.(tsx?|jsx?)$/,
+    "src/components/": /^[A-Z][a-zA-Z]*\.(tsx?|jsx?)$/,
+    "src/api/": /^[a-z][a-zA-Z]*\.(ts|js)$/,
+    "src/routes/": /^[a-z][a-zA-Z-]*\.(ts|js)$/,
+    "src/util/": /^[a-z][a-zA-Z-]*\.(ts|js)$/,
+    "src/lib/": /^[a-z][a-zA-Z-]*\.(ts|js)$/,
+    "test/": /\.(test|spec)\.(ts|tsx|js|jsx)$/,
+  }
+
   await mkdir(root, { recursive: true })
 
   async function mark(data: Record<string, unknown>) {
@@ -414,6 +453,14 @@ export default async function guardrail(input: {
           last_reason: "",
           git_freshness_checked: false,
           review_state: "",
+          // Delegation gates
+          active_task_count: 0,
+          session_cost: 0,
+          consecutive_failures: 0,
+          consecutive_fix_prs: 0,
+          last_merge_at: "",
+          issue_verification_done: false,
+          edits_since_doc_reminder: 0,
         })
       }
       if (event.type === "permission.asked") {
@@ -559,10 +606,60 @@ export default async function guardrail(input: {
             } catch (e) { if (String(e).includes("blocked")) throw e }
           }
         }
+        // Enforce soak time: develop→main merge requires half-day minimum
+        if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
+          const data = await stash(state)
+          const lastMerge = str(data.last_merge_at)
+          if (lastMerge) {
+            const elapsed = Date.now() - new Date(lastMerge).getTime()
+            const halfDay = 12 * 60 * 60 * 1000
+            if (elapsed < halfDay) {
+              out.args.command = cmd // preserve command
+              await seen("soak_time.advisory", { elapsed_ms: elapsed, required_ms: halfDay })
+              // Advisory only — do not block, but warn via stderr injection
+            }
+          }
+        }
+        // Enforce follow-up limit: detect 2+ consecutive fix PRs on same feature
+        if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+          const data = await stash(state)
+          const consecutiveFixes = num(data.consecutive_fix_prs)
+          if (consecutiveFixes >= 2) {
+            await seen("follow_up.limit_reached", { consecutive: consecutiveFixes })
+          }
+        }
+        // Enforce issue close verification: require evidence before gh issue close
+        if (/\bgh\s+issue\s+close\b/i.test(cmd)) {
+          const data = await stash(state)
+          if (!flag(data.issue_verification_done)) {
+            await seen("issue_close.unverified", { command: cmd })
+          }
+        }
         if (!bash(cmd)) return
         if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
+      }
+      // Delegation: parallel execution gate for task tool
+      if (item.tool === "task") {
+        const data = await stash(state)
+        const activeTasks = num(data.active_task_count)
+        if (activeTasks >= maxParallelTasks) {
+          const err = `parallel task limit reached (${activeTasks}/${maxParallelTasks}); wait for a running task to complete before delegating more`
+          await mark({ last_block: "task", last_reason: err })
+          throw new Error(text(err))
+        }
+        await mark({ active_task_count: activeTasks + 1 })
+      }
+      // Domain naming advisory for new file creation
+      if (item.tool === "write" && file) {
+        const relFile = rel(input.worktree, file)
+        const fileName = path.basename(relFile)
+        for (const [dir, pattern] of Object.entries(domainDirs)) {
+          if (relFile.startsWith(dir) && !pattern.test(fileName)) {
+            await seen("domain_naming.mismatch", { file: relFile, expected_pattern: pattern.source, dir })
+          }
+        }
       }
     },
     "tool.execute.after": async (
@@ -681,6 +778,101 @@ export default async function guardrail(input: {
             edits_since_review: 0,
           })
         }
+        // Delegation: decrement active task count on completion
+        const activeTasks = num(data.active_task_count)
+        if (activeTasks > 0) {
+          await mark({ active_task_count: activeTasks - 1 })
+        }
+        // Delegation: track per-agent delegation count
+        const agentDelegations = num(data[`delegation_${agent}`])
+        await mark({ [`delegation_${agent}`]: agentDelegations + 1 })
+
+        // Verify agent output: detect empty or trivially short responses
+        const output = str(out.output)
+        if (agent && output.length < 20) {
+          out.output = (out.output || "") + "\n⚠️ Agent output appears empty or trivially short. Verify the agent completed its task."
+          await seen("verify_agent.short_output", { agent, output_length: output.length })
+        }
+      }
+
+      // Tool failure recovery: detect consecutive failures and suggest recovery
+      if (out.output && /error|failed|exception/i.test(out.output) && !/⚠️|advisory/i.test(out.output)) {
+        const failures = num(data.consecutive_failures) + 1
+        await mark({ consecutive_failures: failures, last_failure_tool: item.tool })
+        if (failures >= 3) {
+          out.output = (out.output || "") + "\n⚠️ " + failures + " consecutive tool failures detected. Consider: (1) checking error root cause, (2) trying alternate approach, (3) delegating to a specialist agent."
+        }
+      } else if (item.tool !== "read") {
+        // Reset failure counter on success (excluding reads)
+        if (num(data.consecutive_failures) > 0) {
+          await mark({ consecutive_failures: 0 })
+        }
+      }
+
+      // Post-merge: track merge timestamp for soak time and suggest issue close
+      if (item.tool === "bash" && /\bgh\s+pr\s+merge\b/i.test(str(item.args?.command))) {
+        await mark({ last_merge_at: now })
+        const cmd = str(item.args?.command)
+        // Check for "Fixes #N" or "Closes #N" patterns in recent context
+        if (/\b(fix(es)?|close[sd]?|resolve[sd]?)\s+#\d+/i.test(out.output)) {
+          out.output = (out.output || "") + "\n📋 Detected issue reference in merge output. Verify referenced issues are closed."
+        }
+      }
+
+      // Memory update reminder after git commit
+      if (item.tool === "bash" && /\bgit\s+commit\b/i.test(str(item.args?.command))) {
+        const editCount = num(data.edit_count)
+        if (editCount >= 5) {
+          out.output = (out.output || "") + "\n🧠 Significant changes committed (" + editCount + " edits). Consider updating memory with key decisions or learnings."
+        }
+      }
+
+      // Track fix PR creation for follow-up limit
+      if (item.tool === "bash" && /\bgh\s+pr\s+create\b/i.test(str(item.args?.command))) {
+        const cmd = str(item.args?.command)
+        if (/--title\s+["']?fix/i.test(cmd) || /\bfix\//i.test(cmd)) {
+          const consecutiveFixes = num(data.consecutive_fix_prs) + 1
+          await mark({ consecutive_fix_prs: consecutiveFixes })
+          if (consecutiveFixes >= 2) {
+            out.output = (out.output || "") + "\n⚠️ Feature freeze warning: " + consecutiveFixes + " consecutive fix PRs on the same feature. Consider stabilizing before adding more changes."
+          }
+        } else {
+          await mark({ consecutive_fix_prs: 0 })
+        }
+      }
+
+      // Endpoint dataflow advisory: detect API endpoint modifications
+      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+        const relFile = rel(input.worktree, file)
+        const content = typeof item.args?.content === "string" ? item.args.content :
+                        typeof item.args?.newString === "string" ? item.args.newString : ""
+        if (content && /\b(router\.(get|post|put|patch|delete)|app\.(get|post|put|patch|delete)|fetch\(|axios\.|\.handler)\b/i.test(content)) {
+          out.output = (out.output || "") + "\n🔄 Endpoint modification detected in " + relFile + ". Verify 4-point dataflow: client → API route → backend action → response format."
+          await seen("endpoint_dataflow.modified", { file: relFile })
+        }
+      }
+
+      // Doc update scope: remind about related documentation when modifying source
+      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+        const relFile = rel(input.worktree, file)
+        const editsSinceDocCheck = num(data.edits_since_doc_reminder)
+        if (editsSinceDocCheck >= 5) {
+          out.output = (out.output || "") + "\n📄 " + (editsSinceDocCheck + 1) + " source edits since last doc check. Grep for references to modified files in docs/ and README."
+          await mark({ edits_since_doc_reminder: 0 })
+        } else {
+          await mark({ edits_since_doc_reminder: editsSinceDocCheck + 1 })
+        }
+      }
+
+      // Task completion gate: ensure task claims are backed by evidence
+      if (item.tool === "bash" && /\b(gh\s+issue\s+close)\b/i.test(str(item.args?.command))) {
+        const reviewed = flag(data.reviewed)
+        const factchecked = flag(data.factchecked)
+        if (!reviewed || !factchecked) {
+          out.output = (out.output || "") + "\n⚠️ Issue close without full verification: reviewed=" + reviewed + ", factchecked=" + factchecked + ". Ensure acceptance criteria have code-level evidence."
+          await seen("task_completion.incomplete", { reviewed, factchecked })
+        }
+        await mark({ issue_verification_done: true })
       }
     },
     "command.execute.before": async (
@@ -725,16 +917,47 @@ export default async function guardrail(input: {
         options: Record<string, unknown>
       },
     ) => {
+      // Provider admission gate (existing)
       const err = gate(item)
-      if (!err) return
-      await mark({
-        last_block: "chat.params",
-        last_provider: item.model.providerID,
-        last_model: item.model.id,
-        last_agent: item.agent,
-        last_reason: err,
-      })
-      throw new Error(text(err))
+      if (err) {
+        await mark({
+          last_block: "chat.params",
+          last_provider: item.model.providerID,
+          last_model: item.model.id,
+          last_agent: item.agent,
+          last_reason: err,
+        })
+        throw new Error(text(err))
+      }
+
+      // Agent-model mapping advisory: suggest optimal model tier for agent
+      const tier = agentModelTier[item.agent]
+      if (tier) {
+        const recommended = tierModels[tier] ?? []
+        const modelId = str(item.model.id)
+        if (recommended.length > 0 && modelId) {
+          const currentTier = Object.entries(tierModels).find(([, models]) => models.includes(modelId))?.[0]
+          if (currentTier && tier === "high" && currentTier === "low") {
+            await seen("delegation.model_mismatch", {
+              agent: item.agent,
+              expected_tier: tier,
+              actual_tier: currentTier,
+              model: modelId,
+            })
+          }
+        }
+      }
+
+      // Cost tracking: accumulate per-session cost
+      const data = await stash(state)
+      const sessionCost = num(data.session_cost)
+      const modelCost = (item.model.cost?.input ?? 0) + (item.model.cost?.output ?? 0)
+      if (modelCost > 0) {
+        await mark({ session_cost: sessionCost + modelCost })
+      }
+      if (sessionCost > maxSessionCost) {
+        await seen("delegation.cost_warning", { session_cost: sessionCost, max: maxSessionCost })
+      }
     },
     "experimental.session.compacting": async (
       _item: { sessionID: string },
@@ -751,6 +974,9 @@ export default async function guardrail(input: {
           `Edit/write count: ${num(data.edit_count)}.`,
           `Fact-check state: ${factLine(data)}.`,
           `Review state: ${reviewLine(data)}.`,
+          `Active tasks: ${num(data.active_task_count)}.`,
+          `Session cost: $${num(data.session_cost).toFixed(4)}.`,
+          `Consecutive failures: ${num(data.consecutive_failures)}.`,
         ].join(" "),
       )
     },
