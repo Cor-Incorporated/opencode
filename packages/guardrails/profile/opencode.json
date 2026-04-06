@@ -2,6 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["AGENTS.md"],
   "default_agent": "implement",
+  "plugin": ["./plugins/guardrail.ts", "./plugins/team.ts"],
   "enabled_providers": [
     "zai",
     "zai-coding-plan",

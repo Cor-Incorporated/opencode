@@ -1046,6 +1046,79 @@ test("guardrail delegation gates and quality hooks fire correctly", async () => 
   })
 }, 15000)
 
+test("guardrail plugin loads from profile config and fires session.created", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // 1. Verify plugin is loaded from config
+        const plugins = await Plugin.list()
+        const guardrailPlugin = plugins.find(
+          (item) => typeof item.event === "function" && typeof item["tool.execute.before"] === "function",
+        )
+        expect(guardrailPlugin).toBeDefined()
+
+        // 2. Verify config includes plugin field
+        const cfg = await Config.get()
+        expect(cfg.plugin).toBeDefined()
+        expect(cfg.plugin!.some((p: unknown) => typeof p === "string" && String(p).includes("guardrail"))).toBe(true)
+
+        // 3. Fire session.created and verify state file is written
+        await guardrailPlugin!.event!({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_config_load_test" },
+          },
+        } as any)
+        await wait()
+
+        const state = await Bun.file(files.state).json()
+        expect(state.mode).toBe("enforced")
+        expect(state.active_tasks).toEqual({})
+        expect(state.active_task_count).toBe(0)
+        expect(state.llm_call_count).toBe(0)
+        expect(state.llm_calls_by_provider).toEqual({})
+        expect(state.session_providers).toEqual([])
+        expect(state.consecutive_failures).toBe(0)
+        expect(state.issue_verification_done).toBe(false)
+
+        // 4. Verify events.jsonl was written
+        const logText = await Bun.file(files.log).text()
+        expect(logText).toContain("session.created")
+        expect(logText).toContain("session_config_load_test")
+
+        // 5. Fire tool.execute.before for secret file — verify hard block
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_config_load_test", callID: "call_secret" },
+            { args: { filePath: path.join(tmp.path, ".env.production") } },
+          ),
+        ).rejects.toThrow("secret material")
+
+        // 6. Fire tool.execute.after for bash — verify state tracking
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "bash", sessionID: "session_config_load_test", callID: "call_test", args: { command: "bun test" } },
+          { title: "bash", output: "19 pass", metadata: { exitCode: 0 } },
+        )
+        const updatedState = await Bun.file(files.state).json()
+        expect(updatedState.tests_executed).toBe(true)
+
+        // 7. Verify shell.env hook exposes guardrail env vars
+        const envOut = { env: {} as Record<string, string> }
+        await guardrailPlugin!["shell.env"]!({ cwd: tmp.path } as any, envOut as any)
+        expect(envOut.env.OPENCODE_GUARDRAIL_MODE).toBe("enforced")
+        expect(envOut.env.OPENCODE_GUARDRAIL_ROOT).toBeDefined()
+        expect(envOut.env.OPENCODE_GUARDRAIL_STATE).toBeDefined()
+      },
+    })
+  })
+}, 15000)
+
 for (const replay of Object.values(replays)) {
   it.live(`guardrail replay keeps ${replay.command} executable`, () =>
     run(replay).pipe(
