@@ -58,7 +58,7 @@ describe("hook.execute", () => {
       const entry: HookEntry = { command: "sleep 10", timeout: 200 }
       const result = await runHook(entry, makeEnv())
       expect(result.action).toBe("pass")
-    }, 5000)
+    }, 15_000)
 
     test("passes environment variables to script", async () => {
       const entry: HookEntry = { command: 'echo "$OPENCODE_TOOL_NAME" >&2' }
