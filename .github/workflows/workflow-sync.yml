@@ -1,0 +1,84 @@
+name: workflow-sync-guard
+
+on:
+  push:
+    branches: [dev]
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check-workflow-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Detect workflow file changes
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- '.github/workflows/' 2>/dev/null || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No workflow files modified"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Workflow files modified:"
+            echo "$CHANGED"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            # Store as single-line comma-separated for output
+            FILES_LIST=$(echo "$CHANGED" | tr '\n' ',' | sed 's/,$//')
+            echo "files=$FILES_LIST" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post upstream compatibility warning
+        if: steps.detect.outputs.changed == 'true' && github.event_name == 'pull_request_target'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          FILES="${{ steps.detect.outputs.files }}"
+          MARKER="<!-- workflow-sync-guard -->"
+
+          # Format file list as markdown
+          FILE_LIST=""
+          IFS=',' read -ra FILE_ARRAY <<< "$FILES"
+          for f in "${FILE_ARRAY[@]}"; do
+            FILE_LIST="$FILE_LIST\n- \`$f\`"
+          done
+
+          BODY="$MARKER
+          **Workflow files modified -- verify upstream compatibility**
+
+          The following workflow files were changed in this PR:
+          $(echo -e "$FILE_LIST")
+
+          Before merging, please verify:
+          - [ ] Changes do not break upstream sync (\`upstream-sync.yml\` restores our workflows on merge)
+          - [ ] New workflows use \`pull_request_target\` (not \`pull_request\`) for fork compatibility
+          - [ ] Runner is set to \`ubuntu-latest\` (not blacksmith or other custom runners)
+          - [ ] No secrets are exposed in workflow logs"
+
+          # Upsert comment (avoid duplicates)
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -1)
+
+          if [ -n "$EXISTING" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$EXISTING" \
+              -X PATCH -f body="$BODY"
+          else
+            gh pr comment "$PR_NUMBER" --body "$BODY"
+          fi

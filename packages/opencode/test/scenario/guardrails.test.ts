@@ -922,6 +922,130 @@ test("team plugin skips parallel enforcement on HEAD-less repos", async () => {
   })
 })
 
+test("guardrail delegation gates and quality hooks fire correctly", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "src", "ui"), { recursive: true })
+        await fs.mkdir(path.join(dir, "src", "api"), { recursive: true })
+        await Bun.write(path.join(dir, "src", "app.ts"), "export const main = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Initialize session to set up state
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_delegation_test" },
+          },
+        } as any)
+        await wait()
+
+        // 1. Verify delegation state fields are initialized
+        let state = await Bun.file(files.state).json()
+        expect(state.active_task_count).toBe(0)
+        expect(state.llm_call_count).toBe(0)
+        expect(state.consecutive_failures).toBe(0)
+        expect(state.consecutive_fix_prs).toBe(0)
+        expect(state.issue_verification_done).toBe(false)
+        expect(state.edits_since_doc_reminder).toBe(0)
+
+        // 2. Parallel execution gate: task tool increments active count
+        await Plugin.trigger(
+          "tool.execute.before",
+          { tool: "task", sessionID: "session_delegation_test", callID: "call_task_1" },
+          { args: { subagent_type: "explore", prompt: "test" } },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.active_task_count).toBe(1)
+
+        // 3. Task completion decrements active count and tracks delegation
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "task", sessionID: "session_delegation_test", callID: "call_task_1", args: { subagent_type: "explore", command: "" } },
+          { title: "task", output: "Result text here with enough content to pass", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.active_task_count).toBe(0)
+        expect(state.delegation_explore).toBe(1)
+
+        // 4. Verify agent output check: short output triggers advisory
+        const shortOut = { title: "task", output: "", metadata: {} }
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "task", sessionID: "session_delegation_test", callID: "call_task_2", args: { subagent_type: "review", command: "" } },
+          shortOut,
+        )
+        expect(shortOut.output).toContain("Agent output appears empty")
+
+        // 5. Parallel execution gate: block at max
+        for (let i = 0; i < 5; i++) {
+          await Plugin.trigger(
+            "tool.execute.before",
+            { tool: "task", sessionID: "session_delegation_test", callID: `call_flood_${i}` },
+            { args: { subagent_type: "explore", prompt: "test" } },
+          )
+        }
+        state = await Bun.file(files.state).json()
+        expect(state.active_task_count).toBe(5)
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "task", sessionID: "session_delegation_test", callID: "call_flood_6" },
+            { args: { subagent_type: "explore", prompt: "test" } },
+          ),
+        ).rejects.toThrow("parallel task limit reached")
+
+        // 6. Domain naming advisory: write to src/ui/ with non-PascalCase triggers event
+        await Plugin.trigger(
+          "tool.execute.before",
+          { tool: "write", sessionID: "session_delegation_test", callID: "call_domain" },
+          { args: { filePath: path.join(tmp.path, "src", "ui", "bad_name.tsx"), content: "export default function Bad() {}" } },
+        )
+        const log = await Bun.file(files.log).text()
+        expect(log).toContain("domain_naming.mismatch")
+
+        // 7. Endpoint dataflow advisory on API file edit
+        const endpointOut = { title: "edit", output: "", metadata: {} }
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "edit", sessionID: "session_delegation_test", callID: "call_endpoint", args: { filePath: path.join(tmp.path, "src", "api", "users.ts"), newString: "router.get('/users', handler)" } },
+          endpointOut,
+        )
+        expect(endpointOut.output).toContain("Endpoint modification detected")
+
+        // 8. Tool failure recovery: consecutive failures (uses exit code, not regex)
+        for (let i = 0; i < 3; i++) {
+          await Plugin.trigger(
+            "tool.execute.after",
+            { tool: "bash", sessionID: "session_delegation_test", callID: `call_fail_${i}`, args: { command: "npm build" } },
+            { title: "bash", output: "build output", metadata: { exitCode: 1 } },
+          )
+        }
+        state = await Bun.file(files.state).json()
+        expect(state.consecutive_failures).toBe(3)
+
+        // 9. Compaction context includes new delegation fields
+        const compact = await Plugin.trigger(
+          "experimental.session.compacting",
+          { sessionID: "session_delegation_test" },
+          { context: [], prompt: undefined },
+        )
+        const ctx = compact.context.join("\n")
+        expect(ctx).toContain("Active tasks:")
+        expect(ctx).toContain("LLM calls:")
+        expect(ctx).toContain("Consecutive failures: 3")
+      },
+    })
+  })
+}, 15000)
+
 for (const replay of Object.values(replays)) {
   it.live(`guardrail replay keeps ${replay.command} executable`, () =>
     run(replay).pipe(

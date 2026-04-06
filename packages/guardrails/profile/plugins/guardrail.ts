@@ -150,6 +150,11 @@ function str(data: unknown) {
   return typeof data === "string" ? data : ""
 }
 
+function json(data: unknown): Record<string, number> {
+  if (data && typeof data === "object" && !Array.isArray(data)) return data as Record<string, number>
+  return {}
+}
+
 async function git(dir: string, args: string[]) {
   const proc = Bun.spawn(["git", "-C", dir, ...args], {
     stdout: "pipe",
@@ -224,6 +229,45 @@ export default async function guardrail(input: {
   const log = path.join(root, "events.jsonl")
   const state = path.join(root, "state.json")
   const allow: Record<string, Set<string>> = {}
+
+  // --- Delegation gate config ---
+  const maxParallelTasks = 5
+  const maxSessionCost = 10.0 // USD
+  const agentModelTier: Record<string, "high" | "standard" | "low"> = {
+    implement: "high",
+    security: "high",
+    "security-engineer": "high",
+    "security-reviewer": "high",
+    review: "standard",
+    "code-reviewer": "standard",
+    explore: "low",
+    planner: "standard",
+    architect: "high",
+    "build-error-resolver": "standard",
+    "tdd-guide": "standard",
+    investigate: "low",
+    "provider-eval": "low",
+    "doc-updater": "low",
+    "technical-writer": "low",
+    "refactor-cleaner": "standard",
+    "e2e-runner": "standard",
+  }
+  const tierModels: Record<string, string[]> = {
+    high: ["glm-5.1", "glm-5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
+    standard: ["glm-4.7", "glm-4.6", "gpt-5.2", "gpt-5.1-codex", "gpt-5.1-codex-mini"],
+    low: ["glm-4.5-flash", "glm-4.5-air", "gpt-5-mini", "gpt-5-nano"],
+  }
+
+  // --- Domain naming patterns ---
+  const domainDirs: Record<string, RegExp> = {
+    "src/ui/": /^[A-Z][a-zA-Z]*\.(tsx?|jsx?)$/,
+    "src/components/": /^[A-Z][a-zA-Z]*\.(tsx?|jsx?)$/,
+    "src/api/": /^[a-z][a-zA-Z]*\.(ts|js)$/,
+    "src/routes/": /^[a-z][a-zA-Z-]*\.(ts|js)$/,
+    "src/util/": /^[a-z][a-zA-Z-]*\.(ts|js)$/,
+    "src/lib/": /^[a-z][a-zA-Z-]*\.(ts|js)$/,
+    "test/": /\.(test|spec)\.(ts|tsx|js|jsx)$/,
+  }
 
   await mkdir(root, { recursive: true })
 
@@ -414,6 +458,17 @@ export default async function guardrail(input: {
           last_reason: "",
           git_freshness_checked: false,
           review_state: "",
+          // Delegation gates (Map-based tracking for race safety)
+          active_tasks: {},
+          active_task_count: 0,
+          llm_call_count: 0,
+          llm_calls_by_provider: {},
+          session_providers: [],
+          consecutive_failures: 0,
+          consecutive_fix_prs: 0,
+          last_merge_at: "",
+          issue_verification_done: false,
+          edits_since_doc_reminder: 0,
         })
       }
       if (event.type === "permission.asked") {
@@ -559,10 +614,112 @@ export default async function guardrail(input: {
             } catch (e) { if (String(e).includes("blocked")) throw e }
           }
         }
+        // Enforce soak time: develop→main merge requires half-day minimum
+        if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
+          const data = await stash(state)
+          const lastMerge = str(data.last_merge_at)
+          if (lastMerge) {
+            const elapsed = Date.now() - new Date(lastMerge).getTime()
+            const halfDay = 12 * 60 * 60 * 1000
+            if (elapsed < halfDay) {
+              const hours = Math.round(elapsed / (60 * 60 * 1000) * 10) / 10
+              await mark({ soak_time_warning: true, soak_time_elapsed_h: hours })
+              await seen("soak_time.advisory", { elapsed_ms: elapsed, required_ms: halfDay })
+            }
+          }
+        }
+        // Enforce follow-up limit: detect 2+ consecutive fix PRs on same feature
+        if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+          const data = await stash(state)
+          const consecutiveFixes = num(data.consecutive_fix_prs)
+          if (consecutiveFixes >= 2) {
+            await seen("follow_up.limit_reached", { consecutive: consecutiveFixes })
+          }
+        }
+        // Enforce issue close verification: require evidence before gh issue close
+        if (/\bgh\s+issue\s+close\b/i.test(cmd)) {
+          const data = await stash(state)
+          if (!flag(data.issue_verification_done)) {
+            await seen("issue_close.unverified", { command: cmd })
+          }
+        }
+        // [NEW] audit-docker-build-args: detect secrets in docker build commands
+        if (/\bdocker\s+build\b/i.test(cmd)) {
+          const buildArgMatches = cmd.matchAll(/--build-arg\s+(\w+)=(\S+)/gi)
+          for (const m of buildArgMatches) {
+            const argName = m[1].toUpperCase()
+            const argValue = m[2]
+            if (/(SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|API_KEY|PRIVATE)/i.test(argName) || /^(sk-|ghp_|gho_|glpat-)/i.test(argValue)) {
+              await mark({ docker_secret_warning: true, docker_secret_arg: m[1] })
+              await seen("docker.secret_in_build_arg", { arg_name: m[1], pattern: "redacted" })
+            }
+          }
+        }
+        // [NEW] enforce-review-reading: block merge if review is stale (review.submittedAt < last push)
+        if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+          const data = await stash(state)
+          const reviewAt = str(data.review_at)
+          const lastPushAt = str(data.last_push_at)
+          if (reviewAt && lastPushAt && new Date(reviewAt) < new Date(lastPushAt)) {
+            await mark({ review_reading_warning: true })
+            await seen("review_reading.stale", { review_at: reviewAt, last_push_at: lastPushAt })
+          }
+        }
+        // [NEW] pr-guard: preflight checks before PR creation
+        if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+          const data = await stash(state)
+          const testRan = flag(data.tests_executed)
+          const typeChecked = flag(data.type_checked)
+          if (!testRan || !typeChecked) {
+            await mark({ pr_guard_warning: true, pr_guard_tests: testRan, pr_guard_types: typeChecked })
+            await seen("pr_guard.preflight_incomplete", { tests: testRan, types: typeChecked })
+          }
+        }
+        // [NEW] stop-test-gate: block ship/deploy without test verification
+        if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd) && !/\bfetch\b/i.test(cmd)) {
+          const data = await stash(state)
+          if (!flag(data.tests_executed) && num(data.edit_count) >= 3) {
+            await mark({ stop_test_warning: true })
+            await seen("stop_test_gate.untested", { edit_count: num(data.edit_count) })
+          }
+        }
         if (!bash(cmd)) return
         if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
+      }
+      // Delegation: parallel execution gate for task tool (Map-based to avoid race conditions)
+      if (item.tool === "task") {
+        const data = await stash(state)
+        const activeTasks = json(data.active_tasks)
+        const staleThreshold = 5 * 60 * 1000
+        // Staleness recovery: remove entries older than 5 minutes (crash protection)
+        for (const [id, ts] of Object.entries(activeTasks)) {
+          if (typeof ts === "number" && Date.now() - ts > staleThreshold) {
+            await seen("delegation.stale_reset", { task_id: id, age_ms: Date.now() - ts })
+            delete activeTasks[id]
+          }
+        }
+        const activeCount = Object.keys(activeTasks).length
+        if (activeCount >= maxParallelTasks) {
+          const err = `parallel task limit reached (${activeCount}/${maxParallelTasks}); wait for a running task to complete before delegating more`
+          await mark({ last_block: "task", last_reason: err, active_tasks: activeTasks })
+          throw new Error(text(err))
+        }
+        const callID = str((item as Record<string, unknown>).callID) || str((item.args as Record<string, unknown>)?.callID) || `task_${Date.now()}`
+        activeTasks[callID] = Date.now()
+        await mark({ active_tasks: activeTasks, active_task_count: Object.keys(activeTasks).length })
+      }
+      // Domain naming advisory for new file creation (flag for user-visible output in after hook)
+      if (item.tool === "write" && file) {
+        const relFile = rel(input.worktree, file)
+        const fileName = path.basename(relFile)
+        for (const [dir, pattern] of Object.entries(domainDirs)) {
+          if (relFile.startsWith(dir) && !pattern.test(fileName)) {
+            await mark({ domain_naming_warning: relFile, domain_naming_expected: pattern.source, domain_naming_dir: dir })
+            await seen("domain_naming.mismatch", { file: relFile, expected_pattern: pattern.source, dir })
+          }
+        }
       }
     },
     "tool.execute.after": async (
@@ -681,6 +838,198 @@ export default async function guardrail(input: {
             edits_since_review: 0,
           })
         }
+        // Delegation: remove completed task from active tasks map
+        const activeTasks = json(data.active_tasks)
+        const callID = str((item as Record<string, unknown>).callID) || str(item.args?.callID) || ""
+        if (callID && activeTasks[callID]) {
+          delete activeTasks[callID]
+          await mark({ active_tasks: activeTasks, active_task_count: Object.keys(activeTasks).length })
+        } else if (Object.keys(activeTasks).length > 0) {
+          // Fallback: remove oldest entry if callID not found
+          const oldest = Object.entries(activeTasks).sort((a, b) => a[1] - b[1])[0]
+          if (oldest) delete activeTasks[oldest[0]]
+          await mark({ active_tasks: activeTasks, active_task_count: Object.keys(activeTasks).length })
+        }
+        // Delegation: track per-agent delegation count
+        const agentDelegations = num(data[`delegation_${agent}`])
+        await mark({ [`delegation_${agent}`]: agentDelegations + 1 })
+
+        // Verify agent output: parse <task_result> payload to detect empty responses
+        const rawOutput = str(out.output)
+        const taskResultMatch = rawOutput.match(/<task_result>([\s\S]*?)<\/task_result>/)
+        const payload = taskResultMatch ? taskResultMatch[1].trim() : rawOutput.trim()
+        if (agent && payload.length < 20) {
+          out.output = (out.output || "") + "\n⚠️ Agent output appears empty or trivially short (" + payload.length + " chars). Verify the agent completed its task."
+          await seen("verify_agent.short_output", { agent, payload_length: payload.length })
+        }
+      }
+
+      // Tool failure recovery: detect consecutive failures via metadata exit code
+      const exitCode = typeof out.metadata?.exitCode === "number" ? out.metadata.exitCode : undefined
+      const isBashFail = item.tool === "bash" && exitCode !== undefined && exitCode !== 0
+      const isToolError = out.title === "Error" || (typeof out.metadata?.error === "string" && out.metadata.error !== "")
+      if (isBashFail || isToolError) {
+        const failures = num(data.consecutive_failures) + 1
+        await mark({ consecutive_failures: failures, last_failure_tool: item.tool })
+        if (failures >= 3) {
+          out.output = (out.output || "") + "\n⚠️ " + failures + " consecutive tool failures detected. Consider: (1) checking error root cause, (2) trying alternate approach, (3) delegating to a specialist agent."
+        }
+      } else if (item.tool !== "read") {
+        if (num(data.consecutive_failures) > 0) {
+          await mark({ consecutive_failures: 0 })
+        }
+      }
+
+      // Post-merge: track merge timestamp for soak time and suggest issue close
+      if (item.tool === "bash" && /\bgh\s+pr\s+merge\b/i.test(str(item.args?.command))) {
+        await mark({ last_merge_at: now })
+        if (/\b(fix(es)?|close[sd]?|resolve[sd]?)\s+#\d+/i.test(out.output)) {
+          out.output = (out.output || "") + "\n📋 Detected issue reference in merge output. Verify referenced issues are closed."
+        }
+      }
+      // Soak time advisory: surface warning set during tool.execute.before
+      if (item.tool === "bash" && /\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(str(item.args?.command))) {
+        const freshData = await stash(state)
+        if (flag(freshData.soak_time_warning)) {
+          const hours = num(freshData.soak_time_elapsed_h)
+          out.output = (out.output || "") + "\n⏳ Soak time advisory: only " + hours + "h since last merge (12h recommended). Consider waiting before merging to main."
+          await mark({ soak_time_warning: false })
+        }
+      }
+
+      // Memory update reminder after git commit
+      if (item.tool === "bash" && /\bgit\s+commit\b/i.test(str(item.args?.command))) {
+        const editCount = num(data.edit_count)
+        if (editCount >= 5) {
+          out.output = (out.output || "") + "\n🧠 Significant changes committed (" + editCount + " edits). Consider updating memory with key decisions or learnings."
+        }
+      }
+
+      // Track fix PR creation for follow-up limit
+      if (item.tool === "bash" && /\bgh\s+pr\s+create\b/i.test(str(item.args?.command))) {
+        const cmd = str(item.args?.command)
+        if (/--title\s+["']?fix/i.test(cmd) || /\bfix\//i.test(cmd)) {
+          const consecutiveFixes = num(data.consecutive_fix_prs) + 1
+          await mark({ consecutive_fix_prs: consecutiveFixes })
+          if (consecutiveFixes >= 2) {
+            out.output = (out.output || "") + "\n⚠️ Feature freeze warning: " + consecutiveFixes + " consecutive fix PRs on the same feature. Consider stabilizing before adding more changes."
+          }
+        } else {
+          await mark({ consecutive_fix_prs: 0 })
+        }
+      }
+
+      // Domain naming advisory: surface warning set during tool.execute.before
+      if ((item.tool === "write") && file) {
+        const freshData = await stash(state)
+        const warningFile = str(freshData.domain_naming_warning)
+        if (warningFile && warningFile === rel(input.worktree, file)) {
+          out.output = (out.output || "") + "\n📛 Domain naming mismatch: " + warningFile + " does not match expected pattern /" + str(freshData.domain_naming_expected) + "/ for " + str(freshData.domain_naming_dir)
+          await mark({ domain_naming_warning: "" })
+        }
+      }
+      // Endpoint dataflow advisory: detect API endpoint modifications
+      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+        const relFile = rel(input.worktree, file)
+        const content = typeof item.args?.content === "string" ? item.args.content :
+                        typeof item.args?.newString === "string" ? item.args.newString : ""
+        if (content && /\b(router\.(get|post|put|patch|delete)|app\.(get|post|put|patch|delete)|fetch\(|axios\.|\.handler)\b/i.test(content)) {
+          out.output = (out.output || "") + "\n🔄 Endpoint modification detected in " + relFile + ". Verify 4-point dataflow: client → API route → backend action → response format."
+          await seen("endpoint_dataflow.modified", { file: relFile })
+        }
+      }
+
+      // Doc update scope: remind about related documentation when modifying source
+      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+        const relFile = rel(input.worktree, file)
+        const editsSinceDocCheck = num(data.edits_since_doc_reminder)
+        if (editsSinceDocCheck >= 5) {
+          out.output = (out.output || "") + "\n📄 " + (editsSinceDocCheck + 1) + " source edits since last doc check. Grep for references to modified files in docs/ and README."
+          await mark({ edits_since_doc_reminder: 0 })
+        } else {
+          await mark({ edits_since_doc_reminder: editsSinceDocCheck + 1 })
+        }
+      }
+
+      // Task completion gate: ensure task claims are backed by evidence
+      if (item.tool === "bash" && /\b(gh\s+issue\s+close)\b/i.test(str(item.args?.command))) {
+        const reviewed = flag(data.reviewed)
+        const factchecked = flag(data.factchecked)
+        if (!reviewed || !factchecked) {
+          out.output = (out.output || "") + "\n⚠️ Issue close without full verification: reviewed=" + reviewed + ", factchecked=" + factchecked + ". Ensure acceptance criteria have code-level evidence."
+          await seen("task_completion.incomplete", { reviewed, factchecked })
+        }
+        // Only mark verified when both conditions are met — prevents suppressing future reminders
+        if (reviewed && factchecked) {
+          await mark({ issue_verification_done: true })
+        }
+      }
+
+      // [NEW] Track test execution for pr-guard and stop-test-gate
+      if (item.tool === "bash") {
+        const cmd = str(item.args?.command)
+        if (/\b(bun\s+test|bun\s+turbo\s+test|jest|vitest|pytest|go\s+test|cargo\s+test)\b/i.test(cmd)) {
+          const exitCode = typeof out.metadata?.exitCode === "number" ? out.metadata.exitCode : undefined
+          await mark({ tests_executed: true, last_test_at: now, last_test_exit: exitCode ?? "unknown" })
+        }
+        if (/\b(bun\s+turbo\s+typecheck|tsc|tsgo)\b/i.test(cmd)) {
+          await mark({ type_checked: true, last_typecheck_at: now })
+        }
+        // Track push for review-reading staleness detection
+        if (/\bgit\s+push\b/i.test(cmd)) {
+          await mark({ last_push_at: now })
+        }
+      }
+
+      // [NEW] audit-docker-build-args: surface warning
+      if (item.tool === "bash" && /\bdocker\s+build\b/i.test(str(item.args?.command))) {
+        const freshData = await stash(state)
+        if (flag(freshData.docker_secret_warning)) {
+          out.output = (out.output || "") + "\n🔐 Security: --build-arg '" + str(freshData.docker_secret_arg) + "' may contain secrets. Use Docker build secrets (--secret) or multi-stage builds instead."
+          await mark({ docker_secret_warning: false })
+        }
+      }
+
+      // [NEW] enforce-review-reading: surface stale review warning
+      if (item.tool === "bash" && /\bgh\s+pr\s+merge\b/i.test(str(item.args?.command))) {
+        const freshData = await stash(state)
+        if (flag(freshData.review_reading_warning)) {
+          out.output = (out.output || "") + "\n📖 Stale review: code was pushed after the last review. Re-request review before merging."
+          await mark({ review_reading_warning: false })
+        }
+      }
+
+      // [NEW] pr-guard: surface preflight warning
+      if (item.tool === "bash" && /\bgh\s+pr\s+create\b/i.test(str(item.args?.command))) {
+        const freshData = await stash(state)
+        if (flag(freshData.pr_guard_warning)) {
+          const tests = flag(freshData.pr_guard_tests)
+          const types = flag(freshData.pr_guard_types)
+          const missing = [!tests && "tests", !types && "typecheck"].filter(Boolean).join(", ")
+          out.output = (out.output || "") + "\n🛡️ PR guard: " + missing + " not yet run this session. Run `bun turbo test:ci && bun turbo typecheck` before creating PR."
+          await mark({ pr_guard_warning: false })
+        }
+      }
+
+      // [NEW] stop-test-gate: surface untested push/merge warning
+      if (item.tool === "bash" && /\b(git\s+push|gh\s+pr\s+merge)\b/i.test(str(item.args?.command))) {
+        const freshData = await stash(state)
+        if (flag(freshData.stop_test_warning)) {
+          out.output = (out.output || "") + "\n🚫 Test gate: " + num(freshData.edit_count) + " edits without running tests. Run tests before pushing/merging."
+          await mark({ stop_test_warning: false })
+        }
+      }
+
+      // [NEW] verify-state-file-integrity: check state.json on every after hook
+      try {
+        const stateData = await stash(state)
+        if (!stateData || typeof stateData !== "object") {
+          await seen("state_integrity.corrupted", { reason: "non-object state" })
+          await mark({ last_event: "state_integrity_repair", repaired_at: now })
+        }
+      } catch {
+        await seen("state_integrity.parse_error", { file: state })
+        await save(state, { mode, repaired_at: now, repair_reason: "JSON parse failure" })
       }
     },
     "command.execute.before": async (
@@ -725,16 +1074,88 @@ export default async function guardrail(input: {
         options: Record<string, unknown>
       },
     ) => {
+      // Provider admission gate (existing)
       const err = gate(item)
-      if (!err) return
+      if (err) {
+        await mark({
+          last_block: "chat.params",
+          last_provider: item.model.providerID,
+          last_model: item.model.id,
+          last_agent: item.agent,
+          last_reason: err,
+        })
+        throw new Error(text(err))
+      }
+
+      // Multi-model delegation: provider-aware routing + tier advisory (OpenCode advantage)
+      const provider = str(item.model.providerID)
+      const modelId = str(item.model.id)
+      const tier = agentModelTier[item.agent]
+      if (tier && modelId) {
+        const currentTier = Object.entries(tierModels).find(([, models]) => models.includes(modelId))?.[0]
+        // Detect tier mismatch: high-tier agent on low-tier model (or vice versa for cost waste)
+        if (currentTier) {
+          const tierOrder = { high: 3, standard: 2, low: 1 }
+          const expected = tierOrder[tier] ?? 2
+          const actual = tierOrder[currentTier as keyof typeof tierOrder] ?? 2
+          if (expected > actual) {
+            const recommended = tierModels[tier] ?? []
+            await seen("delegation.model_mismatch", {
+              agent: item.agent,
+              expected_tier: tier,
+              actual_tier: currentTier,
+              model: modelId,
+              provider,
+              recommended: recommended.slice(0, 3),
+            })
+            // User-visible advisory via stderr injection is not available in chat.params,
+            // so we log to state for compacting context to pick up
+            await mark({
+              last_model_mismatch: `${item.agent} (${tier}-tier) running on ${modelId} (${currentTier}-tier). Recommended: ${recommended.slice(0, 3).join(", ")}`,
+            })
+          }
+          // Cost waste detection: low-tier agent using high-tier model
+          if (expected < actual && tier === "low" && currentTier === "high") {
+            await seen("delegation.cost_waste", {
+              agent: item.agent,
+              tier,
+              model: modelId,
+              provider,
+            })
+          }
+        }
+        // Provider-tier recommendation: suggest optimal providers per tier
+        const providerTiers: Record<string, string[]> = {
+          high: ["zai-coding-plan", "openai"],
+          standard: ["zai-coding-plan", "openai", "openrouter"],
+          low: ["openrouter", "zai-coding-plan"],
+        }
+        const recommendedProviders = providerTiers[tier] ?? []
+        if (recommendedProviders.length > 0 && !recommendedProviders.includes(provider)) {
+          await seen("delegation.provider_suboptimal", {
+            agent: item.agent,
+            tier,
+            current_provider: provider,
+            recommended_providers: recommendedProviders,
+          })
+        }
+      }
+
+      // Per-provider cost tracking: count LLM invocations by provider (OpenCode multi-model tracking)
+      const data = await stash(state)
+      const llmCalls = num(data.llm_call_count) + 1
+      const providerCalls = json(data.llm_calls_by_provider)
+      providerCalls[provider] = (providerCalls[provider] ?? 0) + 1
+      const sessionProviders = list(data.session_providers)
+      const updatedProviders = sessionProviders.includes(provider) ? sessionProviders : [...sessionProviders, provider]
       await mark({
-        last_block: "chat.params",
-        last_provider: item.model.providerID,
-        last_model: item.model.id,
+        llm_call_count: llmCalls,
+        llm_calls_by_provider: providerCalls,
+        session_providers: updatedProviders,
+        last_provider: provider,
+        last_model: modelId,
         last_agent: item.agent,
-        last_reason: err,
       })
-      throw new Error(text(err))
     },
     "experimental.session.compacting": async (
       _item: { sessionID: string },
@@ -751,6 +1172,11 @@ export default async function guardrail(input: {
           `Edit/write count: ${num(data.edit_count)}.`,
           `Fact-check state: ${factLine(data)}.`,
           `Review state: ${reviewLine(data)}.`,
+          `Active tasks: ${num(data.active_task_count)} (Map entries: ${Object.keys(json(data.active_tasks)).length}).`,
+          `LLM calls: ${num(data.llm_call_count)} (by provider: ${JSON.stringify(json(data.llm_calls_by_provider))}).`,
+          `Providers used: ${list(data.session_providers).join(", ") || "none"}.`,
+          `Last model mismatch: ${str(data.last_model_mismatch) || "none"}.`,
+          `Consecutive failures: ${num(data.consecutive_failures)}.`,
         ].join(" "),
       )
     },

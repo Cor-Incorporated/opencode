@@ -2,10 +2,13 @@ name: pr-management
 
 on:
   pull_request_target:
-    types: [opened]
+    types: [opened, reopened]
+  check_suite:
+    types: [completed]
 
 jobs:
   check-duplicates:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -72,6 +75,7 @@ jobs:
           fi
 
   add-contributor-label:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -93,3 +97,94 @@ jobs:
                 labels: ['contributor']
               });
             }
+
+  inject-review-on-failure:
+    if: >-
+      github.event_name == 'check_suite' &&
+      github.event.check_suite.conclusion == 'failure' &&
+      github.event.check_suite.pull_requests[0]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment review suggestion on failed CI
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const prs = context.payload.check_suite.pull_requests;
+            if (!prs || prs.length === 0) return;
+
+            const prNumber = prs[0].number;
+            const marker = '<!-- inject-review-on-failure -->';
+
+            // Check for existing comment to avoid duplicates
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              core.info(`Review suggestion already posted on PR #${prNumber}`);
+              return;
+            }
+
+            const suite = context.payload.check_suite;
+            const body = `${marker}
+            **CI failed** on commit \`${suite.head_sha.substring(0, 7)}\`
+
+            Consider running \`/review\` to investigate the failure before pushing another attempt.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body
+            });
+
+            core.info(`Posted review suggestion on PR #${prNumber}`);
+
+  post-pr-create-review-trigger:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      (github.event.action == 'opened' || github.event.action == 'reopened')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment automated review notice
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const marker = '<!-- post-pr-review-trigger -->';
+
+            // Check for existing comment to avoid duplicates on reopen
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              core.info(`Review notice already posted on PR #${pr.number}`);
+              return;
+            }
+
+            const action = context.payload.action === 'reopened' ? 'reopened' : 'opened';
+            const body = `${marker}
+            **New PR ${action}** -- automated review will run on the next push.
+
+            To trigger a manual review, comment \`/review\` on this PR.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body
+            });
+
+            core.info(`Posted review trigger notice on PR #${pr.number} (${action})`);
+
