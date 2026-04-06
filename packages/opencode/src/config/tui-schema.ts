@@ -27,6 +27,7 @@ export const TuiOptions = z.object({
     .default(true)
     .optional()
     .describe("Show system notifications when sessions complete or error. Requires terminal focus-loss detection."),
+  mouse: z.boolean().optional().describe("Enable or disable mouse capture (default: true)"),
 })
 
 export const TuiInfo = z
