@@ -6,9 +6,15 @@ permission:
     "*": allow
     "*.env*": deny
     "*credentials*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   grep:
     "*": allow
     "*.env*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   glob: allow
   edit:
     "*": deny

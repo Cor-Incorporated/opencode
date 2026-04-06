@@ -6,9 +6,15 @@ permission:
     "*": allow
     "*.env*": deny
     "*credentials*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   grep:
     "*": allow
     "*.env*": deny
+    "*.pem": deny
+    "*.key": deny
+    "*secret*": deny
   glob: allow
   edit:
     "*": allow
@@ -18,13 +24,18 @@ permission:
     "*": deny
     "docker build*": allow
     "docker compose*": allow
+    "docker compose push*": deny
+    "docker push*": deny
     "docker ps*": allow
     "docker images*": allow
     "docker logs*": allow
     "kubectl get*": allow
     "kubectl describe*": allow
     "kubectl logs*": allow
-    "kubectl rollout*": allow
+    "kubectl rollout status*": allow
+    "kubectl rollout history*": allow
+    "kubectl rollout restart*": ask
+    "kubectl rollout undo*": ask
     "git diff*": allow
     "git status*": allow
     "git log*": allow
