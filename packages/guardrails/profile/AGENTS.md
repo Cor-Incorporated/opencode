@@ -24,15 +24,15 @@
 ## Testing
 
 - Coverage ≥ 80% (unit + integration + E2E combined)
-- Test levels: Unit = jest/vitest, Integration = curl/httpx, E2E = Playwright/browser only
+- Test levels: Unit = project test runner (`bun test`, vitest, jest), E2E = Playwright/browser only
 - `curl` alone is NOT E2E — E2E requires browser verification
 - TDD cycle: RED → GREEN → IMPROVE → check coverage
 - Test falsifiability: prove the test fails when the bug exists (see `/test`)
 
 ## Quality
 
-- Zero tolerance: fix all errors/warnings immediately — "out of scope" is not an excuse
-- "Done" = implementation + tests + docs updated + user-verified; partial ≠ done
+- Fix errors and warnings introduced by the current change; pre-existing issues outside scope are tracked, not fixed inline
+- "Done" = implementation + tests + docs updated + verified by the smallest relevant check; partial ≠ done
 - Pre-commit: lint, typecheck, and tests must all pass
 - Bug fixes: grep all instances → fix all → re-grep to confirm zero remaining
 - Fact-check: back every claim with CLI output, git diff, or API response; mark estimates as "(unverified)"
