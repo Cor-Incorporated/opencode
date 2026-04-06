@@ -59,9 +59,13 @@ Examples:
     parts.push({ type: "text", text: message })
 
     const session = await opencode.client.session.create()
+    if (!session.data) {
+      console.log("No session available — skipping duplicate check")
+      return
+    }
     const result = await opencode.client.session
       .prompt({
-        path: { id: session.data!.id },
+        path: { id: session.data.id },
         body: {
           agent: "duplicate-pr",
           parts,
