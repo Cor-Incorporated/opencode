@@ -514,7 +514,7 @@ export default async function guardrail(input: {
         const protectedBranch = /^(main|master|develop|dev)$/
         if (/\bgit\s+push\b/i.test(cmd)) {
           // Check explicit branch target
-          const explicitMatch = cmd.match(/\bgit\s+push\s+\S+\s+(?:HEAD:)?(\S+)/i)
+          const explicitMatch = cmd.match(/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+(?:HEAD:)?(\S+)/i)
           if (explicitMatch && protectedBranch.test(explicitMatch[1])) {
             throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
           }
@@ -524,7 +524,7 @@ export default async function guardrail(input: {
             throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
           }
           // Plain `git push` with no branch — check current branch
-          if (!/\bgit\s+push\s+\S+\s+\S+/i.test(cmd)) {
+          if (!/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+\S+/i.test(cmd)) {
             try {
               const result = await git(input.worktree, ["branch", "--show-current"])
               if (result.stdout && protectedBranch.test(result.stdout.trim())) {
