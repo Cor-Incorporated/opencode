@@ -510,6 +510,32 @@ export default async function guardrail(input: {
             throw new Error(text("merge blocked: run /review before merging"))
           }
         }
+        // CI hard block: verify all checks are green before gh pr merge
+        if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+          try {
+            const prMatch = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
+            const prArg = prMatch ? prMatch[1] : ""
+            const proc = Bun.spawn(["gh", "pr", "checks", ...(prArg ? [prArg] : [])], {
+              cwd: input.worktree,
+              stdout: "pipe",
+              stderr: "pipe",
+            })
+            const [ciOut] = await Promise.all([
+              new Response(proc.stdout).text(),
+              new Response(proc.stderr).text(),
+              proc.exited,
+            ])
+            if (proc.exitCode !== 0 || /fail|pending/i.test(ciOut)) {
+              await mark({ last_block: "bash", last_command: cmd, last_reason: "CI checks not all green" })
+              throw new Error(text("merge blocked: CI checks not all green — run `gh pr checks` to verify"))
+            }
+          } catch (e) {
+            if (String(e).includes("blocked")) throw e
+            // gh unavailable or network failure — log so CI skip is observable
+            await mark({ last_block: "bash:ci-warn", last_command: cmd, last_reason: "CI check verification failed" })
+            console.warn("[guardrail] CI check verification failed — gh may be unavailable: " + String(e))
+          }
+        }
         // Direct push to protected branches
         const protectedBranch = /^(main|master|develop|dev)$/
         if (/\bgit\s+push\b/i.test(cmd)) {
@@ -614,9 +640,33 @@ export default async function guardrail(input: {
         }
       }
 
+      // Architecture layer advisory
+      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+        const relFile = rel(input.worktree, file)
+        const content = typeof item.args?.content === "string" ? item.args.content :
+                        typeof item.args?.newString === "string" ? item.args.newString : ""
+        if (content) {
+          const isUI = /^(src\/(ui|components|tui)\/)/i.test(relFile)
+          const isAPI = /^(src\/(api|routes)\/)/i.test(relFile)
+          const importsDB = /from\s+['"].*\/(db|database|model|sql)\//i.test(content)
+          const importsUI = /from\s+['"].*\/(ui|components|tui)\//i.test(content)
+          if (isUI && importsDB) {
+            out.output += "\n⚠️ Architecture: UI layer importing from DB layer directly. Consider using a service/repository layer."
+          }
+          if (isAPI && importsUI) {
+            out.output += "\n⚠️ Architecture: API layer importing from UI layer. This creates a circular dependency risk."
+          }
+        }
+      }
+
       // CI status advisory after push/PR create
       if (item.tool === "bash" && /\b(git\s+push|gh\s+pr\s+create)\b/i.test(str(item.args?.command))) {
         out.output = (out.output || "") + "\n⚠️ Remember to verify CI status: `gh pr checks`"
+      }
+
+      // Post-merge deployment verification advisory
+      if (item.tool === "bash" && /\bgh\s+pr\s+merge\b/i.test(str(item.args?.command))) {
+        out.output = (out.output || "") + "\n🚀 Post-merge: verify deployment status and run smoke tests on the target environment."
       }
 
       if (item.tool === "task") {
