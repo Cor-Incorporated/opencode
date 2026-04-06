@@ -1071,6 +1071,7 @@ export default async function guardrail(input: {
         temperature?: number
         topP?: number
         topK?: number
+        maxOutputTokens?: number | undefined
         options: Record<string, unknown>
       },
     ) => {
