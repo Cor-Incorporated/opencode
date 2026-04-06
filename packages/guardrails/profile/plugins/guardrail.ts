@@ -510,6 +510,19 @@ export default async function guardrail(input: {
             throw new Error(text("merge blocked: run /review before merging"))
           }
         }
+        // Direct push to protected branches — always blocked
+        if (/\bgit\s+push\s+(?:origin\s+)?(main|master|develop|dev)\b/i.test(cmd)) {
+          throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
+        }
+        // CI status advisory on push/PR create
+        if (/\b(git\s+push|gh\s+pr\s+create)\b/i.test(cmd) && !/\b(main|master|develop|dev)\b/i.test(cmd)) {
+          try {
+            const checks = await git(input.worktree, ["rev-parse", "--abbrev-ref", "HEAD"])
+            if (checks) {
+              out.output = (out.output || "") + "\n⚠️ Remember to verify CI status after push: `gh pr checks`"
+            }
+          } catch { /* advisory only — do not block on failure */ }
+        }
         if (!bash(cmd)) return
         if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
@@ -584,6 +597,10 @@ export default async function guardrail(input: {
 
         if (code(file) && nextEditCount > 0 && nextEditCount % 3 === 0) {
           out.output += "\n\n📝 Source code edited (3+ operations). Check if related documentation (README, AGENTS.md, ADRs) needs updating."
+        }
+        // Auto-format reminder after 3+ source edits
+        if (nextEditCount >= 3 && nextEditCount % 3 === 0) {
+          out.output = (out.output || "") + "\n🎨 " + nextEditCount + " source edits — consider running formatter (`prettier --write`, `biome format`, `go fmt`)."
         }
       }
 
