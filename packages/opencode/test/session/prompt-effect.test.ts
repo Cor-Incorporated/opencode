@@ -859,7 +859,8 @@ it.live(
 
         yield* llm.wait(1)
         // Allow the first prompt loop to settle into the held LLM call
-        yield* Effect.sleep(50)
+        // 2vCPU CI runners (ubuntu-latest) need significantly more time than 4vCPU (blacksmith)
+        yield* Effect.sleep(200)
 
         const id = MessageID.ascending()
         const b = yield* prompt
@@ -873,19 +874,19 @@ it.live(
           .pipe(Effect.forkChild)
 
         yield* Effect.promise(async () => {
-          // CI runners need more time for async message persistence
-          const end = Date.now() + 8000
+          // 2vCPU shared runners need generous timeouts for async message persistence
+          const end = Date.now() + 15_000
           while (Date.now() < end) {
             const msgs = await Effect.runPromise(sessions.messages({ sessionID: chat.id }))
             if (msgs.some((msg) => msg.info.role === "user" && msg.info.id === id)) return
-            await new Promise((done) => setTimeout(done, 50))
+            await new Promise((done) => setTimeout(done, 100))
           }
           throw new Error("timed out waiting for second prompt to save")
         })
 
         gate.resolve()
-        // Allow fibers to process the gate resolution
-        yield* Effect.sleep(50)
+        // Allow fibers to fully process the gate resolution on slow CI runners
+        yield* Effect.sleep(500)
 
         const [ea, eb] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
         expect(Exit.isSuccess(ea)).toBe(true)
@@ -906,7 +907,7 @@ it.live(
       }),
       { git: true, config: providerCfg },
     ),
-  10_000,
+  30_000,
 )
 
 it.live(
