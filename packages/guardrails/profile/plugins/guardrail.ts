@@ -609,7 +609,7 @@ export default async function guardrail(input: {
           out.output += "\n\n📝 Source code edited (3+ operations). Check if related documentation (README, AGENTS.md, ADRs) needs updating."
         }
         // Auto-format reminder after 3+ source edits
-        if (nextEditCount >= 3 && nextEditCount % 3 === 0) {
+        if (code(file) && nextEditCount >= 3 && nextEditCount % 3 === 0) {
           out.output = (out.output || "") + "\n🎨 " + nextEditCount + " source edits — consider running formatter (`prettier --write`, `biome format`, `go fmt`)."
         }
       }
