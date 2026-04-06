@@ -20,8 +20,8 @@ Advisory that logs when an agent is running on a model tier that doesn't match i
 ### 2. delegation-budget-gate (tool.execute.before for task)
 Hard block that limits concurrent parallel tasks to `maxParallelTasks` (default 5). Tracks `active_task_count` in state.json, incremented on task start and decremented on task completion.
 
-### 3. cost-tracking (chat.params + tool.execute.after)
-Accumulates `session_cost` from model cost metadata. Logs a warning event when session cost exceeds `maxSessionCost` threshold.
+### 3. cost-tracking (chat.params)
+Counts `llm_call_count` per session and tracks `llm_calls_by_provider` for per-provider cost visibility. Actual cost calculation requires post-call usage data not available at chat.params time.
 
 ### 4. parallel-execution-gate (tool.execute.before for task)
 Integrated with delegation-budget-gate. Prevents unbounded parallel execution that could hit provider rate limits.
