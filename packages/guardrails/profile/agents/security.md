@@ -2,18 +2,17 @@
 description: Security review specialist. OWASP Top 10, secrets detection, auth audit.
 mode: subagent
 permission:
-  "*": deny
-  grep: allow
-  glob: allow
-  list: allow
-  lsp: allow
+  edit:
+    "*": deny
+  write:
+    "*": deny
   bash:
     "*": deny
-    "git log *": allow
-    "git diff *": allow
-    "git show *": allow
-    "git status *": allow
+    "git log*": allow
+    "git diff*": allow
+    "git show*": allow
     "git blame*": allow
+    "git status*": allow
     "ls *": allow
     "pwd": allow
 ---

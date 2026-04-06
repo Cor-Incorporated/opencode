@@ -5,20 +5,20 @@ permission:
   plan_enter: allow
   plan_exit: allow
   question: allow
-  bash:
-    "git log *": allow
-    "git diff *": allow
-    "git show *": allow
-    "git status *": allow
-    "git branch *": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
-    "*": deny
   edit:
     "*": deny
   write:
     "*": deny
+  bash:
+    "*": deny
+    "git log*": allow
+    "git diff*": allow
+    "git show*": allow
+    "git status*": allow
+    "git branch*": allow
+    "ls *": allow
+    "pwd": allow
+    "which *": allow
 ---
 
 You are a planning agent. Your job is to explore the codebase, understand the request, and produce an implementation plan.

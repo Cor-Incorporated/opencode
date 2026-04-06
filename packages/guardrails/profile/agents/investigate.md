@@ -2,19 +2,18 @@
 description: Deep codebase investigation. Read-only, no structured output requirement.
 mode: subagent
 permission:
-  "*": deny
-  grep: allow
-  glob: allow
-  list: allow
-  lsp: allow
+  edit:
+    "*": deny
+  write:
+    "*": deny
   bash:
     "*": deny
-    "git log *": allow
-    "git diff *": allow
-    "git show *": allow
-    "git blame *": allow
-    "git status *": allow
-    "git branch *": allow
+    "git log*": allow
+    "git diff*": allow
+    "git show*": allow
+    "git blame*": allow
+    "git status*": allow
+    "git branch*": allow
     "ls *": allow
     "find *": allow
     "wc *": allow
