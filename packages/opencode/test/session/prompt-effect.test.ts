@@ -871,11 +871,12 @@ it.live(
           .pipe(Effect.forkChild)
 
         yield* Effect.promise(async () => {
-          const end = Date.now() + 5000
+          // CI runners need more time for async message persistence
+          const end = Date.now() + 8000
           while (Date.now() < end) {
             const msgs = await Effect.runPromise(sessions.messages({ sessionID: chat.id }))
             if (msgs.some((msg) => msg.info.role === "user" && msg.info.id === id)) return
-            await new Promise((done) => setTimeout(done, 20))
+            await new Promise((done) => setTimeout(done, 50))
           }
           throw new Error("timed out waiting for second prompt to save")
         })
