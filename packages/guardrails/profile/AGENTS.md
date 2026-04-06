@@ -93,3 +93,8 @@
 | `websocket-engineer` | Real-time communication tasks | WebSocket and Socket.IO specialist for bidirectional protocols, scaling, and reconnection patterns. Write-capable with Node/Bun runtime. |
 | `backend-developer` | Server-side application tasks | Backend specialist for APIs, microservices, auth, caching, and message queues. Write-capable with ask-mode curl. |
 | `sql-pro` | SQL and database schema tasks | SQL specialist for query optimization, schema design, migrations, and cross-platform SQL. Write-capable with no direct DB execution. |
+| `architect` | System design, architecture decisions | Read-only architecture specialist for system design, scalability, and technical decision-making. |
+| `technical-writer` | Documentation, guides, content | Write-capable documentation specialist for README, API docs, ADRs, and tutorials. |
+| `doc-updater` | Codemap and doc maintenance | Write-capable specialist for keeping docs in sync with code changes and updating codemaps. |
+| `e2e-runner` | End-to-end testing, Playwright | Write-capable E2E testing specialist for Playwright test generation, artifact capture, and flaky test management. |
+| `build-error-resolver` | Build failures, type errors | Write-capable build fix specialist. Minimal surgical fixes to get builds green — no refactoring. |
