@@ -440,6 +440,28 @@ export default async function guardrail(input: {
       if (!["session.created", "permission.asked", "session.idle", "session.compacted"].includes(event.type)) return
       await seen(event.type, note(event.properties))
       if (event.type === "session.created") {
+        // [W9] auto-init-permissions: detect project stack on session start
+        const stacks: string[] = []
+        try {
+          const { existsSync } = await import("fs")
+          if (existsSync(path.join(input.worktree, "package.json"))) stacks.push("node")
+          if (existsSync(path.join(input.worktree, "pyproject.toml")) || existsSync(path.join(input.worktree, "requirements.txt"))) stacks.push("python")
+          if (existsSync(path.join(input.worktree, "go.mod"))) stacks.push("go")
+          if (existsSync(path.join(input.worktree, "Dockerfile")) || existsSync(path.join(input.worktree, "terraform"))) stacks.push("infra")
+        } catch { /* fs check may fail */ }
+
+        // [W9] enforce-branch-workflow: check branch on session start
+        let branchWarning = ""
+        try {
+          const branchRes = await git(input.worktree, ["branch", "--show-current"])
+          const currentBranch = branchRes.stdout.trim()
+          if (/^(main|master)$/.test(currentBranch)) {
+            branchWarning = `WARNING: on ${currentBranch} branch. Create a feature branch: git checkout -b feat/<description> develop`
+          } else if (currentBranch === "develop") {
+            branchWarning = `On develop branch. Use feature branch for implementation: git checkout -b feat/<description>`
+          }
+        } catch { /* git may fail */ }
+
         await mark({
           last_session: event.properties?.sessionID,
           last_event: event.type,
@@ -469,7 +491,17 @@ export default async function guardrail(input: {
           last_merge_at: "",
           issue_verification_done: false,
           edits_since_doc_reminder: 0,
+          // [W9] auto-init-permissions: detected stacks
+          detected_stacks: stacks,
+          // [W9] enforce-branch-workflow: branch status
+          branch_warning: branchWarning,
         })
+        if (stacks.length > 0) {
+          await seen("auto_init.stacks_detected", { stacks })
+        }
+        if (branchWarning) {
+          await seen("branch_workflow.warning", { warning: branchWarning })
+        }
       }
       if (event.type === "permission.asked") {
         await mark({
@@ -554,15 +586,49 @@ export default async function guardrail(input: {
         const cmd = typeof out.args?.command === "string" ? out.args.command : ""
         const file = cmd.replaceAll("\\", "/")
         if (!cmd) return
+        // [HIGH-1 fix] Read state once for all bash checks
+        const bashData = await stash(state)
         if (has(file, sec) || file.includes(".opencode/guardrails/")) {
           await mark({ last_block: "bash", last_command: cmd, last_reason: "shell access to protected files" })
           throw new Error(text("shell access to protected files"))
         }
+        // [W9] pre-merge: tier-aware gate + CRITICAL/HIGH block (consolidated)
         if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
-          const data = await stash(state)
-          if (str(data.review_state) !== "done") {
-            await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
-            throw new Error(text("merge blocked: run /review before merging"))
+          // Check CRITICAL/HIGH first (applies to all tiers)
+          const criticalCount = num(bashData.review_critical_count)
+          const highCount = num(bashData.review_high_count)
+          if (criticalCount > 0 || highCount > 0) {
+            const prNum = str(bashData.review_pr_number)
+            await mark({ last_block: "bash", last_command: cmd, last_reason: `unresolved CRITICAL=${criticalCount} HIGH=${highCount}` })
+            throw new Error(text(`merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`))
+          }
+          try {
+            const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            const tier = /^(ci|chore|docs)\//.test(branch) ? "EXEMPT" :
+                         /^fix\//.test(branch) ? "LIGHT" : "FULL"
+            if (tier === "EXEMPT") {
+              await seen("pre_merge.tier", { branch, tier, result: "pass" })
+            } else if (tier === "LIGHT") {
+              // LIGHT: code-reviewer done OR (checks ran AND C/H=0)
+              const codeReviewDone = str(bashData.review_state) === "done"
+              const checksRan = Boolean(str(bashData.review_checks_at))
+              const noSevere = checksRan && criticalCount === 0 && highCount === 0
+              if (!codeReviewDone && !noSevere) {
+                await mark({ last_block: "bash", last_command: cmd, last_reason: "LIGHT tier: review or C/H=0 required" })
+                throw new Error(text("merge blocked (LIGHT tier): run code-reviewer agent OR run `gh pr checks` with CRITICAL=0 HIGH=0"))
+              }
+            } else {
+              if (str(bashData.review_state) !== "done") {
+                await mark({ last_block: "bash", last_command: cmd, last_reason: "FULL tier: review not done" })
+                throw new Error(text("merge blocked (FULL tier): run code-reviewer agent before merging"))
+              }
+            }
+          } catch (e) {
+            if (String(e).includes("blocked")) throw e
+            if (str(bashData.review_state) !== "done") {
+              await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
+              throw new Error(text("merge blocked: run /review before merging"))
+            }
           }
         }
         // CI hard block: verify all checks are green before gh pr merge
@@ -588,7 +654,7 @@ export default async function guardrail(input: {
             if (String(e).includes("blocked")) throw e
             // gh unavailable or network failure — log so CI skip is observable
             await mark({ last_block: "bash:ci-warn", last_command: cmd, last_reason: "CI check verification failed" })
-            console.warn("[guardrail] CI check verification failed — gh may be unavailable: " + String(e))
+            await seen("ci.check_verification_failed", { error: String(e) })
           }
         }
         // Direct push to protected branches
@@ -614,10 +680,46 @@ export default async function guardrail(input: {
             } catch (e) { if (String(e).includes("blocked")) throw e }
           }
         }
+        // [W9] enforce-develop-base: block branch creation from main when develop exists
+        if (/\bgit\s+(checkout\s+-b|switch\s+-c)\b/i.test(cmd)) {
+          try {
+            const devCheck = await git(input.worktree, ["rev-parse", "--verify", "origin/develop"])
+            if (devCheck.stdout.trim()) {
+              const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+              if (/^(main|master)$/.test(branch)) {
+                await mark({ last_block: "bash", last_command: cmd, last_reason: "branch creation from main blocked" })
+                throw new Error(text("branch creation from main blocked: checkout develop first, then create branch"))
+              }
+            }
+          } catch (e) { if (String(e).includes("blocked")) throw e }
+        }
+        // [W9] block-manual-merge-ops: block cherry-pick, arbitrary rebase/merge, branch rename
+        if (/\bgit\s+(cherry-pick)\b/i.test(cmd) && !/--abort\b/i.test(cmd)) {
+          await mark({ last_block: "bash", last_command: cmd, last_reason: "cherry-pick blocked: delegate to Codex CLI" })
+          throw new Error(text("cherry-pick blocked: delegate to Codex CLI for context-heavy merge operations"))
+        }
+        if (/\bgit\s+rebase\b/i.test(cmd) && !/--abort\b/i.test(cmd)) {
+          if (/\bgit\s+rebase\s+(origin\/)?(main|master|develop)\b/i.test(cmd)) {
+            await mark({ rebase_session_active: true, rebase_session_at: new Date().toISOString() })
+          } else if (/\bgit\s+rebase\s+--(continue|skip)\b/i.test(cmd)) {
+            const d = await stash(state)
+            const at = str(d.rebase_session_at)
+            if (!at || Date.now() - new Date(at).getTime() > 3600_000) {
+              await mark({ last_block: "bash", last_command: cmd, last_reason: "rebase --continue/--skip: no active session" })
+              throw new Error(text("rebase --continue/--skip blocked: no active permitted rebase session (1h expiry)"))
+            }
+          } else {
+            await mark({ last_block: "bash", last_command: cmd, last_reason: "arbitrary rebase blocked" })
+            throw new Error(text("arbitrary rebase blocked: only sync from main/master/develop is permitted"))
+          }
+        }
+        if (/\bgit\s+branch\s+(-[mMfF]\b|--move\b|--force\b)/i.test(cmd)) {
+          await mark({ last_block: "bash", last_command: cmd, last_reason: "branch rename/force-move blocked" })
+          throw new Error(text("branch rename/force-move blocked: prevents commit guard bypass"))
+        }
         // Enforce soak time: develop→main merge requires half-day minimum
         if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
-          const data = await stash(state)
-          const lastMerge = str(data.last_merge_at)
+          const lastMerge = str(bashData.last_merge_at)
           if (lastMerge) {
             const elapsed = Date.now() - new Date(lastMerge).getTime()
             const halfDay = 12 * 60 * 60 * 1000
@@ -630,46 +732,93 @@ export default async function guardrail(input: {
         }
         // Enforce follow-up limit: detect 2+ consecutive fix PRs on same feature
         if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
-          const data = await stash(state)
-          const consecutiveFixes = num(data.consecutive_fix_prs)
+          const consecutiveFixes = num(bashData.consecutive_fix_prs)
           if (consecutiveFixes >= 2) {
             await seen("follow_up.limit_reached", { consecutive: consecutiveFixes })
           }
         }
         // Enforce issue close verification: require evidence before gh issue close
         if (/\bgh\s+issue\s+close\b/i.test(cmd)) {
-          const data = await stash(state)
-          if (!flag(data.issue_verification_done)) {
+          if (!flag(bashData.issue_verification_done)) {
             await seen("issue_close.unverified", { command: cmd })
           }
         }
-        // [NEW] audit-docker-build-args: detect secrets in docker build commands
+        // [W9] audit-docker-build-args upgrade: full secret pattern scan + hard block
         if (/\bdocker\s+build\b/i.test(cmd)) {
+          const secretPatterns = [
+            /^(AKIA[A-Z0-9]{16})/,           // AWS access key
+            /^(sk-[a-zA-Z0-9]{20,})/,        // OpenAI/Stripe key
+            /^(ghp_[a-zA-Z0-9]{36})/,        // GitHub PAT
+            /^(gho_[a-zA-Z0-9]{36})/,        // GitHub OAuth
+            /^(ghs_[a-zA-Z0-9]{36})/,        // GitHub App
+            /^(glpat-[a-zA-Z0-9-]{20,})/,    // GitLab PAT
+            /^(xox[bprs]-[a-zA-Z0-9-]+)/,    // Slack token
+            /^(npm_[a-zA-Z0-9]{36})/,        // npm token
+            /BEGIN\s+(RSA|EC|PRIVATE)/,       // Private key header
+          ]
           const buildArgMatches = cmd.matchAll(/--build-arg\s+(\w+)=(\S+)/gi)
           for (const m of buildArgMatches) {
             const argName = m[1].toUpperCase()
             const argValue = m[2]
-            if (/(SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|API_KEY|PRIVATE)/i.test(argName) || /^(sk-|ghp_|gho_|glpat-)/i.test(argValue)) {
-              await mark({ docker_secret_warning: true, docker_secret_arg: m[1] })
+            const nameHit = /(SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|API_KEY|PRIVATE|AUTH)/i.test(argName)
+            const valueHit = secretPatterns.some((p) => p.test(argValue))
+            if (nameHit || valueHit) {
+              await mark({ docker_secret_warning: true, docker_secret_arg: m[1], last_block: "bash", last_reason: "docker secret in build-arg" })
               await seen("docker.secret_in_build_arg", { arg_name: m[1], pattern: "redacted" })
+              throw new Error(text("docker build --build-arg contains secrets: use Docker build secrets (--secret) or multi-stage builds instead"))
             }
           }
         }
-        // [NEW] enforce-review-reading: block merge if review is stale (review.submittedAt < last push)
+        // [W9] enforce-review-reading upgrade: hard block merge if review is stale
         if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
-          const data = await stash(state)
-          const reviewAt = str(data.review_at)
-          const lastPushAt = str(data.last_push_at)
+          const reviewAt = str(bashData.review_at)
+          const lastPushAt = str(bashData.last_push_at)
           if (reviewAt && lastPushAt && new Date(reviewAt) < new Date(lastPushAt)) {
-            await mark({ review_reading_warning: true })
+            await mark({ review_reading_warning: true, last_block: "bash", last_reason: "stale review: push after review" })
             await seen("review_reading.stale", { review_at: reviewAt, last_push_at: lastPushAt })
+            throw new Error(text("merge blocked: code was pushed after the last review. Re-request review before merging."))
           }
         }
-        // [NEW] pr-guard: preflight checks before PR creation
+        // [W9] enforce-deploy-verify-on-pr: require deploy evidence for infra changes
         if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
-          const data = await stash(state)
-          const testRan = flag(data.tests_executed)
-          const typeChecked = flag(data.type_checked)
+          try {
+            const diffRes = await git(input.worktree, ["diff", "--name-only", "origin/develop...HEAD"])
+            const changedFiles = diffRes.stdout.trim()
+            const hasInfra = /^(hooks\/|scripts\/)[^/]+\.sh$/m.test(changedFiles)
+            if (hasInfra) {
+              if (!flag(bashData.deploy_verified)) {
+                await seen("deploy_verify.missing", { files: changedFiles.split("\n").filter((f: string) => /^(hooks|scripts)\//.test(f)) })
+                // Advisory only — not blocking, but strongly recommended
+                await mark({ deploy_verify_warning: true })
+              }
+            }
+          } catch { /* git diff may fail — non-blocking */ }
+        }
+        // [W9] pr-guard upgrade: hard block for missing issue ref + --base main
+        if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+          // Block: --base main when develop exists
+          if (/--base\s+main(\s|$)/i.test(cmd)) {
+            try {
+              const devCheck = await git(input.worktree, ["rev-parse", "--verify", "origin/develop"])
+              if (devCheck.stdout.trim()) {
+                // Allow release PR from develop
+                const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+                if (branch !== "develop" && !/--head\s+develop/i.test(cmd)) {
+                  await mark({ last_block: "bash", last_command: cmd, last_reason: "PR targeting main when develop exists" })
+                  throw new Error(text("PR targeting main blocked: use --base develop. Release PRs must be from develop branch."))
+                }
+              }
+            } catch (e) { if (String(e).includes("blocked")) throw e }
+          }
+          // Advisory: missing issue reference (Closes/Fixes/Resolves #XX)
+          // Note: cmd may not contain --body content (editor-based flow), so advisory not hard block
+          if (!/\b(closes?|fixes?|resolves?)\s*#\d+/i.test(cmd) && !/#\d+/i.test(cmd)) {
+            await mark({ pr_guard_issue_ref_warning: true })
+            await seen("pr_guard.missing_issue_ref", { command: cmd.slice(0, 200) })
+          }
+          // Advisory: preflight checks
+          const testRan = flag(bashData.tests_executed)
+          const typeChecked = flag(bashData.type_checked)
           if (!testRan || !typeChecked) {
             await mark({ pr_guard_warning: true, pr_guard_tests: testRan, pr_guard_types: typeChecked })
             await seen("pr_guard.preflight_incomplete", { tests: testRan, types: typeChecked })
@@ -677,8 +826,7 @@ export default async function guardrail(input: {
         }
         // [NEW] stop-test-gate: block ship/deploy without test verification
         if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd) && !/\bfetch\b/i.test(cmd)) {
-          const data = await stash(state)
-          if (!flag(data.tests_executed) && num(data.edit_count) >= 3) {
+          if (!flag(bashData.tests_executed) && num(bashData.edit_count) >= 3) {
             await mark({ stop_test_warning: true })
             await seen("stop_test_gate.untested", { edit_count: num(data.edit_count) })
           }
@@ -687,6 +835,19 @@ export default async function guardrail(input: {
         if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
         await mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
+      }
+      // [W9] enforce-seed-data-verification: block seed/knowledge file writes without verification
+      if ((item.tool === "write") && file) {
+        const relFile = rel(input.worktree, file)
+        if (/seed_knowledge|knowledge\.(yaml|yml|json)$/i.test(relFile)) {
+          const content = typeof out.args?.content === "string" ? out.args.content : ""
+          if (content && /(電話|phone|営業時間|hours|休[館日]|holiday|料金|price|住所|address)/i.test(content)) {
+            if (!/(verified|検証済|参照元|source:|ref:)/i.test(content)) {
+              await mark({ last_block: "write", last_file: relFile, last_reason: "seed data without verification source" })
+              throw new Error(text("knowledge/seed data write blocked: content contains factual claims without verification source. Add 'verified' or 'source:' comment."))
+            }
+          }
+        }
       }
       // Delegation: parallel execution gate for task tool (Map-based to avoid race conditions)
       if (item.tool === "task") {
@@ -729,6 +890,20 @@ export default async function guardrail(input: {
       const now = new Date().toISOString()
       const file = pick(item.args)
       const data = await stash(state)
+
+      // [HIGH-3 fix] TOCTOU check at START of after-hook (before any mark() calls)
+      try {
+        const prevSha = str(data.state_sha256)
+        if (prevSha) {
+          const { state_sha256: _s, updated_at: _u, ...rest } = data
+          const hasher = new Bun.CryptoHasher("sha256")
+          hasher.update(JSON.stringify(rest))
+          const actualSha = hasher.digest("hex")
+          if (prevSha !== actualSha) {
+            await seen("state_integrity.toctou_detected", { expected: prevSha, actual: actualSha })
+          }
+        }
+      } catch { /* hash check is best-effort */ }
 
       if (item.tool === "read" && file) {
         if (code(file)) {
@@ -816,6 +991,23 @@ export default async function guardrail(input: {
         }
       }
 
+      // [W9] inject-claude-review-on-checks: track review severity from gh pr checks output
+      if (item.tool === "bash" && /\bgh\s+pr\s+checks\b/i.test(str(item.args?.command))) {
+        // Parse gh pr checks output for review comment severity hints
+        const checksOutput = out.output || ""
+        const criticalMatches = checksOutput.match(/CRITICAL[=:]?\s*(\d+)/i)
+        const highMatches = checksOutput.match(/HIGH[=:]?\s*(\d+)/i)
+        const prNumMatch = str(item.args?.command).match(/\bgh\s+pr\s+checks\s+(\d+)/i)
+        if (criticalMatches || highMatches || prNumMatch) {
+          await mark({
+            review_critical_count: criticalMatches ? parseInt(criticalMatches[1]) : 0,
+            review_high_count: highMatches ? parseInt(highMatches[1]) : 0,
+            review_pr_number: prNumMatch ? prNumMatch[1] : "",
+            review_checks_at: now,
+          })
+        }
+      }
+
       // CI status advisory after push/PR create
       if (item.tool === "bash" && /\b(git\s+push|gh\s+pr\s+create)\b/i.test(str(item.args?.command))) {
         out.output = (out.output || "") + "\n⚠️ Remember to verify CI status: `gh pr checks`"
@@ -824,6 +1016,32 @@ export default async function guardrail(input: {
       // Post-merge deployment verification advisory
       if (item.tool === "bash" && /\bgh\s+pr\s+merge\b/i.test(str(item.args?.command))) {
         out.output = (out.output || "") + "\n🚀 Post-merge: verify deployment status and run smoke tests on the target environment."
+        // [W9] enforce-post-merge-validation: detect high-risk changes in merged PR
+        try {
+          const prMatch = str(item.args?.command).match(/\bgh\s+pr\s+merge\s+(\d+)/i)
+          if (prMatch) {
+            const prNum = prMatch[1]
+            const repoRes = await git(input.worktree, ["remote", "get-url", "origin"])
+            const repo = repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "")
+            if (repo) {
+              const proc = Bun.spawn(["gh", "api", `repos/${repo}/pulls/${prNum}/files`, "--jq", ".[].filename"], {
+                cwd: input.worktree, stdout: "pipe", stderr: "pipe",
+              })
+              const [filesOut] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+              const files = filesOut.trim()
+              const risks: string[] = []
+              if (/^terraform\/|\.tf$/m.test(files)) risks.push("Terraform")
+              if (/migration|migrate|\.sql$/im.test(files)) risks.push("Migration/DDL")
+              if (/^\.github\/workflows\//m.test(files)) risks.push("GitHub Actions")
+              if (/Dockerfile|docker-compose|cloudbuild/im.test(files)) risks.push("Docker/Cloud Build")
+              if (/deploy|release/im.test(files)) risks.push("Deploy/Release")
+              if (risks.length > 0) {
+                out.output += "\n\n⚠️ [POST-MERGE VALIDATION] High-risk changes detected: " + risks.join(", ") + ".\nChecklist: HTTP 200, HTTPS, no errors in logs, migration rollback plan, Terraform plan attached, Docker --platform linux/amd64."
+                await seen("post_merge.validation_required", { pr: prNum, risks })
+              }
+            }
+          }
+        } catch { /* gh api may fail — non-blocking */ }
       }
 
       if (item.tool === "task") {
@@ -897,11 +1115,38 @@ export default async function guardrail(input: {
         }
       }
 
+      // [W9] workflow-sync-guard: warn when workflow files differ from main after push
+      if (item.tool === "bash" && /\bgit\s+push\b/i.test(str(item.args?.command))) {
+        try {
+          const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+          if (branch && !/^(main|master)$/.test(branch)) {
+            const wfDiff = await git(input.worktree, ["diff", "--name-only", "main..HEAD", "--", ".github/workflows/"])
+            const wfFiles = wfDiff.stdout.trim()
+            if (wfFiles) {
+              out.output += "\n\n⚠️ [WORKFLOW SYNC] .github/workflows/ files differ from main:\n" +
+                wfFiles.split("\n").map((f: string) => "  - " + f).join("\n") +
+                "\nOIDC validation requires workflow files to match the default branch. Create a chore PR to sync."
+              await seen("workflow_sync.diverged", { branch, files: wfFiles.split("\n") })
+            }
+          }
+        } catch { /* git may fail — non-blocking */ }
+      }
+
       // Memory update reminder after git commit
       if (item.tool === "bash" && /\bgit\s+commit\b/i.test(str(item.args?.command))) {
         const editCount = num(data.edit_count)
         if (editCount >= 5) {
           out.output = (out.output || "") + "\n🧠 Significant changes committed (" + editCount + " edits). Consider updating memory with key decisions or learnings."
+        }
+      }
+
+      // [W9] post-pr-create-review-trigger: suggest review after PR creation
+      if (item.tool === "bash" && /\bgh\s+pr\s+create\b/i.test(str(item.args?.command))) {
+        const prUrl = (out.output || "").match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/)?.[1]
+        if (prUrl) {
+          await mark({ review_pending: true, review_pending_pr: prUrl })
+          out.output += "\n\n📋 [AUTO-REVIEW REQUIRED] PR #" + prUrl + " created. Run code-reviewer agent and address all CRITICAL/HIGH findings before merging."
+          await seen("post_pr_create.review_trigger", { pr: prUrl })
         }
       }
 
@@ -1011,6 +1256,15 @@ export default async function guardrail(input: {
         }
       }
 
+      // [W9] enforce-deploy-verify-on-pr: surface deploy verification warning
+      if (item.tool === "bash" && /\bgh\s+pr\s+create\b/i.test(str(item.args?.command))) {
+        const freshData = await stash(state)
+        if (flag(freshData.deploy_verify_warning)) {
+          out.output = (out.output || "") + "\n🚀 Deploy verification: changed hooks/scripts detected but not yet deployed. Run setup.sh and verify firing before merging."
+          await mark({ deploy_verify_warning: false })
+        }
+      }
+
       // [NEW] stop-test-gate: surface untested push/merge warning
       if (item.tool === "bash" && /\b(git\s+push|gh\s+pr\s+merge)\b/i.test(str(item.args?.command))) {
         const freshData = await stash(state)
@@ -1020,12 +1274,17 @@ export default async function guardrail(input: {
         }
       }
 
-      // [NEW] verify-state-file-integrity: check state.json on every after hook
+      // [W9] verify-state-file-integrity: update SHA-256 at end of hook cycle
       try {
-        const stateData = await stash(state)
-        if (!stateData || typeof stateData !== "object") {
-          await seen("state_integrity.corrupted", { reason: "non-object state" })
-          await mark({ last_event: "state_integrity_repair", repaired_at: now })
+        const finalData = await stash(state)
+        if (finalData && typeof finalData === "object" && !Array.isArray(finalData)) {
+          const { state_sha256: _s, updated_at: _u, ...rest } = finalData
+          const hasher = new Bun.CryptoHasher("sha256")
+          hasher.update(JSON.stringify(rest))
+          await save(state, { ...finalData, state_sha256: hasher.digest("hex"), updated_at: now })
+        } else {
+          await seen("state_integrity.corrupted", { reason: Array.isArray(finalData) ? "array" : "non-object" })
+          await save(state, { mode, repaired_at: now, repair_reason: "corrupted state repaired" })
         }
       } catch {
         await seen("state_integrity.parse_error", { file: state })
