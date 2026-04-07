@@ -586,55 +586,49 @@ export default async function guardrail(input: {
         const cmd = typeof out.args?.command === "string" ? out.args.command : ""
         const file = cmd.replaceAll("\\", "/")
         if (!cmd) return
+        // [HIGH-1 fix] Read state once for all bash checks
+        const bashData = await stash(state)
         if (has(file, sec) || file.includes(".opencode/guardrails/")) {
           await mark({ last_block: "bash", last_command: cmd, last_reason: "shell access to protected files" })
           throw new Error(text("shell access to protected files"))
         }
-        // [W9] pre-merge: tier-aware merge gate (EXEMPT/LIGHT/FULL)
+        // [W9] pre-merge: tier-aware gate + CRITICAL/HIGH block (consolidated)
         if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
-          const d = await stash(state)
+          // Check CRITICAL/HIGH first (applies to all tiers)
+          const criticalCount = num(bashData.review_critical_count)
+          const highCount = num(bashData.review_high_count)
+          if (criticalCount > 0 || highCount > 0) {
+            const prNum = str(bashData.review_pr_number)
+            await mark({ last_block: "bash", last_command: cmd, last_reason: `unresolved CRITICAL=${criticalCount} HIGH=${highCount}` })
+            throw new Error(text(`merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`))
+          }
           try {
             const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
-            // Tier classification: EXEMPT (ci/*, chore/*, docs/*), LIGHT (fix/*), FULL (feat/*, refactor/*)
             const tier = /^(ci|chore|docs)\//.test(branch) ? "EXEMPT" :
                          /^fix\//.test(branch) ? "LIGHT" : "FULL"
             if (tier === "EXEMPT") {
-              // EXEMPT: CI green only (already checked by CI hard block above)
               await seen("pre_merge.tier", { branch, tier, result: "pass" })
             } else if (tier === "LIGHT") {
-              // LIGHT: 2-pass OR (code-reviewer done OR review checks with C/H=0)
-              const codeReviewDone = str(d.review_state) === "done"
-              const checksRan = Boolean(str(d.review_checks_at))
-              const noSevere = checksRan && num(d.review_critical_count) === 0 && num(d.review_high_count) === 0
+              // LIGHT: code-reviewer done OR (checks ran AND C/H=0)
+              const codeReviewDone = str(bashData.review_state) === "done"
+              const checksRan = Boolean(str(bashData.review_checks_at))
+              const noSevere = checksRan && criticalCount === 0 && highCount === 0
               if (!codeReviewDone && !noSevere) {
                 await mark({ last_block: "bash", last_command: cmd, last_reason: "LIGHT tier: review or C/H=0 required" })
                 throw new Error(text("merge blocked (LIGHT tier): run code-reviewer agent OR run `gh pr checks` with CRITICAL=0 HIGH=0"))
               }
             } else {
-              // FULL: code-reviewer AND review state done
-              if (str(d.review_state) !== "done") {
+              if (str(bashData.review_state) !== "done") {
                 await mark({ last_block: "bash", last_command: cmd, last_reason: "FULL tier: review not done" })
                 throw new Error(text("merge blocked (FULL tier): run code-reviewer agent before merging"))
               }
             }
           } catch (e) {
             if (String(e).includes("blocked")) throw e
-            // Fallback: original check
-            if (str(d.review_state) !== "done") {
+            if (str(bashData.review_state) !== "done") {
               await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
               throw new Error(text("merge blocked: run /review before merging"))
             }
-          }
-        }
-        // [W9] inject-claude-review-on-checks: hard block merge if CRITICAL/HIGH > 0
-        if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
-          const reviewData = await stash(state)
-          const criticalCount = num(reviewData.review_critical_count)
-          const highCount = num(reviewData.review_high_count)
-          if (criticalCount > 0 || highCount > 0) {
-            const prNum = str(reviewData.review_pr_number)
-            await mark({ last_block: "bash", last_command: cmd, last_reason: `unresolved CRITICAL=${criticalCount} HIGH=${highCount}` })
-            throw new Error(text(`merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`))
           }
         }
         // CI hard block: verify all checks are green before gh pr merge
@@ -660,7 +654,7 @@ export default async function guardrail(input: {
             if (String(e).includes("blocked")) throw e
             // gh unavailable or network failure — log so CI skip is observable
             await mark({ last_block: "bash:ci-warn", last_command: cmd, last_reason: "CI check verification failed" })
-            console.warn("[guardrail] CI check verification failed — gh may be unavailable: " + String(e))
+            await seen("ci.check_verification_failed", { error: String(e) })
           }
         }
         // Direct push to protected branches
@@ -725,8 +719,7 @@ export default async function guardrail(input: {
         }
         // Enforce soak time: develop→main merge requires half-day minimum
         if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
-          const data = await stash(state)
-          const lastMerge = str(data.last_merge_at)
+          const lastMerge = str(bashData.last_merge_at)
           if (lastMerge) {
             const elapsed = Date.now() - new Date(lastMerge).getTime()
             const halfDay = 12 * 60 * 60 * 1000
@@ -739,16 +732,14 @@ export default async function guardrail(input: {
         }
         // Enforce follow-up limit: detect 2+ consecutive fix PRs on same feature
         if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
-          const data = await stash(state)
-          const consecutiveFixes = num(data.consecutive_fix_prs)
+          const consecutiveFixes = num(bashData.consecutive_fix_prs)
           if (consecutiveFixes >= 2) {
             await seen("follow_up.limit_reached", { consecutive: consecutiveFixes })
           }
         }
         // Enforce issue close verification: require evidence before gh issue close
         if (/\bgh\s+issue\s+close\b/i.test(cmd)) {
-          const data = await stash(state)
-          if (!flag(data.issue_verification_done)) {
+          if (!flag(bashData.issue_verification_done)) {
             await seen("issue_close.unverified", { command: cmd })
           }
         }
@@ -780,9 +771,8 @@ export default async function guardrail(input: {
         }
         // [W9] enforce-review-reading upgrade: hard block merge if review is stale
         if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
-          const d = await stash(state)
-          const reviewAt = str(d.review_at)
-          const lastPushAt = str(d.last_push_at)
+          const reviewAt = str(bashData.review_at)
+          const lastPushAt = str(bashData.last_push_at)
           if (reviewAt && lastPushAt && new Date(reviewAt) < new Date(lastPushAt)) {
             await mark({ review_reading_warning: true, last_block: "bash", last_reason: "stale review: push after review" })
             await seen("review_reading.stale", { review_at: reviewAt, last_push_at: lastPushAt })
@@ -796,8 +786,7 @@ export default async function guardrail(input: {
             const changedFiles = diffRes.stdout.trim()
             const hasInfra = /^(hooks\/|scripts\/)[^/]+\.sh$/m.test(changedFiles)
             if (hasInfra) {
-              const d = await stash(state)
-              if (!flag(d.deploy_verified)) {
+              if (!flag(bashData.deploy_verified)) {
                 await seen("deploy_verify.missing", { files: changedFiles.split("\n").filter((f: string) => /^(hooks|scripts)\//.test(f)) })
                 // Advisory only — not blocking, but strongly recommended
                 await mark({ deploy_verify_warning: true })
@@ -828,9 +817,8 @@ export default async function guardrail(input: {
             await seen("pr_guard.missing_issue_ref", { command: cmd.slice(0, 200) })
           }
           // Advisory: preflight checks
-          const data = await stash(state)
-          const testRan = flag(data.tests_executed)
-          const typeChecked = flag(data.type_checked)
+          const testRan = flag(bashData.tests_executed)
+          const typeChecked = flag(bashData.type_checked)
           if (!testRan || !typeChecked) {
             await mark({ pr_guard_warning: true, pr_guard_tests: testRan, pr_guard_types: typeChecked })
             await seen("pr_guard.preflight_incomplete", { tests: testRan, types: typeChecked })
@@ -838,8 +826,7 @@ export default async function guardrail(input: {
         }
         // [NEW] stop-test-gate: block ship/deploy without test verification
         if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd) && !/\bfetch\b/i.test(cmd)) {
-          const data = await stash(state)
-          if (!flag(data.tests_executed) && num(data.edit_count) >= 3) {
+          if (!flag(bashData.tests_executed) && num(bashData.edit_count) >= 3) {
             await mark({ stop_test_warning: true })
             await seen("stop_test_gate.untested", { edit_count: num(data.edit_count) })
           }
@@ -903,6 +890,20 @@ export default async function guardrail(input: {
       const now = new Date().toISOString()
       const file = pick(item.args)
       const data = await stash(state)
+
+      // [HIGH-3 fix] TOCTOU check at START of after-hook (before any mark() calls)
+      try {
+        const prevSha = str(data.state_sha256)
+        if (prevSha) {
+          const { state_sha256: _s, updated_at: _u, ...rest } = data
+          const hasher = new Bun.CryptoHasher("sha256")
+          hasher.update(JSON.stringify(rest))
+          const actualSha = hasher.digest("hex")
+          if (prevSha !== actualSha) {
+            await seen("state_integrity.toctou_detected", { expected: prevSha, actual: actualSha })
+          }
+        }
+      } catch { /* hash check is best-effort */ }
 
       if (item.tool === "read" && file) {
         if (code(file)) {
@@ -1273,30 +1274,17 @@ export default async function guardrail(input: {
         }
       }
 
-      // [W9] verify-state-file-integrity upgrade: SHA-256 checksumming + TOCTOU detection
+      // [W9] verify-state-file-integrity: update SHA-256 at end of hook cycle
       try {
-        const stateContent = await Bun.file(state).text().catch(() => "")
-        if (stateContent) {
-          const stateData = JSON.parse(stateContent) as Record<string, unknown>
-          if (!stateData || typeof stateData !== "object" || Array.isArray(stateData)) {
-            await seen("state_integrity.corrupted", { reason: Array.isArray(stateData) ? "array state" : "non-object state" })
-            await save(state, { mode, repaired_at: now, repair_reason: "corrupted state repaired" })
-          } else {
-            // Compute SHA-256 of current state (excluding volatile fields)
-            const { state_sha256: _prev, updated_at: _ua, ...rest } = stateData
-            const contentForHash = JSON.stringify(rest)
-            const hasher = new Bun.CryptoHasher("sha256")
-            hasher.update(contentForHash)
-            const currentSha = hasher.digest("hex")
-            const prevSha = str(_prev)
-            // TOCTOU: if previous SHA exists and doesn't match, external modification detected
-            if (prevSha && prevSha !== currentSha) {
-              await seen("state_integrity.toctou_detected", { expected: prevSha, actual: currentSha })
-            }
-            // Write SHA and timestamp atomically
-            const finalState = { ...stateData, state_sha256: currentSha, updated_at: now }
-            await save(state, finalState)
-          }
+        const finalData = await stash(state)
+        if (finalData && typeof finalData === "object" && !Array.isArray(finalData)) {
+          const { state_sha256: _s, updated_at: _u, ...rest } = finalData
+          const hasher = new Bun.CryptoHasher("sha256")
+          hasher.update(JSON.stringify(rest))
+          await save(state, { ...finalData, state_sha256: hasher.digest("hex"), updated_at: now })
+        } else {
+          await seen("state_integrity.corrupted", { reason: Array.isArray(finalData) ? "array" : "non-object" })
+          await save(state, { mode, repaired_at: now, repair_reason: "corrupted state repaired" })
         }
       } catch {
         await seen("state_integrity.parse_error", { file: state })
