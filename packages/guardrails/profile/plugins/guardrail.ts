@@ -160,12 +160,12 @@ async function git(dir: string, args: string[]) {
     stdout: "pipe",
     stderr: "pipe",
   })
-  const [stdout, stderr] = await Promise.all([
+  const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ])
-  return { stdout, stderr }
+  return { stdout, stderr, code }
 }
 
 function free(data: {
@@ -549,8 +549,11 @@ export default async function guardrail(input: {
       if (flag(data.git_freshness_checked)) return
       await mark({ git_freshness_checked: true })
       try {
-        const fetchCheck = await git(input.worktree, ["fetch", "--dry-run"])
-        if (fetchCheck.stdout.trim() || fetchCheck.stderr.includes("From")) {
+        const fetchResult = await Promise.race([
+          git(input.worktree, ["fetch", "--dry-run"]),
+          Bun.sleep(5000).then(() => null),
+        ])
+        if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
           out.parts.push({
             id: crypto.randomUUID(),
             sessionID: out.message.sessionID,
@@ -630,7 +633,7 @@ export default async function guardrail(input: {
           throw new Error(text("shell access to protected files"))
         }
         // [W9] pre-merge: tier-aware gate + CRITICAL/HIGH block (consolidated)
-        if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
+        if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
           // Check CRITICAL/HIGH first (applies to all tiers)
           const criticalCount = num(bashData.review_critical_count)
           const highCount = num(bashData.review_high_count)
@@ -791,7 +794,7 @@ export default async function guardrail(input: {
           throw new Error(text("branch rename/force-move blocked: prevents commit guard bypass"))
         }
         // Enforce soak time: develop→main merge requires half-day minimum
-        if (/\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(cmd)) {
+        if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
           const lastMerge = str(bashData.last_merge_at)
           if (lastMerge) {
             const elapsed = Date.now() - new Date(lastMerge).getTime()
@@ -1017,9 +1020,16 @@ export default async function guardrail(input: {
             edit_count_since_check: 0,
           })
         }
+        // Reset review_state on mutating bash commands (sed -i, redirects, etc.)
+        if (bash(cmd)) {
+          await mark({
+            edits_since_review: num(data.edits_since_review) + 1,
+            review_state: "",
+          })
+        }
       }
 
-      if ((item.tool === "edit" || item.tool === "write") && file) {
+      if ((item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") && file) {
         const seen = list(data.edited_files)
         const next = seen.includes(rel(input.worktree, file)) ? seen : [...seen, rel(input.worktree, file)]
         const nextEditCount = num(data.edit_count) + 1
@@ -1032,7 +1042,7 @@ export default async function guardrail(input: {
           review_state: "",
         })
 
-        if (/\.(test|spec)\.(ts|tsx|js|jsx)$|^test_.*\.py$|_test\.go$/.test(rel(input.worktree, file))) {
+        if (/\.(test|spec)\.(ts|tsx|js|jsx)$|(^|\/)test_.*\.py$|_test\.go$/.test(rel(input.worktree, file))) {
           out.output += "\n\n🧪 Test file modified. Verify this test actually FAILS without the fix (test falsifiability)."
         }
 
@@ -1191,7 +1201,7 @@ export default async function guardrail(input: {
         }
       }
       // Soak time advisory: surface warning set during tool.execute.before
-      if (item.tool === "bash" && /\b(git\s+merge|gh\s+pr\s+merge)\b/i.test(str(item.args?.command))) {
+      if (item.tool === "bash" && (/\bgit\s+merge(\s|$)/i.test(str(item.args?.command)) || /\bgh\s+pr\s+merge(\s|$)/i.test(str(item.args?.command)))) {
         const freshData = await stash(state)
         if (flag(freshData.soak_time_warning)) {
           const hours = num(freshData.soak_time_elapsed_h)

@@ -1119,6 +1119,681 @@ test("guardrail plugin loads from profile config and fires session.created", asy
   })
 }, 15000)
 
+test("merge gate regex does not block git merge-base or read-only merge commands", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_merge_regex" },
+          },
+        } as any)
+
+        // git merge-base should NOT be blocked (read-only)
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_merge_regex", callID: "call_merge_base" },
+            { args: { command: "git merge-base main HEAD" } },
+          ),
+        ).resolves.toBeDefined()
+
+        // git merge (actual merge) should be blocked when review not done
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_merge_regex", callID: "call_merge" },
+            { args: { command: "git merge develop" } },
+          ),
+        ).rejects.toThrow("blocked")
+      },
+    })
+  })
+})
+
+test("review_state resets on apply_patch and mutating bash", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_review_reset" },
+          },
+        } as any)
+
+        // Set review to done via task
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "task", sessionID: "session_review_reset", callID: "call_review_set", args: { command: "review", subagent_type: "review" } },
+          { title: "review", output: "Review done with sufficient output content", metadata: {} },
+        )
+        let state = await Bun.file(files.state).json()
+        expect(state.review_state).toBe("done")
+
+        // apply_patch should reset review_state
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "apply_patch", sessionID: "session_review_reset", callID: "call_apply_patch", args: { filePath: path.join(tmp.path, "src", "app.ts"), content: "patch" } },
+          { title: "apply_patch", output: "", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.review_state).toBe("")
+        expect(state.edits_since_review).toBe(1)
+
+        // Set review back to done
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "task", sessionID: "session_review_reset", callID: "call_review_set2", args: { command: "review", subagent_type: "review" } },
+          { title: "review", output: "Review done with sufficient output content", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.review_state).toBe("done")
+
+        // mutating bash (sed -i) should reset review_state
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "bash", sessionID: "session_review_reset", callID: "call_sed", args: { command: "sed -i 's/old/new/' src/app.ts" } },
+          { title: "bash", output: "", metadata: { exitCode: 0 } },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.review_state).toBe("")
+        expect(state.edits_since_review).toBeGreaterThanOrEqual(1)
+      },
+    })
+  })
+})
+
+test("python test file detector matches subdirectory paths", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "tests"), { recursive: true })
+        await Bun.write(path.join(dir, "tests", "test_auth.py"), "def test_login(): pass\n")
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_py_test" },
+          },
+        } as any)
+
+        const out = { title: "write", output: "", metadata: {} }
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "write", sessionID: "session_py_test", callID: "call_py_test", args: { filePath: path.join(tmp.path, "tests", "test_auth.py"), content: "def test_login(): assert True\n" } },
+          out,
+        )
+        expect(out.output).toContain("Test file modified")
+        expect(out.output).toContain("test falsifiability")
+      },
+    })
+  })
+})
+
+test("factcheck state machine transitions correctly across sources", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "docs"), { recursive: true })
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "docs", "arch.md"), "# Arch\n")
+        await Bun.write(path.join(dir, "src", "a.ts"), "export const a = 1\n")
+        await Bun.write(path.join(dir, "src", "b.ts"), "export const b = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_factcheck" },
+          },
+        } as any)
+
+        // 1. Initial state: not factchecked
+        let state = await Bun.file(files.state).json()
+        expect(state.factchecked).toBe(false)
+
+        // 2. DocRead sets factchecked
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "read", sessionID: "session_factcheck", callID: "call_doc", args: { filePath: path.join(tmp.path, "docs", "arch.md") } },
+          { title: "read", output: "", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.factchecked).toBe(true)
+        expect(state.factcheck_source).toBe("DocRead")
+        expect(state.edit_count_since_check).toBe(0)
+
+        // 3. Edit increments edit_count_since_check
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "edit", sessionID: "session_factcheck", callID: "call_edit1", args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "export const a = 1", newString: "export const a = 2" } },
+          { title: "edit", output: "", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.factchecked).toBe(true)
+        expect(state.edit_count_since_check).toBe(1)
+
+        // 4. WebFetch resets edit_count_since_check
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "webfetch", sessionID: "session_factcheck", callID: "call_web", args: {} },
+          { title: "webfetch", output: "", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.factchecked).toBe(true)
+        expect(state.factcheck_source).toBe("WebFetch")
+        expect(state.edit_count_since_check).toBe(0)
+
+        // 5. Multiple edits make factcheck stale
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "edit", sessionID: "session_factcheck", callID: "call_edit2", args: { filePath: path.join(tmp.path, "src", "b.ts"), oldString: "export const b = 1", newString: "export const b = 2" } },
+          { title: "edit", output: "", metadata: {} },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.edit_count_since_check).toBe(1)
+
+        // 6. CLI command (gcloud) also resets factcheck
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "bash", sessionID: "session_factcheck", callID: "call_cli", args: { command: "gcloud compute instances list" } },
+          { title: "bash", output: "", metadata: { exitCode: 0 } },
+        )
+        state = await Bun.file(files.state).json()
+        expect(state.factcheck_source).toBe("CLI")
+        expect(state.edit_count_since_check).toBe(0)
+      },
+    })
+  })
+})
+
+test("bash mutation detection blocks protected config files", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_bash_mut" },
+          },
+        } as any)
+
+        // sed -i on eslint config (with path prefix) should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_bash_mut", callID: "call_sed_eslint" },
+            { args: { command: "sed -i 's/warn/off/' ./eslint.config.js" } },
+          ),
+        ).rejects.toThrow("protected runtime or config mutation")
+
+        // sed -i on biome.json (with path prefix) should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_bash_mut", callID: "call_sed_biome" },
+            { args: { command: "sed -i 's/warn/off/' ./biome.json" } },
+          ),
+        ).rejects.toThrow("protected runtime or config mutation")
+
+        // cat (read-only) on eslint config should pass (not mutating)
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_bash_mut", callID: "call_cat_eslint" },
+            { args: { command: "cat eslint.config.js" } },
+          ),
+        ).resolves.toBeDefined()
+
+        // any shell access to .opencode/guardrails/ should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_bash_mut", callID: "call_guardrail_state" },
+            { args: { command: "echo test > .opencode/guardrails/state.json" } },
+          ),
+        ).rejects.toThrow("shell access to protected files")
+      },
+    })
+  })
+})
+
+test("security patterns block secret material across tools", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // .pem file read
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_sec", callID: "call_pem" },
+            { args: { filePath: path.join(tmp.path, "certs", "server.pem") } },
+          ),
+        ).rejects.toThrow("secret material")
+
+        // id_rsa read
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_sec", callID: "call_rsa" },
+            { args: { filePath: path.join(tmp.path, ".ssh", "id_rsa") } },
+          ),
+        ).rejects.toThrow("secret material")
+
+        // credentials.json read
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_sec", callID: "call_creds" },
+            { args: { filePath: path.join(tmp.path, "credentials.json") } },
+          ),
+        ).rejects.toThrow("secret material")
+
+        // .env.local read
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_sec", callID: "call_env_local" },
+            { args: { filePath: path.join(tmp.path, ".env.local") } },
+          ),
+        ).rejects.toThrow("secret material")
+
+        // id_ed25519 read
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_sec", callID: "call_ed25519" },
+            { args: { filePath: path.join(tmp.path, ".ssh", "id_ed25519") } },
+          ),
+        ).rejects.toThrow("secret material")
+
+        // Normal file should pass
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "read", sessionID: "session_sec", callID: "call_normal" },
+            { args: { filePath: path.join(tmp.path, "src", "index.ts") } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("git fetch timeout does not block chat.message on slow networks", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_fetch_timeout" },
+          },
+        } as any)
+
+        // chat.message should complete even if git fetch fails
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text: "Hello" },
+        ]
+        const start = Date.now()
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_fetch_timeout" },
+          {
+            message: { id: "msg_timeout", sessionID: "session_fetch_timeout", role: "user" },
+            parts,
+          },
+        )
+        const elapsed = Date.now() - start
+        // Should not take more than 10 seconds (timeout is 5s + overhead)
+        expect(elapsed).toBeLessThan(10000)
+      },
+    })
+  })
+})
+
+test("version baseline regression blocks downgrades but allows upgrades", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "package.json"), JSON.stringify({ version: "2.0.0" }, null, 2))
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Downgrade should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_ver", callID: "call_down" },
+            { args: { filePath: path.join(tmp.path, "package.json"), oldString: '"version": "2.0.0"', newString: '"version": "1.9.0"' } },
+          ),
+        ).rejects.toThrow("version baseline regression")
+
+        // Upgrade should pass
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_ver", callID: "call_up" },
+            { args: { filePath: path.join(tmp.path, "package.json"), oldString: '"version": "2.0.0"', newString: '"version": "2.1.0"' } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("docker build-arg secret detection blocks leaked credentials", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const hook = (await Plugin.list()).find((item) => typeof item.event === "function")
+        await hook?.event?.({
+          event: {
+            type: "session.created",
+            properties: { sessionID: "session_docker" },
+          },
+        } as any)
+
+        // AWS key in build-arg should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_docker", callID: "call_docker_aws" },
+            { args: { command: "docker build --build-arg AWS_SECRET_KEY=AKIAIOSFODNN7EXAMPLE ." } },
+          ),
+        ).rejects.toThrow("docker build --build-arg contains secrets")
+
+        // Safe build-arg should pass
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_docker", callID: "call_docker_safe" },
+            { args: { command: "docker build --build-arg NODE_ENV=production ." } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("protected branch push detection blocks direct push to main/develop", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Explicit push to main should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_branch", callID: "call_push_main" },
+            { args: { command: "git push origin main" } },
+          ),
+        ).rejects.toThrow("protected branch blocked")
+
+        // Push with HEAD: refspec should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_branch", callID: "call_push_head" },
+            { args: { command: "git push origin HEAD:main" } },
+          ),
+        ).rejects.toThrow("protected branch blocked")
+      },
+    })
+  })
+})
+
+test("team plugin skips parallel enforcement for read-only investigation requests", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Read-only investigation request should NOT trigger parallel enforcement
+        const readOnlyText =
+          "Investigate the following issues across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Check which modules import the deprecated API\n" +
+          "- 2. Analyze the dependency graph between packages\n" +
+          "- 3. Report which tests cover the shared module\n" +
+          "- 4. Show the current state of the CI pipeline\n" +
+          "This spans multiple packages for a thorough analysis."
+
+        const readParts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text: readOnlyText },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_team_readonly", agent: "implement" },
+          {
+            message: { id: "msg_readonly", sessionID: "session_team_readonly", role: "user" },
+            parts: readParts,
+          },
+        )
+
+        // No parallel enforcement injection for read-only requests
+        const parallelInjected = readParts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+        )
+        expect(parallelInjected).toBeUndefined()
+
+        // Edits should NOT be blocked (no need gate set)
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_readonly", callID: "call_readonly_edit" },
+            { args: { filePath: path.join(tmp.path, "src", "index.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("team plugin enforces parallel policy for implementation requests", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Implementation request SHOULD trigger parallel enforcement
+        const implText =
+          "Implement the following features across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Add a new authentication middleware\n" +
+          "- 2. Create database migration scripts\n" +
+          "- 3. Build the user registration endpoint\n" +
+          "- 4. Add integration tests for the flow\n" +
+          "This is a large implementation plan."
+
+        const implParts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text: implText },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_team_impl", agent: "implement" },
+          {
+            message: { id: "msg_impl", sessionID: "session_team_impl", role: "user" },
+            parts: implParts,
+          },
+        )
+
+        const parallelInjected = implParts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+        )
+        expect(parallelInjected).toBeDefined()
+
+        // Direct edit should be blocked
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_impl", callID: "call_impl_edit" },
+            { args: { filePath: path.join(tmp.path, "src", "index.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).rejects.toThrow("Parallel implementation is enforced")
+
+        // Non-mutating bash should pass
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "bash", sessionID: "session_team_impl", callID: "call_impl_ls" },
+            { args: { command: "ls -la" } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("team plugin allows review agent to skip parallel enforcement", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Implementation request from review agent should NOT trigger parallel enforcement
+        const text =
+          "Implement the following multi-file refactoring across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Extract shared types\n" +
+          "- 2. Update imports\n" +
+          "- 3. Add barrel exports\n" +
+          "- 4. Fix consumers\n" +
+          "This is a large plan."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_team_review", agent: "review" },
+          {
+            message: { id: "msg_review", sessionID: "session_team_review", role: "user" },
+            parts,
+          },
+        )
+
+        const parallelInjected = parts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+        )
+        expect(parallelInjected).toBeUndefined()
+      },
+    })
+  })
+})
+
+test("team plugin resets need gate after team tool completes", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Set up parallel enforcement
+        const text =
+          "Implement the following across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Add new types\n" +
+          "- 2. Update imports\n" +
+          "- 3. Add tests\n" +
+          "- 4. Fix consumers\n" +
+          "Large multi-file implementation."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_team_reset", agent: "implement" },
+          {
+            message: { id: "msg_reset", sessionID: "session_team_reset", role: "user" },
+            parts,
+          },
+        )
+
+        // Edit is blocked before team tool
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_reset", callID: "call_edit_pre" },
+            { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).rejects.toThrow("Parallel implementation is enforced")
+
+        // Simulate team tool completion via tool.execute.after
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "team", sessionID: "session_team_reset", callID: "call_team_done" },
+          { title: "team", output: "team completed", metadata: {} },
+        )
+
+        // Edit should now be allowed after team completes
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_reset", callID: "call_edit_post" },
+            { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
 for (const replay of Object.values(replays)) {
   it.live(`guardrail replay keeps ${replay.command} executable`, () =>
     run(replay).pipe(
