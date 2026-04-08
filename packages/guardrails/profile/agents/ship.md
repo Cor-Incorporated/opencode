@@ -2,9 +2,13 @@
 description: Ship agent with merge capability for the /ship command pipeline.
 mode: subagent
 permission:
-  question: allow
+  "*": deny
+  read: allow
+  grep: allow
+  glob: allow
+  list: allow
   bash:
-    "*": ask
+    "*": deny
     "git status*": allow
     "git diff*": allow
     "git log*": allow
@@ -20,9 +24,6 @@ permission:
     "git checkout -- *": deny
     "git push --force*": deny
     "git reset --hard*": deny
-  read:
-    "*": allow
-    "*.env*": deny
   edit:
     "*": deny
   write:
