@@ -499,6 +499,14 @@ export default async function guardrail(input: {
         if (stacks.length > 0) {
           await seen("auto_init.stacks_detected", { stacks })
         }
+        // [Phase6] Ignore hygiene: check if .opencode/ is in .gitignore
+        try {
+          const gitignore = await Bun.file(path.join(input.worktree, ".gitignore")).text()
+          if (!gitignore.includes(".opencode")) {
+            await mark({ gitignore_missing_opencode: true })
+            await seen("ignore_hygiene.missing", { pattern: ".opencode/" })
+          }
+        } catch { /* .gitignore may not exist */ }
         if (branchWarning) {
           await seen("branch_workflow.warning", { warning: branchWarning })
         }
@@ -570,11 +578,35 @@ export default async function guardrail(input: {
         })
         await mark({ branch_warning: "" })
       }
+      // [Phase6] Ignore hygiene advisory
+      if (data.gitignore_missing_opencode) {
+        out.parts.push({
+          id: crypto.randomUUID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: "⚠️ `.opencode/` is not in `.gitignore`. Add it to reduce noise in `git status`.",
+        })
+        await mark({ gitignore_missing_opencode: false })
+      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown },
       out: { args: Record<string, unknown> },
     ) => {
+      // [Phase6] Branch hygiene hard gate: block mutations on main/master
+      const mutating = item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch"
+      if (mutating || (item.tool === "bash" && bash(str((out.args ?? item.args as Record<string, unknown>)?.command)))) {
+        const bw = str(data.branch_warning)
+        if (bw.startsWith("WARNING")) {
+          try {
+            const brRes = await git(input.worktree, ["branch", "--show-current"])
+            if (/^(main|master)$/.test(brRes.stdout.trim())) {
+              throw new Error(text(`mutation blocked on protected branch (${brRes.stdout.trim()}). Create a feature branch first: git checkout -b feat/<description> develop`))
+            }
+          } catch (e) { if (String(e).includes("blocked") || String(e).includes("mutation blocked")) throw e }
+        }
+      }
       const file = pick(out.args ?? item.args)
       if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write")) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
@@ -593,7 +625,8 @@ export default async function guardrail(input: {
       if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
-          const err = `context budget exceeded after ${count} source reads. Recovery: (1) call \`team\` tool to delegate edit to isolated worker, (2) use \`background\` tool for side work, (3) narrow edit scope to fewer files`
+          const readFiles = list(data.read_files).slice(-5).join(", ")
+          const err = `context budget exceeded after ${count} source reads (recent: ${readFiles || "unknown"}). Recovery options:\n(1) call \`team\` tool to delegate edit to isolated worker\n(2) use \`background\` tool for side work\n(3) narrow edit scope to a specific function/section rather than whole file\n(4) start a new session and continue from where you left off`
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }
@@ -672,6 +705,42 @@ export default async function guardrail(input: {
             await mark({ last_block: "bash:ci-warn", last_command: cmd, last_reason: "CI check verification failed" })
             await seen("ci.check_verification_failed", { error: String(e) })
           }
+        }
+        // [Phase6] Unresolved review comments: block merge if CHANGES_REQUESTED
+        if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+          try {
+            const repoRes = await git(input.worktree, ["remote", "get-url", "origin"])
+            const repo = repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "")
+            const prMatch2 = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
+            const prNum2 = prMatch2 ? prMatch2[1] : ""
+            if (repo && prNum2) {
+              const proc2 = Bun.spawn(["gh", "api", `repos/${repo}/pulls/${prNum2}/reviews`, "--jq", "[.[] | select(.state==\"CHANGES_REQUESTED\")] | length"], {
+                cwd: input.worktree, stdout: "pipe", stderr: "pipe",
+              })
+              const [revOut] = await Promise.all([new Response(proc2.stdout).text(), proc2.exited])
+              if (parseInt(revOut.trim()) > 0) {
+                await mark({ last_block: "bash", last_command: cmd, last_reason: "unresolved CHANGES_REQUESTED reviews" })
+                throw new Error(text("merge blocked: unresolved CHANGES_REQUESTED reviews — address reviewer feedback first"))
+              }
+            }
+          } catch (e) { if (String(e).includes("blocked")) throw e }
+        }
+        // [Phase6] Stacked PR rebase gate: warn if child PRs exist and are stale
+        if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+          try {
+            const curBranch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            if (curBranch) {
+              const proc3 = Bun.spawn(["gh", "pr", "list", "--base", curBranch, "--json", "number,headRefName", "--jq", ".[].number"], {
+                cwd: input.worktree, stdout: "pipe", stderr: "pipe",
+              })
+              const [childOut] = await Promise.all([new Response(proc3.stdout).text(), proc3.exited])
+              const childPRs = childOut.trim().split("\n").filter(Boolean)
+              if (childPRs.length > 0) {
+                out.output = (out.output || "") + `\n⚠️ Stacked PR detected: ${childPRs.length} child PR(s) depend on this branch. Rebase child PRs after merging.`
+                await seen("stacked_pr.children_detected", { count: childPRs.length, children: childPRs })
+              }
+            }
+          } catch { /* gh may fail */ }
         }
         // Direct push to protected branches
         const protectedBranch = /^(main|master|develop|dev)$/
@@ -1027,6 +1096,18 @@ export default async function guardrail(input: {
       // CI status advisory after push/PR create
       if (item.tool === "bash" && /\b(git\s+push|gh\s+pr\s+create)\b/i.test(str(item.args?.command))) {
         out.output = (out.output || "") + "\n⚠️ Remember to verify CI status: `gh pr checks`"
+        // [Phase6] PR mergeable conflict check
+        try {
+          const proc = Bun.spawn(["gh", "pr", "view", "--json", "mergeable", "--jq", ".mergeable"], {
+            cwd: input.worktree, stdout: "pipe", stderr: "pipe",
+          })
+          const [mergeOut] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+          const mergeable = mergeOut.trim()
+          if (mergeable === "CONFLICTING") {
+            out.output += "\n⚠️ PR has merge conflicts. Rebase or merge the base branch before proceeding."
+            await seen("pr.merge_conflict_detected", {})
+          }
+        } catch { /* gh may fail in offline/no-PR scenarios */ }
       }
 
       // Post-merge deployment verification advisory
