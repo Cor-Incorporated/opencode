@@ -3,8 +3,15 @@ description: Run tests with pre-allowed test commands. Read-only except for test
 mode: subagent
 permission:
   "*": deny
-  read: allow
-  grep: allow
+  read:
+    "*": allow
+    "*.env*": deny
+    "*credentials*": deny
+    "*.pem": deny
+    "*.key": deny
+  grep:
+    "*": allow
+    "*.env*": deny
   glob: allow
   list: allow
   lsp: allow
@@ -32,6 +39,8 @@ permission:
     "git show*": allow
     "ls *": allow
     "wc *": allow
+    "pwd": allow
+    "which *": allow
   edit:
     "*": deny
   write:
