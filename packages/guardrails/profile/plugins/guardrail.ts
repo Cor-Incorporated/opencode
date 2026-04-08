@@ -486,16 +486,21 @@ export default async function guardrail(input: {
   }
 
   function parseFindings(raw: string) {
-    // Count only actionable findings — exclude negations like "No CRITICAL issues found"
+    // Match structured finding patterns: "[CRITICAL]", "**CRITICAL**", "CRITICAL:", "- CRITICAL"
+    // Exclude negations, injected context lines, and prose mentions
     const lines = raw.split("\n")
     let critical = 0, high = 0, medium = 0, low = 0
     for (const line of lines) {
-      const neg = /\b(no|zero|0|none|without|aren't|isn't|not)\b/i.test(line)
-      if (neg) continue
-      if (/\bCRITICAL\b/i.test(line)) critical++
-      if (/\bHIGH\b/i.test(line)) high++
-      if (/\bMEDIUM\b/i.test(line)) medium++
-      if (/\bLOW\b/i.test(line)) low++
+      const trimmed = line.trim()
+      // Skip negation lines
+      if (/\b(no|zero|0|none|without|aren't|isn't|not)\b/i.test(trimmed)) continue
+      // Skip injected guardrail context lines (e.g., "CRITICAL=0 HIGH=0")
+      if (/CRITICAL=\d|HIGH=\d|checklist|Guardrail mode/i.test(trimmed)) continue
+      // Match structured patterns: leading marker or bracketed/bold severity
+      if (/^[\s\-*]*\[?CRITICAL\]?[\s:*]/i.test(trimmed) || /^\*\*CRITICAL\*\*/i.test(trimmed)) critical++
+      if (/^[\s\-*]*\[?HIGH\]?[\s:*]/i.test(trimmed) || /^\*\*HIGH\*\*/i.test(trimmed)) high++
+      if (/^[\s\-*]*\[?MEDIUM\]?[\s:*]/i.test(trimmed) || /^\*\*MEDIUM\*\*/i.test(trimmed)) medium++
+      if (/^[\s\-*]*\[?LOW\]?[\s:*]/i.test(trimmed) || /^\*\*LOW\*\*/i.test(trimmed)) low++
     }
     return { critical, high, medium, low, total: critical + high + medium + low }
   }
@@ -526,11 +531,18 @@ export default async function guardrail(input: {
       return
     }
     const findings = parseFindings(result.text)
+    const attempts = num(data.workflow_review_attempts) + 1
+    if (attempts >= 3) {
+      await mark({ auto_review_in_progress: false, workflow_phase: "blocked", workflow_review_attempts: attempts })
+      await seen("auto_review.max_attempts", { attempts })
+      return
+    }
     await mark({
       auto_review_in_progress: false,
       auto_review_session: made.data.id,
       review_state: "done",
       reviewed: true,
+      workflow_review_attempts: attempts,
       review_at: new Date().toISOString(),
       edits_since_review: 0,
       review_critical_count: findings.critical,
@@ -790,21 +802,21 @@ export default async function guardrail(input: {
       out: { args: Record<string, unknown> },
     ) => {
       const file = pick(out.args ?? item.args)
-      if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch")) {
+      if (file && (item.tool === "read" || MUTATING_TOOLS.has(item.tool))) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
         if (err) {
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }
       }
-      if (item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") {
+      if (MUTATING_TOOLS.has(item.tool)) {
         const err = await version(out.args ?? {})
         if (err) {
           await mark({ last_block: item.tool, last_file: file ? rel(input.worktree, file) : "", last_reason: err })
           throw new Error(text(err))
         }
       }
-      if ((item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") && file && code(file)) {
+      if ((MUTATING_TOOLS.has(item.tool)) && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
           const budgetData = await stash(state)
@@ -1528,12 +1540,15 @@ export default async function guardrail(input: {
       }
 
       // Workflow phase transitions (auto-pipeline orchestration)
+      // Only transition when the pipeline is active — prevents state pollution from manual operations
       if (item.tool === "bash") {
         const cmd = str(item.args?.command)
         const output = str(out.output)
+        const currentPhase = str(bashData.workflow_phase)
+        const pipelineActive = currentPhase && currentPhase !== "idle" && currentPhase !== "done" && currentPhase !== "blocked"
 
-        // PR creation detection
-        if (/\bgh\s+pr\s+create\b/.test(cmd) && output.includes("github.com")) {
+        // PR creation detection — only when implementing
+        if (pipelineActive && currentPhase === "implementing" && /\bgh\s+pr\s+create\b/.test(cmd) && output.includes("github.com")) {
           const prUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)
           if (prUrl) {
             await mark({ workflow_phase: "testing", workflow_pr_url: prUrl[0] })
@@ -1542,8 +1557,8 @@ export default async function guardrail(input: {
           }
         }
 
-        // Test execution detection
-        if (/\b(bun\s+test|pytest|go\s+test|npm\s+test|vitest|jest)\b/.test(cmd)) {
+        // Test execution detection — only when testing
+        if (pipelineActive && currentPhase === "testing" && /\b(bun\s+test|pytest|go\s+test|npm\s+test|vitest|jest)\b/.test(cmd)) {
           const testExit = out.metadata?.exitCode ?? (output.includes("FAIL") ? 1 : 0)
           if (testExit === 0 && !output.includes("FAIL")) {
             await mark({ workflow_phase: "reviewing", tests_executed: true })
@@ -1552,19 +1567,17 @@ export default async function guardrail(input: {
           }
         }
 
-        // Merge detection
-        if (/\bgh\s+pr\s+merge\b/.test(cmd) && !output.includes("error") && !output.includes("failed")) {
+        // Merge detection — only when shipping
+        if (pipelineActive && currentPhase === "shipping" && /\bgh\s+pr\s+merge\b/.test(cmd) && !output.includes("error") && !output.includes("failed")) {
           await mark({ workflow_phase: "done" })
           await seen("workflow.merged", {})
           out.output += "\n\n[WORKFLOW] Merge complete. Create follow-up issues for any discovered problems."
         }
 
-        // CI check detection
-        if (/\bgh\s+pr\s+checks\b/.test(cmd)) {
-          const allPass = !output.includes("fail") && !output.includes("pending")
-          if (allPass) {
-            await mark({ ci_green: true })
-          }
+        // CI check detection — any active phase
+        if (pipelineActive && /\bgh\s+pr\s+checks\b/.test(cmd)) {
+          const allPass = !output.toLowerCase().includes("fail") && !output.toLowerCase().includes("pending")
+          await mark({ ci_green: allPass })
         }
 
         // Issue creation tracking
@@ -1823,10 +1836,12 @@ export default async function guardrail(input: {
           `[WORKFLOW] Phase: ${phase}. Pipeline: implement→test→review→fix→ship. Complete autonomously. Do not stop at PR creation.`
         )
       }
-      // Follow-up issue guidance
-      out.system.push(
-        "When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline."
-      )
+      // Follow-up issue guidance — only during active pipeline
+      if (phase && phase !== "idle" && phase !== "done") {
+        out.system.push(
+          "When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline."
+        )
+      }
     },
   }
 }
