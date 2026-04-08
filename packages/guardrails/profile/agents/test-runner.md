@@ -12,6 +12,8 @@ permission:
     "*": deny
     "bun test*": allow
     "bun run test*": allow
+    "bun --cwd * test*": allow
+    "bun turbo test*": allow
     "turbo test*": allow
     "vitest*": allow
     "jest*": allow
@@ -30,9 +32,6 @@ permission:
     "git show*": allow
     "ls *": allow
     "wc *": allow
-    "cat *": allow
-    "head *": allow
-    "tail *": allow
   edit:
     "*": deny
   write:

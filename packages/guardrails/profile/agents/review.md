@@ -19,7 +19,7 @@ permission:
     "gh pr checks*": allow
     "gh pr view*": allow
     "gh pr diff*": allow
-    "gh api *": allow
+    "gh api *": ask
 ---
 
 Review for regressions, missing validation, and missing verification.
