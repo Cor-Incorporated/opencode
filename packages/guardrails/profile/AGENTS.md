@@ -84,6 +84,7 @@
 | `investigate` | `/investigate`, debugging tasks | Deep exploration subagent. Reads code, traces data flow, and identifies root causes without edits. |
 | `security` | `/review` (security scope), OWASP checks | Security-focused review subagent. Scans for OWASP Top 10 vulnerabilities, credential leaks, and injection risks. |
 | `code-reviewer` | `/review`, PR review pipeline | Read-only review agent. Analyzes diffs for quality, correctness, and style issues. |
+| `ship` | `/ship` command | Ship agent for merge execution. Verifies all merge gates (CI, review, no CHANGES_REQUESTED) and executes `gh pr merge`. Write-restricted except for merge commands. |
 | `terraform-engineer` | Infrastructure-as-code tasks | Terraform specialist for module design, state management, and multi-cloud provisioning. Write-capable with safe Terraform CLI commands only. |
 | `cloud-architect` | Architecture design, Well-Architected reviews | Read-only cloud architecture analyst for system design, scalability, and compliance. |
 | `deployment-engineer` | CI/CD pipeline, container deployments | Write-capable deployment specialist for zero-downtime releases with Docker and Kubernetes read commands. |

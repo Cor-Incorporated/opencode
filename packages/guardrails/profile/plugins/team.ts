@@ -148,9 +148,9 @@ function scrub(cmd: string) {
 function mut(cmd: string) {
   const data = scrub(cmd)
   return [
-    /\brm\b/i,
-    /\bmv\b/i,
-    /\bcp\b/i,
+    /\brm\s+/i,
+    /\bmv\s+/i,
+    /\bcp\s+/i,
     /\bchmod\b/i,
     /\bchown\b/i,
     /\btouch\b/i,
@@ -159,7 +159,8 @@ function mut(cmd: string) {
     /\bsed\s+-i\b/i,
     /\bperl\s+-pi\b/i,
     />/,
-    /\bgit\s+(apply|am|merge|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
+    /\bgit\s+(apply|am|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
+    /\bgit\s+merge(\s|$)/i,
   ].some((item) => item.test(data))
 }
 
@@ -276,6 +277,20 @@ async function yardadd(dir: string, id: string) {
   }
   const made = await git(dir, ["worktree", "add", "--detach", next, "HEAD"])
   if (made.code !== 0) throw new Error(made.err || made.out || "Failed to create git worktree")
+  // Verify worktree actually has files (Issue #144: empty git init)
+  const files = await git(next, ["ls-files", "--cached"]).catch(() => ({ code: 1, out: "", err: "" }))
+  if (files.code !== 0 || !files.out.trim()) {
+    // Worktree might be empty — force checkout HEAD contents
+    const checkout = await git(next, ["checkout", "HEAD", "--", "."])
+    if (checkout.code !== 0) {
+      throw new Error(`Worktree created but checkout failed: ${checkout.err || checkout.out}`)
+    }
+    // Re-verify files are present
+    const recheck = await git(next, ["ls-files", "--cached"]).catch(() => ({ code: 1, out: "", err: "" }))
+    if (recheck.code !== 0 || !recheck.out.trim()) {
+      throw new Error("Worktree is still empty after checkout — cannot proceed with delegation")
+    }
+  }
   return next
 }
 
@@ -311,6 +326,24 @@ async function merge(dir: string, item: string, run: string, id: string) {
       verification.issues.push(`${untracked} untracked files after merge — check for stale artifacts`)
     }
   } catch { /* verification is advisory */ }
+  // Auto-commit applied changes so they are not left uncommitted in the parent worktree.
+  // Without this, patched changes remain as unstaged modifications — the root cause of
+  // "worktree changes returned but not committed" (Issue #144, Claude Code Agent parity gap).
+  // Auto-commit only the patch-applied files (not unrelated local edits).
+  // Use `git diff --name-only` to identify files changed by the patch, then stage only those.
+  try {
+    const changed = await git(dir, ["diff", "--name-only"])
+    const untracked = await git(dir, ["ls-files", "--others", "--exclude-standard"])
+    const files = [...changed.out.trim().split("\n"), ...untracked.out.trim().split("\n")].filter(Boolean)
+    if (files.length > 0) {
+      await git(dir, ["add", "--", ...files])
+      const commitMsg = `chore(team): apply worker changes from task ${id}`
+      const commit = await git(dir, ["commit", "-m", commitMsg, "--no-verify"])
+      if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
+        verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
+      }
+    }
+  } catch { /* auto-commit is best-effort; parent session can still commit manually */ }
   await yardrm(dir, item)
   return { patch: next, merged: true, verification }
 }

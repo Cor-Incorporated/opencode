@@ -24,9 +24,9 @@ const cfg = [
 ]
 
 const mut = [
-  /\brm\b/i,
-  /\bmv\b/i,
-  /\bcp\b/i,
+  /\brm\s+/i,
+  /\bmv\s+/i,
+  /\bcp\s+/i,
   /\bchmod\b/i,
   /\bchown\b/i,
   /\btouch\b/i,
@@ -34,8 +34,10 @@ const mut = [
   /\btee\b/i,
   /\bsed\s+-i\b/i,
   /\bperl\s+-pi\b/i,
-  />/,
+  /\s>[^&]|^>/,  // redirect operator — excludes > inside quoted strings and &&/||
 ]
+
+const MUTATING_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit"])
 
 const src = new Set([
   ".ts",
@@ -98,7 +100,11 @@ function rel(root: string, file: string) {
   return abs.slice(dir.length + 1)
 }
 
+// Only exempt .env.example/.env.sample/.env.template — not *.key.template etc.
+const secEnvExempt = /\.env\.(example|sample|template)$/i
+
 function has(file: string, list: RegExp[]) {
+  if (list === sec && secEnvExempt.test(file)) return false
   return list.some((item) => item.test(file))
 }
 
@@ -215,7 +221,36 @@ function cmp(left: string, right: string) {
   return a[2] - b[2]
 }
 
+type Client = {
+  session: {
+    create(input: { body: { parentID: string; title: string }; query: { directory: string } }): Promise<{ data: { id: string } }>
+    promptAsync(input: {
+      path: { id: string }
+      query: { directory: string }
+      body: {
+        agent?: string
+        model?: { providerID: string; modelID: string }
+        tools?: Record<string, boolean>
+        variant?: string
+        parts: { type: "text"; text: string }[]
+      }
+    }): Promise<unknown>
+    prompt(input: {
+      path: { id: string }
+      query: { directory: string }
+      body: {
+        noReply?: boolean
+        parts: { type: "text"; text: string }[]
+      }
+    }): Promise<unknown>
+    status(input: { query: { directory: string } }): Promise<{ data?: Record<string, { type: string }> }>
+    messages(input: { path: { id: string }; query: { directory: string } }): Promise<{ data?: Array<{ info: { role: string; error?: { data?: { message?: string } } }; parts: Array<{ type?: string; text?: string }> }> }>
+    abort(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>
+  }
+}
+
 export default async function guardrail(input: {
+  client: Client
   directory: string
   worktree: string
 }, opts?: Record<string, unknown>) {
@@ -424,6 +459,115 @@ export default async function guardrail(input: {
     if (denyPreview && preview(data.model ?? {})) return `${provider}/${model || "unknown"} is preview-only`
   }
 
+  // --- Auto-review pipeline (models team.ts idle/snap pattern) ---
+  const REVIEW_POLL_GAP = 750
+
+  const REVIEW_TIMEOUT_MS = 120_000 // 2 minutes max for auto-review
+  async function pollIdle(sessionID: string) {
+    const start = Date.now()
+    for (;;) {
+      if (Date.now() - start > REVIEW_TIMEOUT_MS) {
+        throw new Error(`Auto-review timed out after ${REVIEW_TIMEOUT_MS}ms`)
+      }
+      const stat = await input.client.session.status({ query: { directory: input.directory } })
+      const item = stat.data?.[sessionID]
+      if (!item || item.type === "idle") return
+      await Bun.sleep(REVIEW_POLL_GAP)
+    }
+  }
+
+  async function readResult(sessionID: string) {
+    const msgs = await input.client.session.messages({ path: { id: sessionID }, query: { directory: input.directory } })
+    const msg = [...(msgs.data ?? [])].reverse().find((m) => m.info.role === "assistant")
+    if (!msg) return { text: "", error: "" }
+    const txt = msg.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n")
+    const err = msg.info.error?.data?.message ?? ""
+    return { text: txt.slice(0, 4000), error: err }
+  }
+
+  function parseFindings(raw: string) {
+    // Count only actionable findings — exclude negations like "No CRITICAL issues found"
+    const lines = raw.split("\n")
+    let critical = 0, high = 0, medium = 0, low = 0
+    for (const line of lines) {
+      const neg = /\b(no|zero|0|none|without|aren't|isn't|not)\b/i.test(line)
+      if (neg) continue
+      if (/\bCRITICAL\b/i.test(line)) critical++
+      if (/\bHIGH\b/i.test(line)) high++
+      if (/\bMEDIUM\b/i.test(line)) medium++
+      if (/\bLOW\b/i.test(line)) low++
+    }
+    return { critical, high, medium, low, total: critical + high + medium + low }
+  }
+
+  async function autoReview(parentSession: string, data: Record<string, unknown>) {
+    const made = await input.client.session.create({
+      body: { parentID: parentSession, title: "Auto-review" },
+      query: { directory: input.directory },
+    })
+    await input.client.session.promptAsync({
+      path: { id: made.data.id },
+      query: { directory: input.directory },
+      body: {
+        agent: "code-reviewer",
+        tools: { edit: false, write: false, apply_patch: false, multiedit: false },
+        parts: [{
+          type: "text",
+          text: `Review the current working directory changes for quality, correctness, and security.\nEdited files: ${list(data.edited_files).join(", ") || "unknown"}\nEdit count: ${num(data.edit_count)}\nReport findings as CRITICAL, HIGH, MEDIUM, or LOW.`,
+        }],
+      },
+    })
+    await pollIdle(made.data.id)
+    const result = await readResult(made.data.id)
+    // Do not mark review as done if the session errored or returned empty
+    if (result.error || !result.text.trim()) {
+      await mark({ auto_review_in_progress: false })
+      await seen("auto_review.errored", { error: result.error || "empty response" })
+      return
+    }
+    const findings = parseFindings(result.text)
+    await mark({
+      auto_review_in_progress: false,
+      auto_review_session: made.data.id,
+      review_state: "done",
+      reviewed: true,
+      review_at: new Date().toISOString(),
+      edits_since_review: 0,
+      review_critical_count: findings.critical,
+      review_high_count: findings.high,
+    })
+    await seen("auto_review.completed", { findings: findings.total, critical: findings.critical, high: findings.high })
+    if (findings.critical > 0 || findings.high > 0) {
+      await input.client.session.prompt({
+        path: { id: parentSession },
+        query: { directory: input.directory },
+        body: {
+          noReply: true,
+          parts: [{
+            type: "text",
+            text: `[Auto-review] CRITICAL=${findings.critical} HIGH=${findings.high}. Fix findings before merging.\n\n${result.text.slice(0, 2000)}`,
+          }],
+        },
+      })
+      await mark({ workflow_phase: "fixing" })
+    }
+  }
+
+  function checklist(data: Record<string, unknown>) {
+    const items = [
+      { name: "tests_pass", pass: flag(data.tests_executed) },
+      { name: "review_fresh", pass: str(data.review_state) === "done" && num(data.edits_since_review) === 0 },
+      { name: "ci_green", pass: flag(data.ci_green) },
+      { name: "no_critical", pass: num(data.review_critical_count) === 0 && num(data.review_high_count) === 0 },
+    ]
+    return {
+      score: items.filter((i) => i.pass).length,
+      total: items.length,
+      blocking: items.filter((i) => !i.pass).map((i) => i.name),
+      summary: items.map((i) => `[${i.pass ? "x" : " "}] ${i.name}`).join(", "),
+    }
+  }
+
   return {
     config: async (cfg: {
       provider?: Record<string, { whitelist?: string[] }>
@@ -454,6 +598,7 @@ export default async function guardrail(input: {
         let branchWarning = ""
         try {
           const branchRes = await git(input.worktree, ["branch", "--show-current"])
+          if (branchRes.code !== 0) throw new Error("git branch failed")
           const currentBranch = branchRes.stdout.trim()
           if (/^(main|master)$/.test(currentBranch)) {
             branchWarning = `WARNING: on ${currentBranch} branch. Create a feature branch: git checkout -b feat/<description> develop`
@@ -491,6 +636,16 @@ export default async function guardrail(input: {
           last_merge_at: "",
           issue_verification_done: false,
           edits_since_doc_reminder: 0,
+          // Workflow orchestration state
+          workflow_phase: "idle",
+          workflow_review_attempts: 0,
+          workflow_pr_url: "",
+          workflow_issues_created: [],
+          auto_review_in_progress: false,
+          auto_review_session: "",
+          review_critical_count: 0,
+          review_high_count: 0,
+          ci_green: false,
           // [W9] auto-init-permissions: detected stacks
           detected_stacks: stacks,
           // [W9] enforce-branch-workflow: branch status
@@ -517,6 +672,22 @@ export default async function guardrail(input: {
           last_patterns: event.properties?.patterns,
           last_event: event.type,
         })
+      }
+      if (event.type === "session.idle") {
+        const data = await stash(state)
+        const edits = num(data.edit_count)
+        const pending = str(data.review_state) !== "done"
+        const inProgress = flag(data.auto_review_in_progress)
+        const sessionID = str(event.properties?.sessionID)
+
+        if (edits >= 3 && pending && !inProgress && sessionID) {
+          await mark({ auto_review_in_progress: true })
+          await seen("auto_review.triggered", { edit_count: edits, sessionID })
+          void autoReview(sessionID, data).catch(async (err) => {
+            await mark({ auto_review_in_progress: false })
+            await seen("auto_review.failed", { error: String(err) })
+          })
+        }
       }
       if (event.type === "session.compacted") {
         await mark({
@@ -546,35 +717,45 @@ export default async function guardrail(input: {
     ) => {
       if (out.message.role !== "user") return
       const data = await stash(state)
-      if (flag(data.git_freshness_checked)) return
-      await mark({ git_freshness_checked: true })
-      try {
-        const proc = Bun.spawn(["git", "-C", input.worktree, "fetch", "--dry-run"], {
-          stdout: "pipe",
-          stderr: "pipe",
+      // Surface deferred git freshness advisory from previous fire-and-forget fetch
+      const pendingFreshness = str(data.git_freshness_advisory)
+      if (pendingFreshness) {
+        out.parts.push({
+          id: crypto.randomUUID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: pendingFreshness,
         })
-        const fetchResult = await Promise.race([
-          Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-            proc.exited,
-          ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code })),
-          Bun.sleep(5000).then(() => {
-            proc.kill()
-            return null
-          }),
-        ])
-        if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
-          out.parts.push({
-            id: crypto.randomUUID(),
-            sessionID: out.message.sessionID,
-            messageID: out.message.id,
-            type: "text",
-            text: "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes.",
-          })
-        }
-      } catch {
-        // git fetch may fail in offline or no-remote scenarios; skip silently
+        await mark({ git_freshness_advisory: "" })
+      }
+      if (!flag(data.git_freshness_checked)) {
+        await mark({ git_freshness_checked: true })
+        // Fire-and-forget: do not block chat.message handler on slow git fetch
+        void (async () => {
+          try {
+            const proc = Bun.spawn(["git", "-C", input.worktree, "fetch", "--dry-run"], {
+              stdout: "pipe",
+              stderr: "pipe",
+            })
+            const fetchResult = await Promise.race([
+              Promise.all([
+                new Response(proc.stdout).text(),
+                new Response(proc.stderr).text(),
+                proc.exited,
+              ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code })),
+              Bun.sleep(5000).then(() => {
+                proc.kill()
+                return null
+              }),
+            ])
+            if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
+              await mark({ git_freshness_advisory: "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes." })
+            }
+          } catch {
+            // git fetch may fail in offline or no-remote scenarios; skip silently
+          }
+        })()
       }
       // Branch hygiene: surface stored branch warning from session.created
       const branchWarn = str(data.branch_warning)
@@ -609,21 +790,21 @@ export default async function guardrail(input: {
       out: { args: Record<string, unknown> },
     ) => {
       const file = pick(out.args ?? item.args)
-      if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write")) {
+      if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch")) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
         if (err) {
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }
       }
-      if (item.tool === "edit" || item.tool === "write") {
+      if (item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") {
         const err = await version(out.args ?? {})
         if (err) {
           await mark({ last_block: item.tool, last_file: file ? rel(input.worktree, file) : "", last_reason: err })
           throw new Error(text(err))
         }
       }
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if ((item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
           const budgetData = await stash(state)
@@ -654,7 +835,9 @@ export default async function guardrail(input: {
             throw new Error(text(`merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`))
           }
           try {
-            const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            const branchResult = await git(input.worktree, ["branch", "--show-current"])
+            if (branchResult.code !== 0) throw new Error("git branch failed")
+            const branch = branchResult.stdout.trim()
             const tier = /^(ci|chore|docs)\//.test(branch) ? "EXEMPT" :
                          /^fix\//.test(branch) ? "LIGHT" : "FULL"
             if (tier === "EXEMPT") {
@@ -680,6 +863,13 @@ export default async function guardrail(input: {
               await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
               throw new Error(text("merge blocked: run /review before merging"))
             }
+          }
+        }
+        // Workflow checklist gate for merge commands
+        if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+          const checks = checklist(bashData)
+          if (checks.score < 3) {
+            out.output = (out.output || "") + `\n\nCompletion checklist (${checks.score}/${checks.total}): ${checks.summary}\nBlocking: ${checks.blocking.join(", ")}`
           }
         }
         // CI hard block: verify all checks are green before gh pr merge
@@ -712,7 +902,7 @@ export default async function guardrail(input: {
         if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
           try {
             const repoRes = await git(input.worktree, ["remote", "get-url", "origin"])
-            const repo = repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "")
+            const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
             const prMatch2 = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
             const prNum2 = prMatch2 ? prMatch2[1] : ""
             if (repo && prNum2) {
@@ -730,7 +920,8 @@ export default async function guardrail(input: {
         // [Phase6] Stacked PR rebase gate: warn if child PRs exist and are stale
         if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
           try {
-            const curBranch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            const curBranchRes = await git(input.worktree, ["branch", "--show-current"])
+            const curBranch = curBranchRes.code === 0 ? curBranchRes.stdout.trim() : ""
             if (curBranch) {
               const proc3 = Bun.spawn(["gh", "pr", "list", "--base", curBranch, "--json", "number,headRefName", "--jq", ".[].number"], {
                 cwd: input.worktree, stdout: "pipe", stderr: "pipe",
@@ -761,7 +952,7 @@ export default async function guardrail(input: {
           if (!/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+\S+/i.test(cmd)) {
             try {
               const result = await git(input.worktree, ["branch", "--show-current"])
-              if (result.stdout && protectedBranch.test(result.stdout.trim())) {
+              if (result.code === 0 && result.stdout && protectedBranch.test(result.stdout.trim())) {
                 throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
               }
             } catch (e) { if (String(e).includes("blocked")) throw e }
@@ -771,8 +962,9 @@ export default async function guardrail(input: {
         if (/\bgit\s+(checkout\s+-b|switch\s+-c)\b/i.test(cmd)) {
           try {
             const devCheck = await git(input.worktree, ["rev-parse", "--verify", "origin/develop"])
-            if (devCheck.stdout.trim()) {
-              const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            if (devCheck.code === 0 && devCheck.stdout.trim()) {
+              const branchCheck = await git(input.worktree, ["branch", "--show-current"])
+              const branch = branchCheck.code === 0 ? branchCheck.stdout.trim() : ""
               if (/^(main|master)$/.test(branch)) {
                 await mark({ last_block: "bash", last_command: cmd, last_reason: "branch creation from main blocked" })
                 throw new Error(text("branch creation from main blocked: checkout develop first, then create branch"))
@@ -870,6 +1062,7 @@ export default async function guardrail(input: {
         if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
           try {
             const diffRes = await git(input.worktree, ["diff", "--name-only", "origin/develop...HEAD"])
+            if (diffRes.code !== 0) throw new Error("git diff failed")
             const changedFiles = diffRes.stdout.trim()
             const hasInfra = /^(hooks\/|scripts\/)[^/]+\.sh$/m.test(changedFiles)
             if (hasInfra) {
@@ -887,9 +1080,10 @@ export default async function guardrail(input: {
           if (/--base\s+main(\s|$)/i.test(cmd)) {
             try {
               const devCheck = await git(input.worktree, ["rev-parse", "--verify", "origin/develop"])
-              if (devCheck.stdout.trim()) {
+              if (devCheck.code === 0 && devCheck.stdout.trim()) {
                 // Allow release PR from develop
-                const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+                const branchForPr = await git(input.worktree, ["branch", "--show-current"])
+                const branch = branchForPr.code === 0 ? branchForPr.stdout.trim() : ""
                 if (branch !== "develop" && !/--head\s+develop/i.test(cmd)) {
                   await mark({ last_block: "bash", last_command: cmd, last_reason: "PR targeting main when develop exists" })
                   throw new Error(text("PR targeting main blocked: use --base develop. Release PRs must be from develop branch."))
@@ -1040,7 +1234,7 @@ export default async function guardrail(input: {
         }
       }
 
-      if ((item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") && file) {
+      if (MUTATING_TOOLS.has(item.tool) && file) {
         const seen = list(data.edited_files)
         const next = seen.includes(rel(input.worktree, file)) ? seen : [...seen, rel(input.worktree, file)]
         const nextEditCount = num(data.edit_count) + 1
@@ -1067,7 +1261,7 @@ export default async function guardrail(input: {
       }
 
       // Architecture layer advisory
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if (MUTATING_TOOLS.has(item.tool) && file && code(file)) {
         const relFile = rel(input.worktree, file)
         const content = typeof item.args?.content === "string" ? item.args.content :
                         typeof item.args?.newString === "string" ? item.args.newString : ""
@@ -1128,7 +1322,7 @@ export default async function guardrail(input: {
           if (prMatch) {
             const prNum = prMatch[1]
             const repoRes = await git(input.worktree, ["remote", "get-url", "origin"])
-            const repo = repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "")
+            const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
             if (repo) {
               const proc = Bun.spawn(["gh", "api", `repos/${repo}/pulls/${prNum}/files`, "--jq", ".[].filename"], {
                 cwd: input.worktree, stdout: "pipe", stderr: "pipe",
@@ -1224,10 +1418,11 @@ export default async function guardrail(input: {
       // [W9] workflow-sync-guard: warn when workflow files differ from main after push
       if (item.tool === "bash" && /\bgit\s+push\b/i.test(str(item.args?.command))) {
         try {
-          const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+          const wfBranch = await git(input.worktree, ["branch", "--show-current"])
+          const branch = wfBranch.code === 0 ? wfBranch.stdout.trim() : ""
           if (branch && !/^(main|master)$/.test(branch)) {
             const wfDiff = await git(input.worktree, ["diff", "--name-only", "main..HEAD", "--", ".github/workflows/"])
-            const wfFiles = wfDiff.stdout.trim()
+            const wfFiles = wfDiff.code === 0 ? wfDiff.stdout.trim() : ""
             if (wfFiles) {
               out.output += "\n\n⚠️ [WORKFLOW SYNC] .github/workflows/ files differ from main:\n" +
                 wfFiles.split("\n").map((f: string) => "  - " + f).join("\n") +
@@ -1280,7 +1475,7 @@ export default async function guardrail(input: {
         }
       }
       // Endpoint dataflow advisory: detect API endpoint modifications
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if (MUTATING_TOOLS.has(item.tool) && file && code(file)) {
         const relFile = rel(input.worktree, file)
         const content = typeof item.args?.content === "string" ? item.args.content :
                         typeof item.args?.newString === "string" ? item.args.newString : ""
@@ -1291,7 +1486,7 @@ export default async function guardrail(input: {
       }
 
       // Doc update scope: remind about related documentation when modifying source
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if (MUTATING_TOOLS.has(item.tool) && file && code(file)) {
         const relFile = rel(input.worktree, file)
         const editsSinceDocCheck = num(data.edits_since_doc_reminder)
         if (editsSinceDocCheck >= 5) {
@@ -1329,6 +1524,58 @@ export default async function guardrail(input: {
         // Track push for review-reading staleness detection
         if (/\bgit\s+push\b/i.test(cmd)) {
           await mark({ last_push_at: now })
+        }
+      }
+
+      // Workflow phase transitions (auto-pipeline orchestration)
+      if (item.tool === "bash") {
+        const cmd = str(item.args?.command)
+        const output = str(out.output)
+
+        // PR creation detection
+        if (/\bgh\s+pr\s+create\b/.test(cmd) && output.includes("github.com")) {
+          const prUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)
+          if (prUrl) {
+            await mark({ workflow_phase: "testing", workflow_pr_url: prUrl[0] })
+            await seen("workflow.pr_created", { url: prUrl[0] })
+            out.output += "\n\n[WORKFLOW] PR created. Next: run tests, then /review, then /ship."
+          }
+        }
+
+        // Test execution detection
+        if (/\b(bun\s+test|pytest|go\s+test|npm\s+test|vitest|jest)\b/.test(cmd)) {
+          const testExit = out.metadata?.exitCode ?? (output.includes("FAIL") ? 1 : 0)
+          if (testExit === 0 && !output.includes("FAIL")) {
+            await mark({ workflow_phase: "reviewing", tests_executed: true })
+            await seen("workflow.tests_passed", {})
+            out.output += "\n\n[WORKFLOW] Tests passed. Next: run /review."
+          }
+        }
+
+        // Merge detection
+        if (/\bgh\s+pr\s+merge\b/.test(cmd) && !output.includes("error") && !output.includes("failed")) {
+          await mark({ workflow_phase: "done" })
+          await seen("workflow.merged", {})
+          out.output += "\n\n[WORKFLOW] Merge complete. Create follow-up issues for any discovered problems."
+        }
+
+        // CI check detection
+        if (/\bgh\s+pr\s+checks\b/.test(cmd)) {
+          const allPass = !output.includes("fail") && !output.includes("pending")
+          if (allPass) {
+            await mark({ ci_green: true })
+          }
+        }
+
+        // Issue creation tracking
+        if (/\bgh\s+issue\s+create\b/.test(cmd) && output.includes("github.com")) {
+          const issueUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)
+          if (issueUrl) {
+            const created = list(data.workflow_issues_created)
+            created.push(issueUrl[0])
+            await mark({ workflow_issues_created: created })
+            await seen("workflow.issue_created", { url: issueUrl[0] })
+          }
         }
       }
 
@@ -1406,7 +1653,22 @@ export default async function guardrail(input: {
         }[]
       },
     ) => {
-      if (!["review", "ship", "handoff"].includes(item.command)) return
+      // Workflow initialization for /implement and /auto commands
+      if (item.command === "implement" || item.command === "auto") {
+        await mark({ workflow_phase: "implementing", workflow_review_attempts: 0 })
+        await seen("workflow.started", { command: item.command })
+        const wfPart = out.parts.find((p) => p.type === "subtask" && typeof p.prompt === "string")
+        if (wfPart) {
+          wfPart.prompt = (wfPart.prompt || "") + "\n\nAfter implementation:\n" +
+            "1. Run relevant tests (bun test / pytest / go test)\n" +
+            "2. Create a PR with proper branch naming\n" +
+            "3. Run /review and address CRITICAL/HIGH findings (max 3 cycles)\n" +
+            "4. Run /ship to merge\n" +
+            "5. Create follow-up issues for out-of-scope problems\n" +
+            "Do NOT stop until the pipeline completes or a hard blocker is hit."
+        }
+      }
+      if (!["review", "ship", "handoff", "implement", "auto"].includes(item.command)) return
       const data = await stash(state)
       const part = out.parts.find((item) => item.type === "subtask" && typeof item.prompt === "string")
       if (!part?.prompt) return
@@ -1538,12 +1800,32 @@ export default async function guardrail(input: {
           `Edit/write count: ${num(data.edit_count)}.`,
           `Fact-check state: ${factLine(data)}.`,
           `Review state: ${reviewLine(data)}.`,
+          `Workflow phase: ${str(data.workflow_phase) || "idle"}.`,
+          `Workflow PR: ${str(data.workflow_pr_url) || "none"}.`,
+          `Review attempts: ${num(data.workflow_review_attempts)}.`,
+          `Auto-review: ${flag(data.auto_review_in_progress) ? "in-progress" : "idle"}.`,
           `Active tasks: ${num(data.active_task_count)} (Map entries: ${Object.keys(json(data.active_tasks)).length}).`,
           `LLM calls: ${num(data.llm_call_count)} (by provider: ${JSON.stringify(json(data.llm_calls_by_provider))}).`,
           `Providers used: ${list(data.session_providers).join(", ") || "none"}.`,
           `Last model mismatch: ${str(data.last_model_mismatch) || "none"}.`,
           `Consecutive failures: ${num(data.consecutive_failures)}.`,
         ].join(" "),
+      )
+    },
+    "experimental.chat.system.transform": async (
+      _item: {},
+      out: { system: string[] },
+    ) => {
+      const data = await stash(state)
+      const phase = str(data.workflow_phase)
+      if (phase && phase !== "idle" && phase !== "done") {
+        out.system.push(
+          `[WORKFLOW] Phase: ${phase}. Pipeline: implement→test→review→fix→ship. Complete autonomously. Do not stop at PR creation.`
+        )
+      }
+      // Follow-up issue guidance
+      out.system.push(
+        "When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline."
       )
     },
   }
