@@ -256,7 +256,7 @@ Use the project-local command.
         expect(map.implement?.agent).toBe("implement")
         expect(map.review?.agent).toBe("review")
         expect(map.review?.subtask).toBe(true)
-        expect(map.ship?.agent).toBe("review")
+        expect(map.ship?.agent).toBe("ship")
         expect(map.ship?.subtask).toBe(true)
         expect(map.handoff?.agent).toBe("review")
         expect(map.handoff?.subtask).toBe(true)
