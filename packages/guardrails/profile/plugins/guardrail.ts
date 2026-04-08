@@ -549,9 +549,20 @@ export default async function guardrail(input: {
       if (flag(data.git_freshness_checked)) return
       await mark({ git_freshness_checked: true })
       try {
+        const proc = Bun.spawn(["git", "-C", input.worktree, "fetch", "--dry-run"], {
+          stdout: "pipe",
+          stderr: "pipe",
+        })
         const fetchResult = await Promise.race([
-          git(input.worktree, ["fetch", "--dry-run"]),
-          Bun.sleep(5000).then(() => null),
+          Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+            proc.exited,
+          ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code })),
+          Bun.sleep(5000).then(() => {
+            proc.kill()
+            return null
+          }),
         ])
         if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
           out.parts.push({
@@ -568,7 +579,7 @@ export default async function guardrail(input: {
       // Branch hygiene: surface stored branch warning from session.created
       const branchWarn = str(data.branch_warning)
       if (branchWarn) {
-        const statusCheck = await git(input.worktree, ["status", "--porcelain"]).catch(() => ({ stdout: "", stderr: "" }))
+        const statusCheck = await git(input.worktree, ["status", "--porcelain"]).catch(() => ({ stdout: "", stderr: "", code: 1 }))
         const dirty = statusCheck.stdout.trim().length > 0 && !statusCheck.stderr.trim()
         out.parts.push({
           id: crypto.randomUUID(),
