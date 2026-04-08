@@ -338,7 +338,7 @@ async function merge(dir: string, item: string, run: string, id: string) {
     if (files.length > 0) {
       await git(dir, ["add", "--", ...files])
       const commitMsg = `chore(team): apply worker changes from task ${id}`
-      const commit = await git(dir, ["commit", "-m", commitMsg, "--no-verify"])
+      const commit = await git(dir, ["commit", "-m", commitMsg])
       if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
         verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
       }

@@ -16,6 +16,8 @@ permission:
     "git branch*": allow
     "gh pr checks*": allow
     "gh pr view*": allow
+    "gh pr merge * --admin*": deny
+    "gh pr merge * --auto*": deny
     "gh pr merge*": allow
     "gh pr list*": allow
     "gh api *": ask
