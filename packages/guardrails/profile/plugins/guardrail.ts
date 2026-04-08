@@ -215,7 +215,36 @@ function cmp(left: string, right: string) {
   return a[2] - b[2]
 }
 
+type Client = {
+  session: {
+    create(input: { body: { parentID: string; title: string }; query: { directory: string } }): Promise<{ data: { id: string } }>
+    promptAsync(input: {
+      path: { id: string }
+      query: { directory: string }
+      body: {
+        agent?: string
+        model?: { providerID: string; modelID: string }
+        tools?: Record<string, boolean>
+        variant?: string
+        parts: { type: "text"; text: string }[]
+      }
+    }): Promise<unknown>
+    prompt(input: {
+      path: { id: string }
+      query: { directory: string }
+      body: {
+        noReply?: boolean
+        parts: { type: "text"; text: string }[]
+      }
+    }): Promise<unknown>
+    status(input: { query: { directory: string } }): Promise<{ data?: Record<string, { type: string }> }>
+    messages(input: { path: { id: string }; query: { directory: string } }): Promise<{ data?: Array<{ info: { role: string; error?: { data?: { message?: string } } }; parts: Array<{ type?: string; text?: string }> }> }>
+    abort(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>
+  }
+}
+
 export default async function guardrail(input: {
+  client: Client
   directory: string
   worktree: string
 }, opts?: Record<string, unknown>) {
@@ -424,6 +453,97 @@ export default async function guardrail(input: {
     if (denyPreview && preview(data.model ?? {})) return `${provider}/${model || "unknown"} is preview-only`
   }
 
+  // --- Auto-review pipeline (models team.ts idle/snap pattern) ---
+  const REVIEW_POLL_GAP = 750
+
+  async function pollIdle(sessionID: string) {
+    for (;;) {
+      const stat = await input.client.session.status({ query: { directory: input.directory } })
+      const item = stat.data?.[sessionID]
+      if (!item || item.type === "idle") return
+      await Bun.sleep(REVIEW_POLL_GAP)
+    }
+  }
+
+  async function readResult(sessionID: string) {
+    const msgs = await input.client.session.messages({ path: { id: sessionID }, query: { directory: input.directory } })
+    const msg = [...(msgs.data ?? [])].reverse().find((m) => m.info.role === "assistant")
+    if (!msg) return { text: "", error: "" }
+    const txt = msg.parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("\n")
+    const err = msg.info.error?.data?.message ?? ""
+    return { text: txt.slice(0, 4000), error: err }
+  }
+
+  function parseFindings(raw: string) {
+    const critical = (raw.match(/CRITICAL/gi) ?? []).length
+    const high = (raw.match(/\bHIGH\b/gi) ?? []).length
+    const medium = (raw.match(/\bMEDIUM\b/gi) ?? []).length
+    const low = (raw.match(/\bLOW\b/gi) ?? []).length
+    return { critical, high, medium, low, total: critical + high + medium + low }
+  }
+
+  async function autoReview(parentSession: string, data: Record<string, unknown>) {
+    const made = await input.client.session.create({
+      body: { parentID: parentSession, title: "Auto-review" },
+      query: { directory: input.directory },
+    })
+    await input.client.session.promptAsync({
+      path: { id: made.data.id },
+      query: { directory: input.directory },
+      body: {
+        agent: "code-reviewer",
+        tools: { edit: false, write: false, apply_patch: false, multiedit: false },
+        parts: [{
+          type: "text",
+          text: `Review the current working directory changes for quality, correctness, and security.\nEdited files: ${list(data.edited_files).join(", ") || "unknown"}\nEdit count: ${num(data.edit_count)}\nReport findings as CRITICAL, HIGH, MEDIUM, or LOW.`,
+        }],
+      },
+    })
+    await pollIdle(made.data.id)
+    const result = await readResult(made.data.id)
+    const findings = parseFindings(result.text)
+    await mark({
+      auto_review_in_progress: false,
+      auto_review_session: made.data.id,
+      review_state: "done",
+      reviewed: true,
+      review_at: new Date().toISOString(),
+      edits_since_review: 0,
+      review_critical_count: findings.critical,
+      review_high_count: findings.high,
+    })
+    await seen("auto_review.completed", { findings: findings.total, critical: findings.critical, high: findings.high })
+    if (findings.critical > 0 || findings.high > 0) {
+      await input.client.session.prompt({
+        path: { id: parentSession },
+        query: { directory: input.directory },
+        body: {
+          noReply: true,
+          parts: [{
+            type: "text",
+            text: `[Auto-review] CRITICAL=${findings.critical} HIGH=${findings.high}. Fix findings before merging.\n\n${result.text.slice(0, 2000)}`,
+          }],
+        },
+      })
+      await mark({ workflow_phase: "fixing" })
+    }
+  }
+
+  function checklist(data: Record<string, unknown>) {
+    const items = [
+      { name: "tests_pass", pass: flag(data.tests_executed) },
+      { name: "review_fresh", pass: str(data.review_state) === "done" && num(data.edits_since_review) === 0 },
+      { name: "ci_green", pass: flag(data.ci_green) },
+      { name: "no_critical", pass: num(data.review_critical_count) === 0 && num(data.review_high_count) === 0 },
+    ]
+    return {
+      score: items.filter((i) => i.pass).length,
+      total: items.length,
+      blocking: items.filter((i) => !i.pass).map((i) => i.name),
+      summary: items.map((i) => `[${i.pass ? "x" : " "}] ${i.name}`).join(", "),
+    }
+  }
+
   return {
     config: async (cfg: {
       provider?: Record<string, { whitelist?: string[] }>
@@ -491,6 +611,16 @@ export default async function guardrail(input: {
           last_merge_at: "",
           issue_verification_done: false,
           edits_since_doc_reminder: 0,
+          // Workflow orchestration state
+          workflow_phase: "idle",
+          workflow_review_attempts: 0,
+          workflow_pr_url: "",
+          workflow_issues_created: [],
+          auto_review_in_progress: false,
+          auto_review_session: "",
+          review_critical_count: 0,
+          review_high_count: 0,
+          ci_green: false,
           // [W9] auto-init-permissions: detected stacks
           detected_stacks: stacks,
           // [W9] enforce-branch-workflow: branch status
@@ -517,6 +647,22 @@ export default async function guardrail(input: {
           last_patterns: event.properties?.patterns,
           last_event: event.type,
         })
+      }
+      if (event.type === "session.idle") {
+        const data = await stash(state)
+        const edits = num(data.edit_count)
+        const pending = str(data.review_state) !== "done"
+        const inProgress = flag(data.auto_review_in_progress)
+        const sessionID = str(event.properties?.sessionID)
+
+        if (edits >= 3 && pending && !inProgress && sessionID) {
+          await mark({ auto_review_in_progress: true })
+          await seen("auto_review.triggered", { edit_count: edits, sessionID })
+          void autoReview(sessionID, data).catch(async (err) => {
+            await mark({ auto_review_in_progress: false })
+            await seen("auto_review.failed", { error: String(err) })
+          })
+        }
       }
       if (event.type === "session.compacted") {
         await mark({
@@ -680,6 +826,13 @@ export default async function guardrail(input: {
               await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
               throw new Error(text("merge blocked: run /review before merging"))
             }
+          }
+        }
+        // Workflow checklist gate for merge commands
+        if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+          const checks = checklist(bashData)
+          if (checks.score < 3) {
+            out.output = (out.output || "") + `\n\nCompletion checklist (${checks.score}/${checks.total}): ${checks.summary}\nBlocking: ${checks.blocking.join(", ")}`
           }
         }
         // CI hard block: verify all checks are green before gh pr merge
@@ -1332,6 +1485,58 @@ export default async function guardrail(input: {
         }
       }
 
+      // Workflow phase transitions (auto-pipeline orchestration)
+      if (item.tool === "bash") {
+        const cmd = str(item.args?.command)
+        const output = str(out.output)
+
+        // PR creation detection
+        if (/\bgh\s+pr\s+create\b/.test(cmd) && output.includes("github.com")) {
+          const prUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)
+          if (prUrl) {
+            await mark({ workflow_phase: "testing", workflow_pr_url: prUrl[0] })
+            await seen("workflow.pr_created", { url: prUrl[0] })
+            out.output += "\n\n[WORKFLOW] PR created. Next: run tests, then /review, then /ship."
+          }
+        }
+
+        // Test execution detection
+        if (/\b(bun\s+test|pytest|go\s+test|npm\s+test|vitest|jest)\b/.test(cmd)) {
+          const testExit = out.metadata?.exitCode ?? (output.includes("FAIL") ? 1 : 0)
+          if (testExit === 0 && !output.includes("FAIL")) {
+            await mark({ workflow_phase: "reviewing", tests_executed: true })
+            await seen("workflow.tests_passed", {})
+            out.output += "\n\n[WORKFLOW] Tests passed. Next: run /review."
+          }
+        }
+
+        // Merge detection
+        if (/\bgh\s+pr\s+merge\b/.test(cmd) && !output.includes("error") && !output.includes("failed")) {
+          await mark({ workflow_phase: "done" })
+          await seen("workflow.merged", {})
+          out.output += "\n\n[WORKFLOW] Merge complete. Create follow-up issues for any discovered problems."
+        }
+
+        // CI check detection
+        if (/\bgh\s+pr\s+checks\b/.test(cmd)) {
+          const allPass = !output.includes("fail") && !output.includes("pending")
+          if (allPass) {
+            await mark({ ci_green: true })
+          }
+        }
+
+        // Issue creation tracking
+        if (/\bgh\s+issue\s+create\b/.test(cmd) && output.includes("github.com")) {
+          const issueUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)
+          if (issueUrl) {
+            const created = list(data.workflow_issues_created)
+            created.push(issueUrl[0])
+            await mark({ workflow_issues_created: created })
+            await seen("workflow.issue_created", { url: issueUrl[0] })
+          }
+        }
+      }
+
       // [NEW] audit-docker-build-args: surface warning
       if (item.tool === "bash" && /\bdocker\s+build\b/i.test(str(item.args?.command))) {
         const freshData = await stash(state)
@@ -1406,7 +1611,22 @@ export default async function guardrail(input: {
         }[]
       },
     ) => {
-      if (!["review", "ship", "handoff"].includes(item.command)) return
+      // Workflow initialization for /implement and /auto commands
+      if (item.command === "implement" || item.command === "auto") {
+        await mark({ workflow_phase: "implementing", workflow_review_attempts: 0 })
+        await seen("workflow.started", { command: item.command })
+        const wfPart = out.parts.find((p) => p.type === "subtask" && typeof p.prompt === "string")
+        if (wfPart) {
+          wfPart.prompt = (wfPart.prompt || "") + "\n\nAfter implementation:\n" +
+            "1. Run relevant tests (bun test / pytest / go test)\n" +
+            "2. Create a PR with proper branch naming\n" +
+            "3. Run /review and address CRITICAL/HIGH findings (max 3 cycles)\n" +
+            "4. Run /ship to merge\n" +
+            "5. Create follow-up issues for out-of-scope problems\n" +
+            "Do NOT stop until the pipeline completes or a hard blocker is hit."
+        }
+      }
+      if (!["review", "ship", "handoff", "implement", "auto"].includes(item.command)) return
       const data = await stash(state)
       const part = out.parts.find((item) => item.type === "subtask" && typeof item.prompt === "string")
       if (!part?.prompt) return
@@ -1538,12 +1758,32 @@ export default async function guardrail(input: {
           `Edit/write count: ${num(data.edit_count)}.`,
           `Fact-check state: ${factLine(data)}.`,
           `Review state: ${reviewLine(data)}.`,
+          `Workflow phase: ${str(data.workflow_phase) || "idle"}.`,
+          `Workflow PR: ${str(data.workflow_pr_url) || "none"}.`,
+          `Review attempts: ${num(data.workflow_review_attempts)}.`,
+          `Auto-review: ${flag(data.auto_review_in_progress) ? "in-progress" : "idle"}.`,
           `Active tasks: ${num(data.active_task_count)} (Map entries: ${Object.keys(json(data.active_tasks)).length}).`,
           `LLM calls: ${num(data.llm_call_count)} (by provider: ${JSON.stringify(json(data.llm_calls_by_provider))}).`,
           `Providers used: ${list(data.session_providers).join(", ") || "none"}.`,
           `Last model mismatch: ${str(data.last_model_mismatch) || "none"}.`,
           `Consecutive failures: ${num(data.consecutive_failures)}.`,
         ].join(" "),
+      )
+    },
+    "experimental.chat.system.transform": async (
+      _item: {},
+      out: { system: string[] },
+    ) => {
+      const data = await stash(state)
+      const phase = str(data.workflow_phase)
+      if (phase && phase !== "idle" && phase !== "done") {
+        out.system.push(
+          `[WORKFLOW] Phase: ${phase}. Pipeline: implement→test→review→fix→ship. Complete autonomously. Do not stop at PR creation.`
+        )
+      }
+      // Follow-up issue guidance
+      out.system.push(
+        "When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline."
       )
     },
   }
