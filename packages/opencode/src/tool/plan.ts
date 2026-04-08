@@ -27,11 +27,11 @@ export const PlanExitTool = Tool.define("plan_exit", {
       sessionID: ctx.sessionID,
       questions: [
         {
-          question: `Plan at ${plan} is complete. Would you like to switch to the build agent and start implementing?`,
-          header: "Build Agent",
+          question: `Plan at ${plan} is complete. Would you like to switch to the implementation agent and start implementing?`,
+          header: "Implementation Agent",
           custom: false,
           options: [
-            { label: "Yes", description: "Switch to build agent and start implementing the plan" },
+            { label: "Yes", description: "Switch to implementation agent and start implementing the plan" },
             { label: "No", description: "Stay with plan agent to continue refining the plan" },
           ],
         },
@@ -43,6 +43,7 @@ export const PlanExitTool = Tool.define("plan_exit", {
     if (answer === "No") throw new Question.RejectedError()
 
     const model = await getLastModel(ctx.sessionID)
+    const defaultAgent = await Agent.defaultAgent()
 
     const userMsg: MessageV2.User = {
       id: MessageID.ascending(),
@@ -51,7 +52,7 @@ export const PlanExitTool = Tool.define("plan_exit", {
       time: {
         created: Date.now(),
       },
-      agent: await Agent.defaultAgent(),
+      agent: defaultAgent,
       model,
     }
     await Session.updateMessage(userMsg)
@@ -65,8 +66,8 @@ export const PlanExitTool = Tool.define("plan_exit", {
     } satisfies MessageV2.TextPart)
 
     return {
-      title: "Switching to build agent",
-      output: "User approved switching to build agent. Wait for further instructions.",
+      title: `Switching to ${defaultAgent} agent`,
+      output: `User approved switching to ${defaultAgent} agent. Wait for further instructions.`,
       metadata: {},
     }
   },

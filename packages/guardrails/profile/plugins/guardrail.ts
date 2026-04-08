@@ -557,19 +557,17 @@ export default async function guardrail(input: {
       // Branch hygiene: surface stored branch warning from session.created
       const branchWarn = str(data.branch_warning)
       if (branchWarn) {
-        try {
-          const statusCheck = await git(input.worktree, ["status", "--porcelain"])
-          const dirty = statusCheck.stdout.trim().length > 0
-          out.parts.push({
-            id: crypto.randomUUID(),
-            sessionID: out.message.sessionID,
-            messageID: out.message.id,
-            type: "text",
-            text: dirty
-              ? `${branchWarn} Uncommitted changes detected — stash or commit before switching branches.`
-              : branchWarn,
-          })
-        } catch { /* git status may fail */ }
+        const statusCheck = await git(input.worktree, ["status", "--porcelain"]).catch(() => ({ stdout: "", stderr: "" }))
+        const dirty = statusCheck.stdout.trim().length > 0 && !statusCheck.stderr.trim()
+        out.parts.push({
+          id: crypto.randomUUID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: dirty
+            ? `${branchWarn} Uncommitted changes detected — stash or commit before switching branches.`
+            : branchWarn,
+        })
         await mark({ branch_warning: "" })
       }
     },

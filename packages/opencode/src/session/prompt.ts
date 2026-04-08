@@ -284,8 +284,7 @@ export namespace SessionPrompt {
             })
           }
           const wasPlan = input.messages.some((msg) => msg.info.role === "assistant" && msg.info.agent === "plan")
-          const defaultAgentName = yield* agents.defaultAgent()
-          if (wasPlan && input.agent.name === defaultAgentName) {
+          if (wasPlan && input.agent.name === (yield* agents.defaultAgent())) {
             userMessage.parts.push({
               id: PartID.ascending(),
               messageID: userMessage.info.id,

@@ -666,7 +666,7 @@ export default async function team(input: {
           run.state = "error"
           run.updated_at = now()
           // Classify failure stage from step state and error content
-          const task = run.tasks[0]
+          const task = run.tasks.find((t) => t.state === "error" || t.state === "running") || run.tasks[0]
           const stage = !task?.dir ? "worktree_setup"
             : !task?.session ? "session_create"
             : /merge|patch|apply/.test(err.message || "") ? "merge_back"
