@@ -589,41 +589,11 @@ export default async function guardrail(input: {
         })
         await mark({ gitignore_missing_opencode: false })
       }
-      // [Phase6] Plan delegation gate: detect multi-task implementation requests
-      const userText = out.parts
-        .filter((p: { type: string; text?: string }) => p.type === "text" && typeof p.text === "string")
-        .map((p: { text?: string }) => p.text ?? "")
-        .join("\n")
-      const taskMarkers = (userText.match(/^\s*(?:[-*]|\d+\.)\s+/gm) ?? []).length
-      const hasImpl = /(?:implement|create|build|add|fix|refactor|rewrite)\b/i.test(userText)
-      if (taskMarkers >= 3 && hasImpl && userText.length >= 300) {
-        out.parts.push({
-          id: crypto.randomUUID(),
-          sessionID: out.message.sessionID,
-          messageID: out.message.id,
-          type: "text",
-          text: "Multi-task implementation detected. Consider using the `team` tool to delegate independent tasks in parallel.",
-        })
-        await seen("delegation_gate.multi_task_detected", { taskMarkers, textLength: userText.length })
-      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown },
       out: { args: Record<string, unknown> },
     ) => {
-      // [Phase6] Branch hygiene hard gate: block mutations on main/master
-      const mutating = item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch"
-      if (mutating || (item.tool === "bash" && bash(str((out.args ?? item.args as Record<string, unknown>)?.command)))) {
-        const bw = str(data.branch_warning)
-        if (bw.startsWith("WARNING")) {
-          try {
-            const brRes = await git(input.worktree, ["branch", "--show-current"])
-            if (/^(main|master)$/.test(brRes.stdout.trim())) {
-              throw new Error(text(`mutation blocked on protected branch (${brRes.stdout.trim()}). Create a feature branch first: git checkout -b feat/<description> develop`))
-            }
-          } catch (e) { if (String(e).includes("blocked") || String(e).includes("mutation blocked")) throw e }
-        }
-      }
       const file = pick(out.args ?? item.args)
       if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write")) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
@@ -642,7 +612,8 @@ export default async function guardrail(input: {
       if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
-          const readFiles = list(data.read_files).slice(-5).join(", ")
+          const budgetData = await stash(state)
+          const readFiles = list(budgetData.read_files).slice(-5).join(", ")
           const err = `context budget exceeded after ${count} source reads (recent: ${readFiles || "unknown"}). Recovery options:\n(1) call \`team\` tool to delegate edit to isolated worker\n(2) use \`background\` tool for side work\n(3) narrow edit scope to a specific function/section rather than whole file\n(4) start a new session and continue from where you left off`
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
