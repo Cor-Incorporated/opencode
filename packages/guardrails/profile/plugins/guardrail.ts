@@ -589,6 +589,23 @@ export default async function guardrail(input: {
         })
         await mark({ gitignore_missing_opencode: false })
       }
+      // [Phase6] Plan delegation gate: detect multi-task implementation requests
+      const userText = out.parts
+        .filter((p: { type: string; text?: string }) => p.type === "text" && typeof p.text === "string")
+        .map((p: { text?: string }) => p.text ?? "")
+        .join("\n")
+      const taskMarkers = (userText.match(/^\s*(?:[-*]|\d+\.)\s+/gm) ?? []).length
+      const hasImpl = /(?:implement|create|build|add|fix|refactor|rewrite)\b/i.test(userText)
+      if (taskMarkers >= 3 && hasImpl && userText.length >= 300) {
+        out.parts.push({
+          id: crypto.randomUUID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: "Multi-task implementation detected. Consider using the `team` tool to delegate independent tasks in parallel.",
+        })
+        await seen("delegation_gate.multi_task_detected", { taskMarkers, textLength: userText.length })
+      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown },
