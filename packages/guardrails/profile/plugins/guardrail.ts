@@ -554,6 +554,22 @@ export default async function guardrail(input: {
       } catch {
         // git fetch may fail in offline or no-remote scenarios; skip silently
       }
+      // Branch hygiene: surface stored branch warning from session.created
+      const branchWarn = str(data.branch_warning)
+      if (branchWarn) {
+        const statusCheck = await git(input.worktree, ["status", "--porcelain"]).catch(() => ({ stdout: "", stderr: "" }))
+        const dirty = statusCheck.stdout.trim().length > 0 && !statusCheck.stderr.trim()
+        out.parts.push({
+          id: crypto.randomUUID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: dirty
+            ? `${branchWarn} Uncommitted changes detected — stash or commit before switching branches.`
+            : branchWarn,
+        })
+        await mark({ branch_warning: "" })
+      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown },
@@ -577,7 +593,7 @@ export default async function guardrail(input: {
       if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
-          const err = `context budget exceeded after ${count} source reads; call the team tool to delegate this edit to an isolated worker, or narrow scope`
+          const err = `context budget exceeded after ${count} source reads. Recovery: (1) call \`team\` tool to delegate edit to isolated worker, (2) use \`background\` tool for side work, (3) narrow edit scope to fewer files`
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }
@@ -828,7 +844,7 @@ export default async function guardrail(input: {
         if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd) && !/\bfetch\b/i.test(cmd)) {
           if (!flag(bashData.tests_executed) && num(bashData.edit_count) >= 3) {
             await mark({ stop_test_warning: true })
-            await seen("stop_test_gate.untested", { edit_count: num(data.edit_count) })
+            await seen("stop_test_gate.untested", { edit_count: num(bashData.edit_count) })
           }
         }
         if (!bash(cmd)) return

@@ -283,7 +283,10 @@ async function yardrm(dir: string, item: string) {
 }
 
 async function merge(dir: string, item: string, run: string, id: string) {
-  const diff = await git(item, ["diff", "--binary"])
+  // Stage all files (including untracked) to capture new files in the diff
+  const add = await git(item, ["add", "-A"])
+  if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
+  const diff = await git(item, ["diff", "--cached", "--binary"])
   if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
   if (!diff.out.trim()) {
     await yardrm(dir, item)
@@ -446,7 +449,9 @@ export default async function team(input: {
     if (!err && push && box !== ctx.directory) {
       const merged = await merge(ctx.worktree, box, run.id, item.id)
       patchfile = merged.patch
-      if (!merged.merged) err = merged.error || "Failed to merge worktree patch"
+      if (!merged.merged) {
+        err = merged.error || "Failed to merge worktree patch"
+      }
     }
 
     todo(run, item.id, {
@@ -660,6 +665,13 @@ export default async function team(input: {
         .catch(async (err: Error) => {
           run.state = "error"
           run.updated_at = now()
+          // Classify failure stage from step state and error content
+          const task = run.tasks.find((t) => t.state === "error" || t.state === "running") || run.tasks[0]
+          const stage = !task?.dir ? "worktree_setup"
+            : !task?.session ? "session_create"
+            : /merge|patch|apply/.test(err.message || "") ? "merge_back"
+            : /abort/i.test(err.message || "") ? "aborted"
+            : "execution"
           await save(ctx.worktree, run)
           if (!args.notify) return
           await input.client.session.prompt({
@@ -672,7 +684,7 @@ export default async function team(input: {
               parts: [
                 {
                   type: "text",
-                  text: `Background run ${run.id} failed.\n\n${err.message || "Unknown error"}`,
+                  text: `Background run ${run.id} failed at stage: ${stage}.\n\n${err.message || "Unknown error"}\n\n${note(run)}`,
                 },
               ],
             },
