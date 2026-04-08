@@ -1,6 +1,6 @@
 ---
 description: Run verification for the current change.
-agent: implement
+agent: test-runner
 ---
 
 Run tests relevant to the current change.

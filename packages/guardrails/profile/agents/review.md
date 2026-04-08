@@ -16,6 +16,10 @@ permission:
     "git status *": allow
     "git show *": allow
     "git log *": allow
+    "gh pr checks*": allow
+    "gh pr view*": allow
+    "gh pr diff*": allow
+    "gh api *": ask
 ---
 
 Review for regressions, missing validation, and missing verification.
