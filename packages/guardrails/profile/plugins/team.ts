@@ -89,6 +89,7 @@ type Step = {
   output: string
   error: string
   updated_at?: string
+  failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout"
 }
 
 type Run = {
@@ -296,8 +297,22 @@ async function merge(dir: string, item: string, run: string, id: string) {
   await Bun.write(next, diff.out)
   const out = await git(dir, ["apply", "--3way", next])
   if (out.code !== 0) return { patch: next, merged: false, error: out.err || out.out || "Failed to apply patch" }
+  // [Phase6] Post-merge verification: confirm patch applied cleanly
+  const verification: { ok: boolean; issues: string[] } = { ok: true, issues: [] }
+  try {
+    const diffStat = await git(dir, ["diff", "--stat", "HEAD"])
+    if (!diffStat.out.trim() && diff.out.trim()) {
+      verification.ok = false
+      verification.issues.push("Patch was non-empty but no diff detected after apply")
+    }
+    const status = await git(dir, ["status", "--porcelain"])
+    const untracked = status.out.trim().split("\n").filter((l: string) => l.startsWith("??")).length
+    if (untracked > 5) {
+      verification.issues.push(`${untracked} untracked files after merge — check for stale artifacts`)
+    }
+  } catch { /* verification is advisory */ }
   await yardrm(dir, item)
-  return { patch: next, merged: true }
+  return { patch: next, merged: true, verification }
 }
 
 async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
@@ -337,6 +352,7 @@ function note(run: Run) {
       item.session ? `session=${item.session}` : "",
       item.dir ? `dir=${item.dir}` : "",
       item.patch ? `patch=${item.patch}` : "",
+      item.failure_stage ? `failure_stage=${item.failure_stage}` : "",
       item.error ? `error=${clip(item.error, 240)}` : "",
       item.output ? `output=${clip(item.output, 240)}` : "",
     ]
@@ -446,12 +462,20 @@ export default async function team(input: {
 
     let patchfile = ""
     let err = out.error
+    // [Phase6] Classify failure stage for abort reason tracking
+    let failure_stage: Step["failure_stage"] = undefined
     if (!err && push && box !== ctx.directory) {
       const merged = await merge(ctx.worktree, box, run.id, item.id)
       patchfile = merged.patch
       if (!merged.merged) {
         err = merged.error || "Failed to merge worktree patch"
+        failure_stage = "merge_back"
       }
+    }
+    if (err && !failure_stage) {
+      failure_stage = /abort/i.test(err) ? "aborted"
+        : /timeout/i.test(err) ? "timeout"
+        : "execution"
     }
 
     todo(run, item.id, {
@@ -459,6 +483,7 @@ export default async function team(input: {
       patch: patchfile,
       output: out.text,
       error: err,
+      failure_stage: err ? failure_stage : undefined,
     })
     await save(ctx.worktree, run)
     if (err) throw new Error(err)
@@ -667,11 +692,12 @@ export default async function team(input: {
           run.updated_at = now()
           // Classify failure stage from step state and error content
           const task = run.tasks.find((t) => t.state === "error" || t.state === "running") || run.tasks[0]
-          const stage = !task?.dir ? "worktree_setup"
+          const stage: Step["failure_stage"] = !task?.dir ? "worktree_setup"
             : !task?.session ? "session_create"
             : /merge|patch|apply/.test(err.message || "") ? "merge_back"
             : /abort/i.test(err.message || "") ? "aborted"
             : "execution"
+          if (task) task.failure_stage = stage
           await save(ctx.worktree, run)
           if (!args.notify) return
           await input.client.session.prompt({
