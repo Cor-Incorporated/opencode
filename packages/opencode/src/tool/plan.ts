@@ -5,6 +5,7 @@ import { Question } from "../question"
 import { Session } from "../session"
 import { MessageV2 } from "../session/message-v2"
 import { Provider } from "../provider/provider"
+import { Agent } from "../agent/agent"
 import { Instance } from "../project/instance"
 import { type SessionID, MessageID, PartID } from "../session/schema"
 import EXIT_DESCRIPTION from "./plan-exit.txt"
@@ -50,7 +51,7 @@ export const PlanExitTool = Tool.define("plan_exit", {
       time: {
         created: Date.now(),
       },
-      agent: "build",
+      agent: await Agent.defaultAgent(),
       model,
     }
     await Session.updateMessage(userMsg)
