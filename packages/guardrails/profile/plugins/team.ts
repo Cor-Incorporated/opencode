@@ -281,7 +281,15 @@ async function yardadd(dir: string, id: string) {
   const files = await git(next, ["ls-files", "--cached"]).catch(() => ({ code: 1, out: "", err: "" }))
   if (files.code !== 0 || !files.out.trim()) {
     // Worktree might be empty — force checkout HEAD contents
-    await git(next, ["checkout", "HEAD", "--", "."])
+    const checkout = await git(next, ["checkout", "HEAD", "--", "."])
+    if (checkout.code !== 0) {
+      throw new Error(`Worktree created but checkout failed: ${checkout.err || checkout.out}`)
+    }
+    // Re-verify files are present
+    const recheck = await git(next, ["ls-files", "--cached"]).catch(() => ({ code: 1, out: "", err: "" }))
+    if (recheck.code !== 0 || !recheck.out.trim()) {
+      throw new Error("Worktree is still empty after checkout — cannot proceed with delegation")
+    }
   }
   return next
 }

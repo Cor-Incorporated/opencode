@@ -34,7 +34,7 @@ const mut = [
   /\btee\b/i,
   /\bsed\s+-i\b/i,
   /\bperl\s+-pi\b/i,
-  />/,
+  /\s>[^&]|^>/,  // redirect operator — excludes > inside quoted strings and &&/||
 ]
 
 const MUTATING_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit"])
@@ -100,10 +100,11 @@ function rel(root: string, file: string) {
   return abs.slice(dir.length + 1)
 }
 
-const secExempt = /\.(example|sample|template)$/i
+// Only exempt .env.example/.env.sample/.env.template — not *.key.template etc.
+const secEnvExempt = /\.env\.(example|sample|template)$/i
 
 function has(file: string, list: RegExp[]) {
-  if (list === sec && secExempt.test(file)) return false
+  if (list === sec && secEnvExempt.test(file)) return false
   return list.some((item) => item.test(file))
 }
 
@@ -461,8 +462,13 @@ export default async function guardrail(input: {
   // --- Auto-review pipeline (models team.ts idle/snap pattern) ---
   const REVIEW_POLL_GAP = 750
 
+  const REVIEW_TIMEOUT_MS = 120_000 // 2 minutes max for auto-review
   async function pollIdle(sessionID: string) {
+    const start = Date.now()
     for (;;) {
+      if (Date.now() - start > REVIEW_TIMEOUT_MS) {
+        throw new Error(`Auto-review timed out after ${REVIEW_TIMEOUT_MS}ms`)
+      }
       const stat = await input.client.session.status({ query: { directory: input.directory } })
       const item = stat.data?.[sessionID]
       if (!item || item.type === "idle") return
