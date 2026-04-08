@@ -24,9 +24,9 @@ const cfg = [
 ]
 
 const mut = [
-  /\brm\b/i,
-  /\bmv\b/i,
-  /\bcp\b/i,
+  /\brm\s+/i,
+  /\bmv\s+/i,
+  /\bcp\s+/i,
   /\bchmod\b/i,
   /\bchown\b/i,
   /\btouch\b/i,
@@ -36,6 +36,8 @@ const mut = [
   /\bperl\s+-pi\b/i,
   />/,
 ]
+
+const MUTATING_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit"])
 
 const src = new Set([
   ".ts",
@@ -98,7 +100,10 @@ function rel(root: string, file: string) {
   return abs.slice(dir.length + 1)
 }
 
+const secExempt = /\.(example|sample|template)$/i
+
 function has(file: string, list: RegExp[]) {
+  if (list === sec && secExempt.test(file)) return false
   return list.some((item) => item.test(file))
 }
 
@@ -454,6 +459,7 @@ export default async function guardrail(input: {
         let branchWarning = ""
         try {
           const branchRes = await git(input.worktree, ["branch", "--show-current"])
+          if (branchRes.code !== 0) throw new Error("git branch failed")
           const currentBranch = branchRes.stdout.trim()
           if (/^(main|master)$/.test(currentBranch)) {
             branchWarning = `WARNING: on ${currentBranch} branch. Create a feature branch: git checkout -b feat/<description> develop`
@@ -546,35 +552,45 @@ export default async function guardrail(input: {
     ) => {
       if (out.message.role !== "user") return
       const data = await stash(state)
-      if (flag(data.git_freshness_checked)) return
-      await mark({ git_freshness_checked: true })
-      try {
-        const proc = Bun.spawn(["git", "-C", input.worktree, "fetch", "--dry-run"], {
-          stdout: "pipe",
-          stderr: "pipe",
+      // Surface deferred git freshness advisory from previous fire-and-forget fetch
+      const pendingFreshness = str(data.git_freshness_advisory)
+      if (pendingFreshness) {
+        out.parts.push({
+          id: crypto.randomUUID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: pendingFreshness,
         })
-        const fetchResult = await Promise.race([
-          Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-            proc.exited,
-          ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code })),
-          Bun.sleep(5000).then(() => {
-            proc.kill()
-            return null
-          }),
-        ])
-        if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
-          out.parts.push({
-            id: crypto.randomUUID(),
-            sessionID: out.message.sessionID,
-            messageID: out.message.id,
-            type: "text",
-            text: "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes.",
-          })
-        }
-      } catch {
-        // git fetch may fail in offline or no-remote scenarios; skip silently
+        await mark({ git_freshness_advisory: "" })
+      }
+      if (!flag(data.git_freshness_checked)) {
+        await mark({ git_freshness_checked: true })
+        // Fire-and-forget: do not block chat.message handler on slow git fetch
+        void (async () => {
+          try {
+            const proc = Bun.spawn(["git", "-C", input.worktree, "fetch", "--dry-run"], {
+              stdout: "pipe",
+              stderr: "pipe",
+            })
+            const fetchResult = await Promise.race([
+              Promise.all([
+                new Response(proc.stdout).text(),
+                new Response(proc.stderr).text(),
+                proc.exited,
+              ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code })),
+              Bun.sleep(5000).then(() => {
+                proc.kill()
+                return null
+              }),
+            ])
+            if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
+              await mark({ git_freshness_advisory: "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes." })
+            }
+          } catch {
+            // git fetch may fail in offline or no-remote scenarios; skip silently
+          }
+        })()
       }
       // Branch hygiene: surface stored branch warning from session.created
       const branchWarn = str(data.branch_warning)
@@ -609,21 +625,21 @@ export default async function guardrail(input: {
       out: { args: Record<string, unknown> },
     ) => {
       const file = pick(out.args ?? item.args)
-      if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write")) {
+      if (file && (item.tool === "read" || item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch")) {
         const err = deny(file, item.tool === "read" ? "read" : "edit")
         if (err) {
           await mark({ last_block: item.tool, last_file: rel(input.worktree, file), last_reason: err })
           throw new Error(text(err))
         }
       }
-      if (item.tool === "edit" || item.tool === "write") {
+      if (item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") {
         const err = await version(out.args ?? {})
         if (err) {
           await mark({ last_block: item.tool, last_file: file ? rel(input.worktree, file) : "", last_reason: err })
           throw new Error(text(err))
         }
       }
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if ((item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") && file && code(file)) {
         const count = await budget()
         if (count >= 4) {
           const budgetData = await stash(state)
@@ -654,7 +670,9 @@ export default async function guardrail(input: {
             throw new Error(text(`merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`))
           }
           try {
-            const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            const branchResult = await git(input.worktree, ["branch", "--show-current"])
+            if (branchResult.code !== 0) throw new Error("git branch failed")
+            const branch = branchResult.stdout.trim()
             const tier = /^(ci|chore|docs)\//.test(branch) ? "EXEMPT" :
                          /^fix\//.test(branch) ? "LIGHT" : "FULL"
             if (tier === "EXEMPT") {
@@ -712,7 +730,7 @@ export default async function guardrail(input: {
         if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
           try {
             const repoRes = await git(input.worktree, ["remote", "get-url", "origin"])
-            const repo = repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "")
+            const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
             const prMatch2 = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
             const prNum2 = prMatch2 ? prMatch2[1] : ""
             if (repo && prNum2) {
@@ -730,7 +748,8 @@ export default async function guardrail(input: {
         // [Phase6] Stacked PR rebase gate: warn if child PRs exist and are stale
         if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
           try {
-            const curBranch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            const curBranchRes = await git(input.worktree, ["branch", "--show-current"])
+            const curBranch = curBranchRes.code === 0 ? curBranchRes.stdout.trim() : ""
             if (curBranch) {
               const proc3 = Bun.spawn(["gh", "pr", "list", "--base", curBranch, "--json", "number,headRefName", "--jq", ".[].number"], {
                 cwd: input.worktree, stdout: "pipe", stderr: "pipe",
@@ -761,7 +780,7 @@ export default async function guardrail(input: {
           if (!/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+\S+/i.test(cmd)) {
             try {
               const result = await git(input.worktree, ["branch", "--show-current"])
-              if (result.stdout && protectedBranch.test(result.stdout.trim())) {
+              if (result.code === 0 && result.stdout && protectedBranch.test(result.stdout.trim())) {
                 throw new Error(text("direct push to protected branch blocked — use a PR workflow"))
               }
             } catch (e) { if (String(e).includes("blocked")) throw e }
@@ -771,8 +790,9 @@ export default async function guardrail(input: {
         if (/\bgit\s+(checkout\s+-b|switch\s+-c)\b/i.test(cmd)) {
           try {
             const devCheck = await git(input.worktree, ["rev-parse", "--verify", "origin/develop"])
-            if (devCheck.stdout.trim()) {
-              const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+            if (devCheck.code === 0 && devCheck.stdout.trim()) {
+              const branchCheck = await git(input.worktree, ["branch", "--show-current"])
+              const branch = branchCheck.code === 0 ? branchCheck.stdout.trim() : ""
               if (/^(main|master)$/.test(branch)) {
                 await mark({ last_block: "bash", last_command: cmd, last_reason: "branch creation from main blocked" })
                 throw new Error(text("branch creation from main blocked: checkout develop first, then create branch"))
@@ -870,6 +890,7 @@ export default async function guardrail(input: {
         if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
           try {
             const diffRes = await git(input.worktree, ["diff", "--name-only", "origin/develop...HEAD"])
+            if (diffRes.code !== 0) throw new Error("git diff failed")
             const changedFiles = diffRes.stdout.trim()
             const hasInfra = /^(hooks\/|scripts\/)[^/]+\.sh$/m.test(changedFiles)
             if (hasInfra) {
@@ -887,9 +908,10 @@ export default async function guardrail(input: {
           if (/--base\s+main(\s|$)/i.test(cmd)) {
             try {
               const devCheck = await git(input.worktree, ["rev-parse", "--verify", "origin/develop"])
-              if (devCheck.stdout.trim()) {
+              if (devCheck.code === 0 && devCheck.stdout.trim()) {
                 // Allow release PR from develop
-                const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+                const branchForPr = await git(input.worktree, ["branch", "--show-current"])
+                const branch = branchForPr.code === 0 ? branchForPr.stdout.trim() : ""
                 if (branch !== "develop" && !/--head\s+develop/i.test(cmd)) {
                   await mark({ last_block: "bash", last_command: cmd, last_reason: "PR targeting main when develop exists" })
                   throw new Error(text("PR targeting main blocked: use --base develop. Release PRs must be from develop branch."))
@@ -1040,7 +1062,7 @@ export default async function guardrail(input: {
         }
       }
 
-      if ((item.tool === "edit" || item.tool === "write" || item.tool === "apply_patch") && file) {
+      if (MUTATING_TOOLS.has(item.tool) && file) {
         const seen = list(data.edited_files)
         const next = seen.includes(rel(input.worktree, file)) ? seen : [...seen, rel(input.worktree, file)]
         const nextEditCount = num(data.edit_count) + 1
@@ -1067,7 +1089,7 @@ export default async function guardrail(input: {
       }
 
       // Architecture layer advisory
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if (MUTATING_TOOLS.has(item.tool) && file && code(file)) {
         const relFile = rel(input.worktree, file)
         const content = typeof item.args?.content === "string" ? item.args.content :
                         typeof item.args?.newString === "string" ? item.args.newString : ""
@@ -1128,7 +1150,7 @@ export default async function guardrail(input: {
           if (prMatch) {
             const prNum = prMatch[1]
             const repoRes = await git(input.worktree, ["remote", "get-url", "origin"])
-            const repo = repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "")
+            const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
             if (repo) {
               const proc = Bun.spawn(["gh", "api", `repos/${repo}/pulls/${prNum}/files`, "--jq", ".[].filename"], {
                 cwd: input.worktree, stdout: "pipe", stderr: "pipe",
@@ -1224,10 +1246,11 @@ export default async function guardrail(input: {
       // [W9] workflow-sync-guard: warn when workflow files differ from main after push
       if (item.tool === "bash" && /\bgit\s+push\b/i.test(str(item.args?.command))) {
         try {
-          const branch = (await git(input.worktree, ["branch", "--show-current"])).stdout.trim()
+          const wfBranch = await git(input.worktree, ["branch", "--show-current"])
+          const branch = wfBranch.code === 0 ? wfBranch.stdout.trim() : ""
           if (branch && !/^(main|master)$/.test(branch)) {
             const wfDiff = await git(input.worktree, ["diff", "--name-only", "main..HEAD", "--", ".github/workflows/"])
-            const wfFiles = wfDiff.stdout.trim()
+            const wfFiles = wfDiff.code === 0 ? wfDiff.stdout.trim() : ""
             if (wfFiles) {
               out.output += "\n\n⚠️ [WORKFLOW SYNC] .github/workflows/ files differ from main:\n" +
                 wfFiles.split("\n").map((f: string) => "  - " + f).join("\n") +
@@ -1280,7 +1303,7 @@ export default async function guardrail(input: {
         }
       }
       // Endpoint dataflow advisory: detect API endpoint modifications
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if (MUTATING_TOOLS.has(item.tool) && file && code(file)) {
         const relFile = rel(input.worktree, file)
         const content = typeof item.args?.content === "string" ? item.args.content :
                         typeof item.args?.newString === "string" ? item.args.newString : ""
@@ -1291,7 +1314,7 @@ export default async function guardrail(input: {
       }
 
       // Doc update scope: remind about related documentation when modifying source
-      if ((item.tool === "edit" || item.tool === "write") && file && code(file)) {
+      if (MUTATING_TOOLS.has(item.tool) && file && code(file)) {
         const relFile = rel(input.worktree, file)
         const editsSinceDocCheck = num(data.edits_since_doc_reminder)
         if (editsSinceDocCheck >= 5) {

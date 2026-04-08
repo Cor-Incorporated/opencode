@@ -148,9 +148,9 @@ function scrub(cmd: string) {
 function mut(cmd: string) {
   const data = scrub(cmd)
   return [
-    /\brm\b/i,
-    /\bmv\b/i,
-    /\bcp\b/i,
+    /\brm\s+/i,
+    /\bmv\s+/i,
+    /\bcp\s+/i,
     /\bchmod\b/i,
     /\bchown\b/i,
     /\btouch\b/i,
@@ -159,7 +159,8 @@ function mut(cmd: string) {
     /\bsed\s+-i\b/i,
     /\bperl\s+-pi\b/i,
     />/,
-    /\bgit\s+(apply|am|merge|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
+    /\bgit\s+(apply|am|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
+    /\bgit\s+merge(\s|$)/i,
   ].some((item) => item.test(data))
 }
 
