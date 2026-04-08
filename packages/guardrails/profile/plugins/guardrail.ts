@@ -480,10 +480,17 @@ export default async function guardrail(input: {
   }
 
   function parseFindings(raw: string) {
-    const critical = (raw.match(/CRITICAL/gi) ?? []).length
-    const high = (raw.match(/\bHIGH\b/gi) ?? []).length
-    const medium = (raw.match(/\bMEDIUM\b/gi) ?? []).length
-    const low = (raw.match(/\bLOW\b/gi) ?? []).length
+    // Count only actionable findings — exclude negations like "No CRITICAL issues found"
+    const lines = raw.split("\n")
+    let critical = 0, high = 0, medium = 0, low = 0
+    for (const line of lines) {
+      const neg = /\b(no|zero|0|none|without|aren't|isn't|not)\b/i.test(line)
+      if (neg) continue
+      if (/\bCRITICAL\b/i.test(line)) critical++
+      if (/\bHIGH\b/i.test(line)) high++
+      if (/\bMEDIUM\b/i.test(line)) medium++
+      if (/\bLOW\b/i.test(line)) low++
+    }
     return { critical, high, medium, low, total: critical + high + medium + low }
   }
 
@@ -506,6 +513,12 @@ export default async function guardrail(input: {
     })
     await pollIdle(made.data.id)
     const result = await readResult(made.data.id)
+    // Do not mark review as done if the session errored or returned empty
+    if (result.error || !result.text.trim()) {
+      await mark({ auto_review_in_progress: false })
+      await seen("auto_review.errored", { error: result.error || "empty response" })
+      return
+    }
     const findings = parseFindings(result.text)
     await mark({
       auto_review_in_progress: false,

@@ -321,12 +321,19 @@ async function merge(dir: string, item: string, run: string, id: string) {
   // Auto-commit applied changes so they are not left uncommitted in the parent worktree.
   // Without this, patched changes remain as unstaged modifications — the root cause of
   // "worktree changes returned but not committed" (Issue #144, Claude Code Agent parity gap).
+  // Auto-commit only the patch-applied files (not unrelated local edits).
+  // Use `git diff --name-only` to identify files changed by the patch, then stage only those.
   try {
-    await git(dir, ["add", "-A"])
-    const commitMsg = `chore(team): apply worker changes from task ${id}`
-    const commit = await git(dir, ["commit", "-m", commitMsg, "--no-verify"])
-    if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
-      verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
+    const changed = await git(dir, ["diff", "--name-only"])
+    const untracked = await git(dir, ["ls-files", "--others", "--exclude-standard"])
+    const files = [...changed.out.trim().split("\n"), ...untracked.out.trim().split("\n")].filter(Boolean)
+    if (files.length > 0) {
+      await git(dir, ["add", "--", ...files])
+      const commitMsg = `chore(team): apply worker changes from task ${id}`
+      const commit = await git(dir, ["commit", "-m", commitMsg, "--no-verify"])
+      if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
+        verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
+      }
     }
   } catch { /* auto-commit is best-effort; parent session can still commit manually */ }
   await yardrm(dir, item)
