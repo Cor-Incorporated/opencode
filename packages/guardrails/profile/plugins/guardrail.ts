@@ -1544,7 +1544,7 @@ export default async function guardrail(input: {
       if (item.tool === "bash") {
         const cmd = str(item.args?.command)
         const output = str(out.output)
-        const currentPhase = str(bashData.workflow_phase)
+        const currentPhase = str(data.workflow_phase)
         const pipelineActive = currentPhase && currentPhase !== "idle" && currentPhase !== "done" && currentPhase !== "blocked"
 
         // PR creation detection — only when implementing
