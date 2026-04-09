@@ -1250,6 +1250,29 @@ export type ProviderConfig = {
   env?: Array<string>
   id?: string
   npm?: string
+  whitelist?: Array<string>
+  blacklist?: Array<string>
+  options?: {
+    apiKey?: string
+    baseURL?: string
+    /**
+     * GitHub Enterprise URL for copilot authentication
+     */
+    enterpriseUrl?: string
+    /**
+     * Enable promptCacheKey for this provider (default false)
+     */
+    setCacheKey?: boolean
+    /**
+     * Timeout in milliseconds for requests to this provider. Default is 300000 (5 minutes). Set to false to disable timeout.
+     */
+    timeout?: number | false
+    /**
+     * Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.
+     */
+    chunkTimeout?: number
+    [key: string]: unknown | string | boolean | number | false | number | undefined
+  }
   models?: {
     [key: string]: {
       id?: string
@@ -1288,15 +1311,15 @@ export type ProviderConfig = {
       }
       experimental?: boolean
       status?: "alpha" | "beta" | "deprecated"
+      provider?: {
+        npm?: string
+        api?: string
+      }
       options?: {
         [key: string]: unknown
       }
       headers?: {
         [key: string]: string
-      }
-      provider?: {
-        npm?: string
-        api?: string
       }
       /**
        * Variant-specific configuration
@@ -1311,29 +1334,6 @@ export type ProviderConfig = {
         }
       }
     }
-  }
-  whitelist?: Array<string>
-  blacklist?: Array<string>
-  options?: {
-    apiKey?: string
-    baseURL?: string
-    /**
-     * GitHub Enterprise URL for copilot authentication
-     */
-    enterpriseUrl?: string
-    /**
-     * Enable promptCacheKey for this provider (default false)
-     */
-    setCacheKey?: boolean
-    /**
-     * Timeout in milliseconds for requests to this provider. Default is 300000 (5 minutes). Set to false to disable timeout.
-     */
-    timeout?: number | false
-    /**
-     * Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.
-     */
-    chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | undefined
   }
 }
 
@@ -1573,6 +1573,67 @@ export type Config = {
   tools?: {
     [key: string]: boolean
   }
+  /**
+   * Shell script hooks for lifecycle events
+   */
+  hooks?: {
+    PreToolUse?: Array<{
+      /**
+       * Shell command or path to script
+       */
+      command: string
+      /**
+       * Tool name glob pattern (PreToolUse/PostToolUse only)
+       */
+      matcher?: string
+      /**
+       * Timeout in ms (default: 10000)
+       */
+      timeout?: number
+    }>
+    PostToolUse?: Array<{
+      /**
+       * Shell command or path to script
+       */
+      command: string
+      /**
+       * Tool name glob pattern (PreToolUse/PostToolUse only)
+       */
+      matcher?: string
+      /**
+       * Timeout in ms (default: 10000)
+       */
+      timeout?: number
+    }>
+    SessionStart?: Array<{
+      /**
+       * Shell command or path to script
+       */
+      command: string
+      /**
+       * Tool name glob pattern (PreToolUse/PostToolUse only)
+       */
+      matcher?: string
+      /**
+       * Timeout in ms (default: 10000)
+       */
+      timeout?: number
+    }>
+    Notification?: Array<{
+      /**
+       * Shell command or path to script
+       */
+      command: string
+      /**
+       * Tool name glob pattern (PreToolUse/PostToolUse only)
+       */
+      matcher?: string
+      /**
+       * Timeout in ms (default: 10000)
+       */
+      timeout?: number
+    }>
+  }
   enterprise?: {
     /**
      * Enterprise URL
@@ -1592,6 +1653,20 @@ export type Config = {
      * Token buffer for compaction. Leaves enough window to avoid overflow during compaction.
      */
     reserved?: number
+  }
+  memory?: {
+    /**
+     * Enable or disable memory system
+     */
+    enabled?: boolean
+    /**
+     * Enable automatic memory extraction from sessions
+     */
+    auto_extract?: boolean
+    /**
+     * Maximum number of lines to load from MEMORY.md
+     */
+    max_memory_lines?: number
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -3936,7 +4011,10 @@ export type SessionShellResponses = {
   /**
    * Created message
    */
-  200: AssistantMessage
+  200: {
+    info: Message
+    parts: Array<Part>
+  }
 }
 
 export type SessionShellResponse = SessionShellResponses[keyof SessionShellResponses]
@@ -4212,68 +4290,7 @@ export type ProviderListResponses = {
    * List of providers
    */
   200: {
-    all: Array<{
-      api?: string
-      name: string
-      env: Array<string>
-      id: string
-      npm?: string
-      models: {
-        [key: string]: {
-          id: string
-          name: string
-          family?: string
-          release_date: string
-          attachment: boolean
-          reasoning: boolean
-          temperature: boolean
-          tool_call: boolean
-          interleaved?:
-            | true
-            | {
-                field: "reasoning_content" | "reasoning_details"
-              }
-          cost?: {
-            input: number
-            output: number
-            cache_read?: number
-            cache_write?: number
-            context_over_200k?: {
-              input: number
-              output: number
-              cache_read?: number
-              cache_write?: number
-            }
-          }
-          limit: {
-            context: number
-            input?: number
-            output: number
-          }
-          modalities?: {
-            input: Array<"text" | "audio" | "image" | "video" | "pdf">
-            output: Array<"text" | "audio" | "image" | "video" | "pdf">
-          }
-          experimental?: boolean
-          status?: "alpha" | "beta" | "deprecated"
-          options: {
-            [key: string]: unknown
-          }
-          headers?: {
-            [key: string]: string
-          }
-          provider?: {
-            npm?: string
-            api?: string
-          }
-          variants?: {
-            [key: string]: {
-              [key: string]: unknown
-            }
-          }
-        }
-      }
-    }>
+    all: Array<Provider>
     default: {
       [key: string]: string
     }

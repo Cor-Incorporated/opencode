@@ -1,0 +1,30 @@
+# Fork-only paths: always keep our version during upstream merge
+# These directories/files exist only in Cor-Incorporated/opencode, not in upstream (anomalyco/opencode)
+# Using merge=ours driver: `git config merge.ours.driver true`
+
+# Core fork additions
+packages/opencode/src/hook/**         merge=ours
+packages/opencode/src/memory/**       merge=ours
+packages/opencode/src/notification/** merge=ours
+packages/opencode/src/session/repetition.ts merge=ours
+packages/opencode/src/session/prompt/glm.txt merge=ours
+packages/opencode/test/hook/**        merge=ours
+
+# Guardrails plugin package
+packages/guardrails/**                merge=ours
+
+# Fork-specific config
+.opencode/**                          merge=ours
+
+# Fork documentation
+docs/ai-guardrails/**                 merge=ours
+docs/comparison/**                    merge=ours
+FORK.md                               merge=ours
+
+# Fork-specific migrations
+packages/opencode/migration/20260405053632_add-memory-table/** merge=ours
+
+# Fork-specific CI workflows
+.github/workflows/seed-verify.yml     merge=ours
+.github/workflows/upstream-sync.yml   merge=ours
+.github/workflows/workflow-sync.yml   merge=ours

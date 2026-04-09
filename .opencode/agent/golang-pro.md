@@ -1,0 +1,1 @@
+../../packages/guardrails/profile/agents/golang-pro.md

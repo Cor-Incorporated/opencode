@@ -1,0 +1,1 @@
+../../packages/guardrails/profile/agents/doc-updater.md

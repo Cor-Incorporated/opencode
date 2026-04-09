@@ -20,6 +20,7 @@ import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 import { detectRepetition, REPETITION_THRESHOLD } from "./repetition"
+import { isRecord } from "@/util/record"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -39,7 +40,6 @@ export namespace SessionProcessor {
   export interface Handle {
     readonly message: MessageV2.Assistant
     readonly partFromToolCall: (toolCallID: string) => MessageV2.ToolPart | undefined
-    readonly abort: () => Effect.Effect<void>
     readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
   }
 
@@ -192,6 +192,7 @@ export namespace SessionProcessor {
                 tool: value.toolName,
                 callID: value.id,
                 state: { status: "pending", input: {}, raw: "" },
+                metadata: value.providerExecuted ? { providerExecuted: true } : undefined,
               } satisfies MessageV2.ToolPart)
               return
 
@@ -211,7 +212,9 @@ export namespace SessionProcessor {
                 ...match,
                 tool: value.toolName,
                 state: { status: "running", input: value.input, time: { start: Date.now() } },
-                metadata: value.providerMetadata,
+                metadata: match.metadata?.providerExecuted
+                  ? { ...value.providerMetadata, providerExecuted: true }
+                  : value.providerMetadata,
               } satisfies MessageV2.ToolPart)
 
               // Fire-and-forget: track bash commands for memory extraction
@@ -394,7 +397,10 @@ export namespace SessionProcessor {
                 },
                 { text: ctx.currentText.text },
               )).text
-              ctx.currentText.time = { start: Date.now(), end: Date.now() }
+              {
+                const end = Date.now()
+                ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+              }
               if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
               yield* session.updatePart(ctx.currentText)
               ctx.currentText = undefined
@@ -441,19 +447,21 @@ export namespace SessionProcessor {
           }
           ctx.reasoningMap = {}
 
-          const parts = MessageV2.parts(ctx.assistantMessage.id)
-          for (const part of parts) {
-            if (part.type !== "tool" || part.state.status === "completed" || part.state.status === "error") continue
+          for (const part of Object.values(ctx.toolcalls)) {
+            const end = Date.now()
+            const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
             yield* session.updatePart({
               ...part,
               state: {
                 ...part.state,
                 status: "error",
                 error: "Tool execution aborted",
-                time: { start: Date.now(), end: Date.now() },
+                metadata: { ...metadata, interrupted: true },
+                time: { start: "time" in part.state ? part.state.time.start : end, end },
               },
             })
           }
+          ctx.toolcalls = {}
           ctx.assistantMessage.time.completed = Date.now()
           yield* session.updateMessage(ctx.assistantMessage)
           // Fire-and-forget: flush and clean up memory extraction state
@@ -476,19 +484,6 @@ export namespace SessionProcessor {
           yield* status.set(ctx.sessionID, { type: "idle" })
         })
 
-        const abort = Effect.fn("SessionProcessor.abort")(() =>
-          Effect.gen(function* () {
-            if (!ctx.assistantMessage.error) {
-              yield* halt(new DOMException("Aborted", "AbortError"))
-            }
-            if (!ctx.assistantMessage.time.completed) {
-              yield* cleanup()
-              return
-            }
-            yield* session.updateMessage(ctx.assistantMessage)
-          }),
-        )
-
         const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
           log.info("process")
           ctx.needsCompaction = false
@@ -506,7 +501,14 @@ export namespace SessionProcessor {
                 Stream.runDrain,
               )
             }).pipe(
-              Effect.onInterrupt(() => Effect.sync(() => void (aborted = true))),
+              Effect.onInterrupt(() =>
+                Effect.gen(function* () {
+                  aborted = true
+                  if (!ctx.assistantMessage.error) {
+                    yield* halt(new DOMException("Aborted", "AbortError"))
+                  }
+                }),
+              ),
               Effect.catchCauseIf(
                 (cause) => !Cause.hasInterruptsOnly(cause),
                 (cause) => Effect.fail(Cause.squash(cause)),
@@ -527,13 +529,10 @@ export namespace SessionProcessor {
               Effect.ensuring(cleanup()),
             )
 
-            if (aborted && !ctx.assistantMessage.error) {
-              yield* abort()
-            }
             if (ctx.needsCompaction) return "compact"
-            if (ctx.blocked || ctx.assistantMessage.error || aborted) return "stop"
+            if (ctx.blocked || ctx.assistantMessage.error) return "stop"
             return "continue"
-          }).pipe(Effect.onInterrupt(() => abort().pipe(Effect.asVoid)))
+          })
         })
 
         return {
@@ -543,7 +542,6 @@ export namespace SessionProcessor {
           partFromToolCall(toolCallID: string) {
             return ctx.toolcalls[toolCallID]
           },
-          abort,
           process,
         } satisfies Handle
       })

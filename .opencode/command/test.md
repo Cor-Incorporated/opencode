@@ -1,0 +1,1 @@
+../../packages/guardrails/profile/commands/test.md
