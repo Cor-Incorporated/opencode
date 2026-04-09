@@ -1,0 +1,1 @@
+../../packages/guardrails/profile/agents/typescript-pro.md

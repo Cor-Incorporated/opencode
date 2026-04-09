@@ -1,0 +1,1 @@
+../../packages/guardrails/profile/commands/update-docs.md
