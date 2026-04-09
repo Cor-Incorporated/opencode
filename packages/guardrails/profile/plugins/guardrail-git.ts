@@ -1,0 +1,432 @@
+import { flag, git, num, stash, str } from "./guardrail-patterns"
+import type { GuardrailContext } from "./guardrail-context"
+
+type Review = {
+  checklist(data: Record<string, unknown>): {
+    score: number
+    total: number
+    blocking: string[]
+    summary: string
+  }
+  reviewGate(data: Record<string, unknown>): {
+    done: boolean
+    pending: string[]
+    message: string
+  }
+  syncReviewState(): Promise<void>
+}
+
+export function createGitHandlers(ctx: GuardrailContext, review: Review) {
+  async function bashBeforeGit(cmd: string, out: { output?: string }, data: Record<string, unknown>) {
+    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+      const criticalCount = num(data.review_critical_count)
+      const highCount = num(data.review_high_count)
+      if (criticalCount > 0 || highCount > 0) {
+        const prNum = str(data.review_pr_number)
+        await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `unresolved CRITICAL=${criticalCount} HIGH=${highCount}` })
+        throw new Error(`Guardrail policy blocked this action: merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`)
+      }
+      try {
+        const branchResult = await git(ctx.input.worktree, ["branch", "--show-current"])
+        if (branchResult.code !== 0) throw new Error("git branch failed")
+        const branch = branchResult.stdout.trim()
+        const tier = /^(ci|chore|docs)\//.test(branch) ? "EXEMPT" :
+          /^fix\//.test(branch) ? "LIGHT" : "FULL"
+        if (tier === "EXEMPT") {
+          await ctx.seen("pre_merge.tier", { branch, tier, result: "pass" })
+        } else if (tier === "LIGHT") {
+          const anyReviewDone = str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done"
+          const checksRan = Boolean(str(data.review_checks_at))
+          const noSevere = checksRan && criticalCount === 0 && highCount === 0
+          if (!anyReviewDone && !noSevere) {
+            await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "LIGHT tier: review or C/H=0 required" })
+            throw new Error("Guardrail policy blocked this action: merge blocked (LIGHT tier): run code-reviewer agent OR Codex review OR run `gh pr checks` with CRITICAL=0 HIGH=0")
+          }
+        } else {
+          const gate = review.reviewGate(data)
+          if (!gate.done) {
+            await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `FULL tier: ${gate.message}` })
+            throw new Error(`Guardrail policy blocked this action: merge blocked (FULL tier): ${gate.message}. Run both code-reviewer agent and Codex review before merging.`)
+          }
+        }
+      } catch (err) {
+        if (String(err).includes("blocked")) throw err
+        const gate = review.reviewGate(data)
+        if (!gate.done) {
+          await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `merge blocked: ${gate.message}` })
+          throw new Error(`Guardrail policy blocked this action: merge blocked: ${gate.message}. Run /review and Codex review before merging.`)
+        }
+      }
+    }
+
+    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+      const checks = review.checklist(data)
+      if (checks.score < 3) {
+        out.output = (out.output || "") + `\n\nCompletion checklist (${checks.score}/${checks.total}): ${checks.summary}\nBlocking: ${checks.blocking.join(", ")}`
+      }
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      try {
+        const prMatch = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
+        const prArg = prMatch ? [prMatch[1]] : []
+        const proc = Bun.spawn(["gh", "pr", "checks", ...prArg], {
+          cwd: ctx.input.worktree,
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [ciOut] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exited,
+        ])
+        if (proc.exitCode !== 0 || /fail|pending/i.test(ciOut)) {
+          await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "CI checks not all green" })
+          throw new Error("Guardrail policy blocked this action: merge blocked: CI checks not all green — run `gh pr checks` to verify")
+        }
+      } catch (err) {
+        if (String(err).includes("blocked")) throw err
+        await ctx.mark({ last_block: "bash:ci-warn", last_command: cmd, last_reason: "CI check verification failed" })
+        await ctx.seen("ci.check_verification_failed", { error: String(err) })
+      }
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      try {
+        const repoRes = await git(ctx.input.worktree, ["remote", "get-url", "origin"])
+        const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
+        const prMatch = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
+        const prNum = prMatch ? prMatch[1] : ""
+        if (repo && prNum) {
+          const proc = Bun.spawn(["gh", "api", `repos/${repo}/pulls/${prNum}/reviews`, "--jq", "[.[] | select(.state==\"CHANGES_REQUESTED\")] | length"], {
+            cwd: ctx.input.worktree,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          const [revOut] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+          if (parseInt(revOut.trim()) > 0) {
+            await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "unresolved CHANGES_REQUESTED reviews" })
+            throw new Error("Guardrail policy blocked this action: merge blocked: unresolved CHANGES_REQUESTED reviews — address reviewer feedback first")
+          }
+        }
+      } catch (err) {
+        if (String(err).includes("blocked")) throw err
+      }
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      try {
+        const curBranchRes = await git(ctx.input.worktree, ["branch", "--show-current"])
+        const branch = curBranchRes.code === 0 ? curBranchRes.stdout.trim() : ""
+        if (branch) {
+          const proc = Bun.spawn(["gh", "pr", "list", "--base", branch, "--json", "number,headRefName", "--jq", ".[].number"], {
+            cwd: ctx.input.worktree,
+            stdout: "pipe",
+            stderr: "pipe",
+          })
+          const [childOut] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+          const childPRs = childOut.trim().split("\n").filter(Boolean)
+          if (childPRs.length > 0) {
+            out.output = (out.output || "") + `\n⚠️ Stacked PR detected: ${childPRs.length} child PR(s) depend on this branch. Rebase child PRs after merging.`
+            await ctx.seen("stacked_pr.children_detected", { count: childPRs.length, children: childPRs })
+          }
+        }
+      } catch {}
+    }
+
+    const protectedBranch = /^(main|master|develop|dev)$/
+    if (/\bgit\s+push\b/i.test(cmd)) {
+      const explicitMatch = cmd.match(/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+(?:HEAD:)?(\S+)/i)
+      if (explicitMatch && protectedBranch.test(explicitMatch[1])) {
+        throw new Error("Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow")
+      }
+      const refspecMatch = cmd.match(/HEAD:(main|master|develop|dev)(?:\s|$)/i)
+      if (refspecMatch) {
+        throw new Error("Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow")
+      }
+      if (!/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+\S+/i.test(cmd)) {
+        try {
+          const result = await git(ctx.input.worktree, ["branch", "--show-current"])
+          if (result.code === 0 && result.stdout && protectedBranch.test(result.stdout.trim())) {
+            throw new Error("Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow")
+          }
+        } catch (err) {
+          if (String(err).includes("blocked")) throw err
+        }
+      }
+    }
+
+    if (/\bgit\s+(checkout\s+-b|switch\s+-c)\b/i.test(cmd)) {
+      try {
+        const devCheck = await git(ctx.input.worktree, ["rev-parse", "--verify", "origin/develop"])
+        if (devCheck.code === 0 && devCheck.stdout.trim()) {
+          const branchCheck = await git(ctx.input.worktree, ["branch", "--show-current"])
+          const branch = branchCheck.code === 0 ? branchCheck.stdout.trim() : ""
+          if (/^(main|master)$/.test(branch)) {
+            await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "branch creation from main blocked" })
+            throw new Error("Guardrail policy blocked this action: branch creation from main blocked: checkout develop first, then create branch")
+          }
+        }
+      } catch (err) {
+        if (String(err).includes("blocked")) throw err
+      }
+    }
+
+    if (/\bgit\s+(cherry-pick)\b/i.test(cmd) && !/--abort\b/i.test(cmd)) {
+      await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "cherry-pick blocked: delegate to Codex CLI" })
+      throw new Error("Guardrail policy blocked this action: cherry-pick blocked: delegate to Codex CLI for context-heavy merge operations")
+    }
+
+    if (/\bgit\s+rebase\b/i.test(cmd) && !/--abort\b/i.test(cmd)) {
+      if (/\bgit\s+rebase\s+(origin\/)?(main|master|develop)\b/i.test(cmd)) {
+        await ctx.mark({ rebase_session_active: true, rebase_session_at: new Date().toISOString() })
+      } else if (/\bgit\s+rebase\s+--(continue|skip)\b/i.test(cmd)) {
+        const data = await stash(ctx.state)
+        const at = str(data.rebase_session_at)
+        if (!at || Date.now() - new Date(at).getTime() > 3600_000) {
+          await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "rebase --continue/--skip: no active session" })
+          throw new Error("Guardrail policy blocked this action: rebase --continue/--skip blocked: no active permitted rebase session (1h expiry)")
+        }
+      } else {
+        await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "arbitrary rebase blocked" })
+        throw new Error("Guardrail policy blocked this action: arbitrary rebase blocked: only sync from main/master/develop is permitted")
+      }
+    }
+
+    if (/\bgit\s+branch\s+(-[mMfF]\b|--move\b|--force\b)/i.test(cmd)) {
+      await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "branch rename/force-move blocked" })
+      throw new Error("Guardrail policy blocked this action: branch rename/force-move blocked: prevents commit guard bypass")
+    }
+
+    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+      const lastMerge = str(data.last_merge_at)
+      if (lastMerge) {
+        const elapsed = Date.now() - new Date(lastMerge).getTime()
+        const halfDay = 12 * 60 * 60 * 1000
+        if (elapsed < halfDay) {
+          const hours = Math.round(elapsed / (60 * 60 * 1000) * 10) / 10
+          await ctx.mark({ soak_time_warning: true, soak_time_elapsed_h: hours })
+          await ctx.seen("soak_time.advisory", { elapsed_ms: elapsed, required_ms: halfDay })
+        }
+      }
+    }
+
+    if (/\bgh\s+pr\s+create\b/i.test(cmd) && num(data.consecutive_fix_prs) >= 2) {
+      await ctx.seen("follow_up.limit_reached", { consecutive: num(data.consecutive_fix_prs) })
+    }
+
+    if (/\bgh\s+issue\s+close\b/i.test(cmd) && !flag(data.issue_verification_done)) {
+      await ctx.seen("issue_close.unverified", { command: cmd })
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      const reviewAt = str(data.review_at)
+      const lastPushAt = str(data.last_push_at)
+      if (reviewAt && lastPushAt && new Date(reviewAt) < new Date(lastPushAt)) {
+        await ctx.mark({ review_reading_warning: true, last_block: "bash", last_reason: "stale review: push after review" })
+        await ctx.seen("review_reading.stale", { review_at: reviewAt, last_push_at: lastPushAt })
+        throw new Error("Guardrail policy blocked this action: merge blocked: code was pushed after the last review. Re-request review before merging.")
+      }
+    }
+
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      try {
+        const diffRes = await git(ctx.input.worktree, ["diff", "--name-only", "origin/develop...HEAD"])
+        if (diffRes.code !== 0) throw new Error("git diff failed")
+        const changedFiles = diffRes.stdout.trim()
+        const hasInfra = /^(hooks\/|scripts\/)[^/]+\.sh$/m.test(changedFiles)
+        if (hasInfra && !flag(data.deploy_verified)) {
+          await ctx.seen("deploy_verify.missing", {
+            files: changedFiles.split("\n").filter((item: string) => /^(hooks|scripts)\//.test(item)),
+          })
+          await ctx.mark({ deploy_verify_warning: true })
+        }
+      } catch {}
+    }
+
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      if (/--base\s+main(\s|$)/i.test(cmd)) {
+        try {
+          const devCheck = await git(ctx.input.worktree, ["rev-parse", "--verify", "origin/develop"])
+          if (devCheck.code === 0 && devCheck.stdout.trim()) {
+            const branchRes = await git(ctx.input.worktree, ["branch", "--show-current"])
+            const branch = branchRes.code === 0 ? branchRes.stdout.trim() : ""
+            if (branch !== "develop" && !/--head\s+develop/i.test(cmd)) {
+              await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "PR targeting main when develop exists" })
+              throw new Error("Guardrail policy blocked this action: PR targeting main blocked: use --base develop. Release PRs must be from develop branch.")
+            }
+          }
+        } catch (err) {
+          if (String(err).includes("blocked")) throw err
+        }
+      }
+      if (!/\b(closes?|fixes?|resolves?)\s*#\d+/i.test(cmd) && !/#\d+/i.test(cmd)) {
+        await ctx.mark({ pr_guard_issue_ref_warning: true })
+        await ctx.seen("pr_guard.missing_issue_ref", { command: cmd.slice(0, 200) })
+      }
+      const testRan = flag(data.tests_executed)
+      const typeChecked = flag(data.type_checked)
+      if (!testRan || !typeChecked) {
+        await ctx.mark({ pr_guard_warning: true, pr_guard_tests: testRan, pr_guard_types: typeChecked })
+        await ctx.seen("pr_guard.preflight_incomplete", { tests: testRan, types: typeChecked })
+      }
+    }
+
+    if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd) && !/\bfetch\b/i.test(cmd)) {
+      if (!flag(data.tests_executed) && num(data.edit_count) >= 3) {
+        await ctx.mark({ stop_test_warning: true })
+        await ctx.seen("stop_test_gate.untested", { edit_count: num(data.edit_count) })
+      }
+    }
+  }
+
+  async function bashAfterGit(
+    item: { tool: string; args?: Record<string, unknown> },
+    out: { output: string; metadata: Record<string, unknown> },
+    data: Record<string, unknown>,
+  ) {
+    const cmd = str(item.args?.command)
+    if (item.tool !== "bash" || !cmd) return
+
+    if (/\b(git\s+push|gh\s+pr\s+create)\b/i.test(cmd)) {
+      out.output = (out.output || "") + "\n⚠️ Remember to verify CI status: `gh pr checks`"
+      try {
+        const proc = Bun.spawn(["gh", "pr", "view", "--json", "mergeable", "--jq", ".mergeable"], {
+          cwd: ctx.input.worktree,
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        const [mergeOut] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+        if (mergeOut.trim() === "CONFLICTING") {
+          out.output += "\n⚠️ PR has merge conflicts. Rebase or merge the base branch before proceeding."
+          await ctx.seen("pr.merge_conflict_detected", {})
+        }
+      } catch {}
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      out.output = (out.output || "") + "\n🚀 Post-merge: verify deployment status and run smoke tests on the target environment."
+      try {
+        const prMatch = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
+        if (prMatch) {
+          const repoRes = await git(ctx.input.worktree, ["remote", "get-url", "origin"])
+          const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
+          if (repo) {
+            const proc = Bun.spawn(["gh", "api", `repos/${repo}/pulls/${prMatch[1]}/files`, "--jq", ".[].filename"], {
+              cwd: ctx.input.worktree,
+              stdout: "pipe",
+              stderr: "pipe",
+            })
+            const [filesOut] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+            const files = filesOut.trim()
+            const risks: string[] = []
+            if (/^terraform\/|\.tf$/m.test(files)) risks.push("Terraform")
+            if (/migration|migrate|\.sql$/im.test(files)) risks.push("Migration/DDL")
+            if (/^\.github\/workflows\//m.test(files)) risks.push("GitHub Actions")
+            if (/Dockerfile|docker-compose|cloudbuild/im.test(files)) risks.push("Docker/Cloud Build")
+            if (/deploy|release/im.test(files)) risks.push("Deploy/Release")
+            if (risks.length > 0) {
+              out.output += "\n\n⚠️ [POST-MERGE VALIDATION] High-risk changes detected: " + risks.join(", ") + ".\nChecklist: HTTP 200, HTTPS, no errors in logs, migration rollback plan, Terraform plan attached, Docker --platform linux/amd64."
+              await ctx.seen("post_merge.validation_required", { pr: prMatch[1], risks })
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      await ctx.mark({ last_merge_at: new Date().toISOString() })
+      if (/\b(fix(es)?|close[sd]?|resolve[sd]?)\s+#\d+/i.test(out.output)) {
+        out.output = (out.output || "") + "\n📋 Detected issue reference in merge output. Verify referenced issues are closed."
+      }
+    }
+
+    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+      const fresh = await stash(ctx.state)
+      if (flag(fresh.soak_time_warning)) {
+        out.output = (out.output || "") + "\n⏳ Soak time advisory: only " + num(fresh.soak_time_elapsed_h) + "h since last merge (12h recommended). Consider waiting before merging to main."
+        await ctx.mark({ soak_time_warning: false })
+      }
+    }
+
+    if (/\bgit\s+push\b/i.test(cmd)) {
+      try {
+        const branchRes = await git(ctx.input.worktree, ["branch", "--show-current"])
+        const branch = branchRes.code === 0 ? branchRes.stdout.trim() : ""
+        if (branch && !/^(main|master)$/.test(branch)) {
+          const diffRes = await git(ctx.input.worktree, ["diff", "--name-only", "main..HEAD", "--", ".github/workflows/"])
+          const files = diffRes.code === 0 ? diffRes.stdout.trim() : ""
+          if (files) {
+            out.output += "\n\n⚠️ [WORKFLOW SYNC] .github/workflows/ files differ from main:\n" +
+              files.split("\n").map((item: string) => "  - " + item).join("\n") +
+              "\nOIDC validation requires workflow files to match the default branch. Create a chore PR to sync."
+            await ctx.seen("workflow_sync.diverged", { branch, files: files.split("\n") })
+          }
+        }
+      } catch {}
+    }
+
+    if (/\bgit\s+commit\b/i.test(cmd) && num(data.edit_count) >= 5) {
+      out.output = (out.output || "") + "\n🧠 Significant changes committed (" + num(data.edit_count) + " edits). Consider updating memory with key decisions or learnings."
+    }
+
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      const prNum = (out.output || "").match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/)?.[1]
+      if (prNum) {
+        await ctx.mark({ review_pending: true, review_pending_pr: prNum })
+        out.output += "\n\n📋 [AUTO-REVIEW REQUIRED] PR #" + prNum + " created. Run code-reviewer agent and address all CRITICAL/HIGH findings before merging."
+        await ctx.seen("post_pr_create.review_trigger", { pr: prNum })
+      }
+    }
+
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      if (/--title\s+["']?fix/i.test(cmd) || /\bfix\//i.test(cmd)) {
+        const fixes = num(data.consecutive_fix_prs) + 1
+        await ctx.mark({ consecutive_fix_prs: fixes })
+        if (fixes >= 2) {
+          out.output = (out.output || "") + "\n⚠️ Feature freeze warning: " + fixes + " consecutive fix PRs on the same feature. Consider stabilizing before adding more changes."
+        }
+      } else {
+        await ctx.mark({ consecutive_fix_prs: 0 })
+      }
+    }
+
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      const fresh = await stash(ctx.state)
+      if (flag(fresh.pr_guard_warning)) {
+        const tests = flag(fresh.pr_guard_tests)
+        const types = flag(fresh.pr_guard_types)
+        const missing = [!tests && "tests", !types && "typecheck"].filter(Boolean).join(", ")
+        out.output = (out.output || "") + "\n🛡️ PR guard: " + missing + " not yet run this session. Run `bun turbo test:ci && bun turbo typecheck` before creating PR."
+        await ctx.mark({ pr_guard_warning: false })
+      }
+      if (flag(fresh.deploy_verify_warning)) {
+        out.output = (out.output || "") + "\n🚀 Deploy verification: changed hooks/scripts detected but not yet deployed. Run setup.sh and verify firing before merging."
+        await ctx.mark({ deploy_verify_warning: false })
+      }
+    }
+
+    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+      const fresh = await stash(ctx.state)
+      if (flag(fresh.review_reading_warning)) {
+        out.output = (out.output || "") + "\n📖 Stale review: code was pushed after the last review. Re-request review before merging."
+        await ctx.mark({ review_reading_warning: false })
+      }
+    }
+
+    if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd)) {
+      const fresh = await stash(ctx.state)
+      if (flag(fresh.stop_test_warning)) {
+        out.output = (out.output || "") + "\n🚫 Test gate: " + num(fresh.edit_count) + " edits without running tests. Run tests before pushing/merging."
+        await ctx.mark({ stop_test_warning: false })
+      }
+    }
+  }
+
+  return { bashBeforeGit, bashAfterGit }
+}
+
+export default {
+  id: "guardrail-git",
+  server: async () => ({}),
+}
