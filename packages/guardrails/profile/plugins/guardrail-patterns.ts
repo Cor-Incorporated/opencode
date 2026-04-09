@@ -219,7 +219,3 @@ export function cmp(left: string, right: string) {
   return a[2] - b[2]
 }
 
-export default {
-  id: "guardrail-patterns",
-  server: async () => ({}),
-}

@@ -426,7 +426,3 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
   return { bashBeforeGit, bashAfterGit }
 }
 
-export default {
-  id: "guardrail-git",
-  server: async () => ({}),
-}

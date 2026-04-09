@@ -290,7 +290,3 @@ export function createAccessHandlers(ctx: GuardrailContext) {
   return { toolBeforeAccess, toolAfterAccess }
 }
 
-export default {
-  id: "guardrail-access",
-  server: async () => ({}),
-}

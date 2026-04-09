@@ -337,7 +337,3 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   } satisfies GuardrailContext
 }
 
-export default {
-  id: "guardrail-context",
-  server: async () => ({}),
-}

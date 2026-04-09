@@ -192,7 +192,3 @@ export function createReviewPipeline(ctx: GuardrailContext) {
   }
 }
 
-export default {
-  id: "guardrail-review",
-  server: async () => ({}),
-}
