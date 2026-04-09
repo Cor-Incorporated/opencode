@@ -43,6 +43,7 @@ function load(dir) {
 const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "profile")
 load(process.cwd())
 process.env.OPENCODE_CONFIG_DIR ||= dir
+process.env.OPENCODE_EXPERIMENTAL_PLAN_MODE ||= "true"
 
 const out = spawnSync(bin(), process.argv.slice(2), {
   stdio: "inherit",

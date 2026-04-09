@@ -34,7 +34,7 @@ const mut = [
   /\btee\b/i,
   /\bsed\s+-i\b/i,
   /\bperl\s+-pi\b/i,
-  /\s>[^&]|^>/,  // redirect operator — excludes > inside quoted strings and &&/||
+  /\s>\s*[\/~$._a-zA-Z]|^>/,  // redirect operator — matches > followed by path-start chars (excludes digits to avoid comparison false positives)
 ]
 
 const MUTATING_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit"])
@@ -1197,6 +1197,18 @@ export default async function guardrail(input: {
           }
         }
       } catch { /* hash check is best-effort */ }
+
+      // [Issue #148] Plan→Auto chain: auto-start implementing after plan approval
+      // Only chain when no active workflow is already running (idle/undefined)
+      if (item.tool === "plan_exit") {
+        try {
+          const currentPhase = str(data.workflow_phase)
+          if (!currentPhase || currentPhase === "idle") {
+            await mark({ workflow_phase: "implementing", workflow_review_attempts: 0 })
+            await seen("workflow.plan_approved", { sessionID: "plan_exit" })
+          }
+        } catch { /* plan chain is best-effort */ }
+      }
 
       if (item.tool === "read" && file) {
         if (code(file)) {
