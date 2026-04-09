@@ -476,6 +476,12 @@ export default async function guardrail(input: {
     }
   }
 
+  // Sync composite review_state AFTER individual state writes (avoids TOCTOU)
+  async function syncReviewState() {
+    const current = await stash(state)
+    await mark({ review_state: reviewGate(current).done ? "done" : "" })
+  }
+
   // --- Auto-review pipeline (models team.ts idle/snap pattern) ---
   const REVIEW_POLL_GAP = 750
 
@@ -566,6 +572,7 @@ export default async function guardrail(input: {
       review_critical_count: findings.critical,
       review_high_count: findings.high,
     })
+    await syncReviewState()
     await seen("auto_review.completed", { findings: findings.total, critical: findings.critical, high: findings.high })
     if (findings.critical > 0 || findings.high > 0) {
       await input.client.session.prompt({
@@ -1293,6 +1300,7 @@ export default async function guardrail(input: {
             edits_since_review: num(data.edits_since_review) + 1,
             review_glm_state: "",
             review_codex_state: hasCodexMcp ? "" : "done",
+            review_state: "",
           })
         }
       }
@@ -1309,6 +1317,7 @@ export default async function guardrail(input: {
           last_edit: rel(input.worktree, file),
           review_glm_state: "",
           review_codex_state: hasCodexMcp ? "" : "done",
+          review_state: "",
         })
 
         if (/\.(test|spec)\.(ts|tsx|js|jsx)$|(^|\/)test_.*\.py$|_test\.go$/.test(rel(input.worktree, file))) {
@@ -1432,6 +1441,7 @@ export default async function guardrail(input: {
               edits_since_review: 0,
             })
           }
+          await syncReviewState()
         }
         // Delegation: remove completed task from active tasks map
         const activeTasks = json(data.active_tasks)
@@ -1468,6 +1478,7 @@ export default async function guardrail(input: {
             review_codex_state: "done",
             review_codex_at: new Date().toISOString(),
           })
+          await syncReviewState()
           await seen("codex_review.completed", { critical: codexFindings.critical, high: codexFindings.high })
         }
       }
