@@ -1,0 +1,62 @@
+{
+  "7": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-08T15:20:19Z"
+  },
+  "5": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-09T14:15:25Z"
+  },
+  "4": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-09T14:06:42Z"
+  },
+  "6": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-09T14:17:06Z"
+  },
+  "8": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-08T09:03:08Z"
+  },
+  "9": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-08T09:03:09Z"
+  },
+  "1": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-09T14:06:10Z"
+  },
+  "2": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-09T14:06:07Z"
+  },
+  "3": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-09T14:06:32Z"
+  },
+  "10": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-08T09:10:05Z"
+  },
+  "11": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-08T09:10:06Z"
+  },
+  "12": {
+    "failure_count": 0,
+    "last_action": "reset",
+    "updated_at": "2026-04-08T09:10:06Z"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "session_id": "E241F05C-3560-4708-B4A7-90CA5821433C",
+  "parent_session_id": null,
+  "state": "stopped",
+  "state_version": 1,
+  "started_at": "2026-04-08T07:53:50Z",
+  "updated_at": "2026-04-08T08:25:10Z",
+  "resume_token": "C867C17E-CD08-404C-A399-E0CDAB0B027D",
+  "event_seq": 103,
+  "last_event_id": "event-000103",
+  "fork_count": 0,
+  "orchestration": {
+    "max_state_retries": 3,
+    "retry_backoff_seconds": 10
+  },
+  "cwd": "/Users/teradakousuke/developer/opencode",
+  "project_name": "opencode",
+  "prompt_seq": 1,
+  "git": {
+    "branch": "dev",
+    "uncommitted_changes": 4,
+    "last_commit": "12f58bcc5"
+  },
+  "plans": {
+    "exists": false,
+    "last_modified": 0,
+    "wip_tasks": 0,
+    "todo_tasks": 0,
+    "pending_tasks": 0,
+    "completed_tasks": 0
+  },
+  "changes_this_session": [],
+  "intent": "semantic",
+  "last_message_length": 618,
+  "last_message_hash": "f0a7d636bc389862",
+  "ended_at": "2026-04-08T08:25:10Z",
+  "duration_minutes": 571,
+  "memory_logged": true
+}

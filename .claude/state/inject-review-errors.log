@@ -1,0 +1,16 @@
+[review] PR #145 レビューコメント: 8件
+Severity: CRITICAL=0 HIGH=0 WARNING=0 SUGGESTION=0
+
+--- Inline Review (6件) ---
+[1] packages/guardrails/profile/plugins/guardrail.ts:107 -- `secExempt` currently exempts any path ending with `.example`, `.sample`, or `.template` from *all* `sec` protections. This weakens the secret-file guard broadly (e.g., a file matching `*.key` or `*.pem` but suffixed with `.template` would no longer be blocked). If the goal is only to allow `.env.ex
+[2] packages/guardrails/profile/plugins/guardrail.ts:468 -- `pollIdle()` loops indefinitely with no timeout/abort path. If the review session never reaches `idle` (API issue, stuck run, missing status entry), `autoReview()` never resolves/rejects and `auto_review_in_progress` can remain stuck `true`, preventing future auto-reviews and leaking a background ta
+[3] packages/guardrails/profile/plugins/guardrail.ts:532 -- `autoReview()` marks `review_state: "done"` even when the spawned session returns no assistant message (`result.text === ""`) or reports an error (`result.error`). This can incorrectly satisfy merge gates without a valid review result. Consider treating empty/error results as a failed review: keep `
+[4] packages/guardrails/profile/plugins/guardrail.ts:37 -- The mutating-bash detector includes a bare `/>/`, which matches `>` inside quoted strings (e.g., `echo "version > 2"`) and will trigger mutating behavior like `review_state` resets and protected-mutation blocks. To avoid false positives (Issue #141), tighten this to only match redirections outside q
+[5] packages/guardrails/profile/plugins/team.ts:284 -- In `yardadd()`, if the worktree appears empty you run `git checkout HEAD -- .` but don't check the return code or re-validate that files are now present. If checkout fails (or the worktree is misconfigured), this will silently return a still-broken worktree and later steps will fail in harder-to-deb
+[6] packages/guardrails/profile/plugins/guardrail.ts:684 -- Auto-review behavior (trigger on `session.idle` after `edit_count >= 3`, spawning a review session, and updating `review_state`/counts) is newly introduced here, but there are no scenario/unit tests covering the trigger, the spawned-session polling, or the resulting state transitions (`auto_review_i
+
+--- Issue/Bot Comments (2件) ---
+[1] @github-actions[bot]: _The following comment was made by an LLM, it may be inaccurate:_ |  | 
+[2] @copilot-pull-request-reviewer[bot]: [COMMENTED] ## Pull request overview |  | This PR extends the guardrails profile toward an autonomous workflow pipeline by adding auto-review orchestration, a dedicated `/ship` subagent that can execute `gh pr merge`, and tightening/repairing delegation worktree behavior. |  | **Changes:** | - Add an auto-review pipeline triggered on `session.idle` (edits ≥ 3) plus workflow phase/state tracking and system prompt injection. | - Introduce a new `ship` agent + rewrite `/ship` command to verify gates and run `g
+
+CRITICAL/HIGH指摘なし。MEDIUM以下はfollow-up可。

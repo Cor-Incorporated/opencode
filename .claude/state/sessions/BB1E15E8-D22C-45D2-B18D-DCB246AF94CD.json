@@ -1,0 +1,134 @@
+{
+  "session_id": "BB1E15E8-D22C-45D2-B18D-DCB246AF94CD",
+  "parent_session_id": null,
+  "state": "stopped",
+  "state_version": 1,
+  "started_at": "2026-04-08T06:43:33Z",
+  "updated_at": "2026-04-08T07:16:58Z",
+  "resume_token": "E5A7305A-1BB4-4952-8515-422D911EC527",
+  "event_seq": 105,
+  "last_event_id": "event-000105",
+  "fork_count": 0,
+  "orchestration": {
+    "max_state_retries": 3,
+    "retry_backoff_seconds": 10
+  },
+  "cwd": "/Users/teradakousuke/developer/opencode",
+  "project_name": "opencode",
+  "prompt_seq": 1,
+  "git": {
+    "branch": "dev",
+    "uncommitted_changes": 5,
+    "last_commit": "47e28db4f"
+  },
+  "plans": {
+    "exists": false,
+    "last_modified": 0,
+    "wip_tasks": 0,
+    "todo_tasks": 0,
+    "pending_tasks": 0,
+    "completed_tasks": 0
+  },
+  "changes_this_session": [
+    {
+      "file": "/Users/teradakousuke/.claude/plans/snoopy-munching-deer.md",
+      "action": "Write",
+      "timestamp": "2026-04-08T07:01:11Z",
+      "important": false
+    },
+    {
+      "file": ".gitignore",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:02:57Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/team.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:03:13Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/team.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:03:25Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/team.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:03:40Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/guardrail.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:03:54Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/guardrail.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:04:27Z",
+      "important": false
+    },
+    {
+      "file": "packages/opencode/src/tool/plan.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:04:40Z",
+      "important": false
+    },
+    {
+      "file": "packages/opencode/src/tool/plan.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:04:46Z",
+      "important": false
+    },
+    {
+      "file": "packages/opencode/src/session/prompt.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:05:09Z",
+      "important": false
+    },
+    {
+      "file": "/Users/teradakousuke/.config/opencode/opencode.jsonc",
+      "action": "Write",
+      "timestamp": "2026-04-08T07:05:47Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/guardrail.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:14:07Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/team.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:14:11Z",
+      "important": false
+    },
+    {
+      "file": "packages/guardrails/profile/plugins/team.ts",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:14:15Z",
+      "important": false
+    },
+    {
+      "file": "/Users/teradakousuke/.claude/projects/-Users-teradakousuke-Developer-opencode/memory/project_session_20260408_phase0.md",
+      "action": "Write",
+      "timestamp": "2026-04-08T07:16:33Z",
+      "important": false
+    },
+    {
+      "file": "/Users/teradakousuke/.claude/projects/-Users-teradakousuke-Developer-opencode/memory/MEMORY.md",
+      "action": "Edit",
+      "timestamp": "2026-04-08T07:16:45Z",
+      "important": false
+    }
+  ],
+  "intent": "semantic",
+  "ended_at": "2026-04-08T07:16:58Z",
+  "duration_minutes": 573,
+  "memory_logged": true
+}
