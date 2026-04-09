@@ -264,7 +264,7 @@ export default async function guardrail(input: {
   const log = path.join(root, "events.jsonl")
   const state = path.join(root, "state.json")
   const allow: Record<string, Set<string>> = {}
-  let hasCodexMcp = true // assume available; updated at session.created
+  let hasCodexMcp = false // assume unavailable; set true at session.created if configured
 
   // --- Delegation gate config ---
   const maxParallelTasks = 5
@@ -479,7 +479,11 @@ export default async function guardrail(input: {
   // Sync composite review_state AFTER individual state writes (avoids TOCTOU)
   async function syncReviewState() {
     const current = await stash(state)
-    await mark({ review_state: reviewGate(current).done ? "done" : "" })
+    const gate = reviewGate(current)
+    await mark({
+      review_state: gate.done ? "done" : "",
+      ...(gate.done ? { edits_since_review: 0 } : {}),
+    })
   }
 
   // --- Auto-review pipeline (models team.ts idle/snap pattern) ---
@@ -713,7 +717,7 @@ export default async function guardrail(input: {
           const settingsPath = path.join(process.env.HOME || "~", ".claude", "settings.json")
           const settings = JSON.parse(await Bun.file(settingsPath).text().catch(() => "{}"))
           const mcpServers = settings.mcpServers ?? settings.mcp_servers ?? {}
-          hasCodexMcp = Object.keys(mcpServers).some((k) => /codex/i.test(k))
+          hasCodexMcp = Object.keys(mcpServers).some((k) => /^codex$/i.test(k) || /^mcp[_-]codex$/i.test(k))
           if (!hasCodexMcp) {
             await mark({ review_codex_state: "done", review_codex_at: "auto:no-codex-mcp" })
             await seen("codex_mcp.not_configured", { auto_satisfied: true })
@@ -1429,7 +1433,6 @@ export default async function guardrail(input: {
               review_agent: agent,
               review_codex_state: "done",
               review_codex_at: now,
-              edits_since_review: 0,
             })
           } else {
             await mark({
@@ -1438,7 +1441,6 @@ export default async function guardrail(input: {
               review_agent: agent,
               review_glm_state: "done",
               review_glm_at: now,
-              edits_since_review: 0,
             })
           }
           await syncReviewState()
@@ -1473,14 +1475,19 @@ export default async function guardrail(input: {
       if (item.tool === "mcp__codex__codex") {
         const prompt = str(item.args?.prompt || item.args?.command || "")
         if (/\b(review|code[\.\-_]review|diff[\.\-_]review)\b/i.test(prompt)) {
-          const codexFindings = parseFindings(str(out.output))
-          await mark({
-            reviewed: true,
-            review_codex_state: "done",
-            review_codex_at: new Date().toISOString(),
-          })
-          await syncReviewState()
-          await seen("codex_review.completed", { critical: codexFindings.critical, high: codexFindings.high })
+          const codexOutput = str(out.output).trim()
+          if (!codexOutput || codexOutput.length < 20) {
+            await seen("codex_review.empty_or_short", { length: codexOutput.length })
+          } else {
+            const codexFindings = parseFindings(codexOutput)
+            await mark({
+              reviewed: true,
+              review_codex_state: "done",
+              review_codex_at: new Date().toISOString(),
+            })
+            await syncReviewState()
+            await seen("codex_review.completed", { critical: codexFindings.critical, high: codexFindings.high })
+          }
         }
       }
 
