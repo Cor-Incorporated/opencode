@@ -264,6 +264,7 @@ export default async function guardrail(input: {
   const log = path.join(root, "events.jsonl")
   const state = path.join(root, "state.json")
   const allow: Record<string, Set<string>> = {}
+  let hasCodexMcp = false // assume unavailable; set true at session.created if configured
 
   // --- Delegation gate config ---
   const maxParallelTasks = 5
@@ -367,10 +368,12 @@ export default async function guardrail(input: {
   }
 
   function reviewLine(data: Record<string, unknown>) {
-    if (!flag(data.reviewed)) return "missing"
-    const at = str(data.review_at) || "unknown"
-    if (!stale(data, "edits_since_review")) return `fresh at ${at}`
-    return `stale after ${num(data.edits_since_review)} edit(s) since ${at}`
+    const glm = str(data.review_glm_state) === "done" ? "done" : "pending"
+    const codex = str(data.review_codex_state) === "done" ? "done" : "pending"
+    const staleSuffix = stale(data, "edits_since_review")
+      ? ` (stale: ${num(data.edits_since_review)} edit(s) since last review)`
+      : ""
+    return `GLM: ${glm}, Codex: ${codex}${staleSuffix}`
   }
 
   function compact(data: Record<string, unknown>) {
@@ -459,6 +462,30 @@ export default async function guardrail(input: {
     if (denyPreview && preview(data.model ?? {})) return `${provider}/${model || "unknown"} is preview-only`
   }
 
+  // --- Dual review gate helper ---
+  function reviewGate(data: Record<string, unknown>) {
+    const glm = str(data.review_glm_state) === "done"
+    const codex = str(data.review_codex_state) === "done"
+    const pending: string[] = []
+    if (!glm) pending.push("GLM code-reviewer")
+    if (!codex) pending.push("Codex review")
+    return {
+      done: glm && codex,
+      pending,
+      message: pending.length === 0 ? "all reviews complete" : `pending: ${pending.join(" and ")}`,
+    }
+  }
+
+  // Sync composite review_state AFTER individual state writes (avoids TOCTOU)
+  async function syncReviewState() {
+    const current = await stash(state)
+    const gate = reviewGate(current)
+    await mark({
+      review_state: gate.done ? "done" : "",
+      ...(gate.done ? { edits_since_review: 0 } : {}),
+    })
+  }
+
   // --- Auto-review pipeline (models team.ts idle/snap pattern) ---
   const REVIEW_POLL_GAP = 750
 
@@ -540,7 +567,8 @@ export default async function guardrail(input: {
     await mark({
       auto_review_in_progress: false,
       auto_review_session: made.data.id,
-      review_state: "done",
+      review_glm_state: "done",
+      review_glm_at: new Date().toISOString(),
       reviewed: true,
       workflow_review_attempts: attempts,
       review_at: new Date().toISOString(),
@@ -548,6 +576,7 @@ export default async function guardrail(input: {
       review_critical_count: findings.critical,
       review_high_count: findings.high,
     })
+    await syncReviewState()
     await seen("auto_review.completed", { findings: findings.total, critical: findings.critical, high: findings.high })
     if (findings.critical > 0 || findings.high > 0) {
       await input.client.session.prompt({
@@ -568,7 +597,9 @@ export default async function guardrail(input: {
   function checklist(data: Record<string, unknown>) {
     const items = [
       { name: "tests_pass", pass: flag(data.tests_executed) },
-      { name: "review_fresh", pass: str(data.review_state) === "done" && num(data.edits_since_review) === 0 },
+      { name: "review_glm", pass: str(data.review_glm_state) === "done" },
+      { name: "review_codex", pass: str(data.review_codex_state) === "done" },
+      { name: "review_fresh", pass: (str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done") && num(data.edits_since_review) === 0 },
       { name: "ci_green", pass: flag(data.ci_green) },
       { name: "no_critical", pass: num(data.review_critical_count) === 0 && num(data.review_high_count) === 0 },
     ]
@@ -637,6 +668,10 @@ export default async function guardrail(input: {
           last_reason: "",
           git_freshness_checked: false,
           review_state: "",
+          review_glm_state: "",
+          review_codex_state: "",
+          review_glm_at: "",
+          review_codex_at: "",
           // Delegation gates (Map-based tracking for race safety)
           active_tasks: {},
           active_task_count: 0,
@@ -677,6 +712,17 @@ export default async function guardrail(input: {
         if (branchWarning) {
           await seen("branch_workflow.warning", { warning: branchWarning })
         }
+        // Codex MCP availability: cache flag and auto-satisfy codex review if not configured
+        try {
+          const settingsPath = path.join(process.env.HOME || "~", ".claude", "settings.json")
+          const settings = JSON.parse(await Bun.file(settingsPath).text().catch(() => "{}"))
+          const mcpServers = settings.mcpServers ?? settings.mcp_servers ?? {}
+          hasCodexMcp = Object.keys(mcpServers).some((k) => /^codex$/i.test(k) || /^mcp[_-]codex$/i.test(k))
+          if (!hasCodexMcp) {
+            await mark({ review_codex_state: "done", review_codex_at: "auto:no-codex-mcp" })
+            await seen("codex_mcp.not_configured", { auto_satisfied: true })
+          }
+        } catch { /* settings check is best-effort */ }
       }
       if (event.type === "permission.asked") {
         await mark({
@@ -688,7 +734,7 @@ export default async function guardrail(input: {
       if (event.type === "session.idle") {
         const data = await stash(state)
         const edits = num(data.edit_count)
-        const pending = str(data.review_state) !== "done"
+        const pending = str(data.review_glm_state) !== "done"
         const inProgress = flag(data.auto_review_in_progress)
         const sessionID = str(event.properties?.sessionID)
 
@@ -855,25 +901,28 @@ export default async function guardrail(input: {
             if (tier === "EXEMPT") {
               await seen("pre_merge.tier", { branch, tier, result: "pass" })
             } else if (tier === "LIGHT") {
-              // LIGHT: code-reviewer done OR (checks ran AND C/H=0)
-              const codeReviewDone = str(bashData.review_state) === "done"
+              // LIGHT: at least one review (GLM or Codex) done OR (checks ran AND C/H=0)
+              const anyReviewDone = str(bashData.review_glm_state) === "done" || str(bashData.review_codex_state) === "done"
               const checksRan = Boolean(str(bashData.review_checks_at))
               const noSevere = checksRan && criticalCount === 0 && highCount === 0
-              if (!codeReviewDone && !noSevere) {
+              if (!anyReviewDone && !noSevere) {
                 await mark({ last_block: "bash", last_command: cmd, last_reason: "LIGHT tier: review or C/H=0 required" })
-                throw new Error(text("merge blocked (LIGHT tier): run code-reviewer agent OR run `gh pr checks` with CRITICAL=0 HIGH=0"))
+                throw new Error(text("merge blocked (LIGHT tier): run code-reviewer agent OR Codex review OR run `gh pr checks` with CRITICAL=0 HIGH=0"))
               }
             } else {
-              if (str(bashData.review_state) !== "done") {
-                await mark({ last_block: "bash", last_command: cmd, last_reason: "FULL tier: review not done" })
-                throw new Error(text("merge blocked (FULL tier): run code-reviewer agent before merging"))
+              // FULL: both GLM and Codex reviews required
+              const gate = reviewGate(bashData)
+              if (!gate.done) {
+                await mark({ last_block: "bash", last_command: cmd, last_reason: `FULL tier: ${gate.message}` })
+                throw new Error(text(`merge blocked (FULL tier): ${gate.message}. Run both code-reviewer agent and Codex review before merging.`))
               }
             }
           } catch (e) {
             if (String(e).includes("blocked")) throw e
-            if (str(bashData.review_state) !== "done") {
-              await mark({ last_block: "bash", last_command: cmd, last_reason: "merge blocked: review not done" })
-              throw new Error(text("merge blocked: run /review before merging"))
+            const fallbackGate = reviewGate(bashData)
+            if (!fallbackGate.done) {
+              await mark({ last_block: "bash", last_command: cmd, last_reason: `merge blocked: ${fallbackGate.message}` })
+              throw new Error(text(`merge blocked: ${fallbackGate.message}. Run /review and Codex review before merging.`))
             }
           }
         }
@@ -1253,6 +1302,8 @@ export default async function guardrail(input: {
         if (bash(cmd)) {
           await mark({
             edits_since_review: num(data.edits_since_review) + 1,
+            review_glm_state: "",
+            review_codex_state: hasCodexMcp ? "" : "done",
             review_state: "",
           })
         }
@@ -1268,6 +1319,8 @@ export default async function guardrail(input: {
           edit_count_since_check: num(data.edit_count_since_check) + 1,
           edits_since_review: num(data.edits_since_review) + 1,
           last_edit: rel(input.worktree, file),
+          review_glm_state: "",
+          review_codex_state: hasCodexMcp ? "" : "done",
           review_state: "",
         })
 
@@ -1372,13 +1425,25 @@ export default async function guardrail(input: {
         const cmd = typeof item.args?.command === "string" ? item.args.command : ""
         const agent = typeof item.args?.subagent_type === "string" ? item.args.subagent_type : ""
         if (cmd === "review" || agent.includes("review")) {
-          await mark({
-            reviewed: true,
-            review_at: now,
-            review_agent: agent,
-            review_state: "done",
-            edits_since_review: 0,
-          })
+          const isCodexReview = /codex/i.test(agent) || /codex/i.test(cmd)
+          if (isCodexReview) {
+            await mark({
+              reviewed: true,
+              review_at: now,
+              review_agent: agent,
+              review_codex_state: "done",
+              review_codex_at: now,
+            })
+          } else {
+            await mark({
+              reviewed: true,
+              review_at: now,
+              review_agent: agent,
+              review_glm_state: "done",
+              review_glm_at: now,
+            })
+          }
+          await syncReviewState()
         }
         // Delegation: remove completed task from active tasks map
         const activeTasks = json(data.active_tasks)
@@ -1403,6 +1468,26 @@ export default async function guardrail(input: {
         if (agent && payload.length < 20) {
           out.output = (out.output || "") + "\n⚠️ Agent output appears empty or trivially short (" + payload.length + " chars). Verify the agent completed its task."
           await seen("verify_agent.short_output", { agent, payload_length: payload.length })
+        }
+      }
+
+      // Detect Codex review completion (input-based detection to prevent spoofing)
+      if (item.tool === "mcp__codex__codex") {
+        const prompt = str(item.args?.prompt || item.args?.command || "")
+        if (/\b(review|code[\.\-_]review|diff[\.\-_]review)\b/i.test(prompt)) {
+          const codexOutput = str(out.output).trim()
+          if (!codexOutput || codexOutput.length < 20) {
+            await seen("codex_review.empty_or_short", { length: codexOutput.length })
+          } else {
+            const codexFindings = parseFindings(codexOutput)
+            await mark({
+              reviewed: true,
+              review_codex_state: "done",
+              review_codex_at: new Date().toISOString(),
+            })
+            await syncReviewState()
+            await seen("codex_review.completed", { critical: codexFindings.critical, high: codexFindings.high })
+          }
         }
       }
 

@@ -712,7 +712,7 @@ test("guardrail profile plugin records factcheck and review freshness state", as
         expect(state.reviewed).toBe(true)
         expect(state.edits_since_review).toBe(1)
         expect(compact.context.join("\n")).toContain("Fact-check state: stale after 2 edit(s)")
-        expect(compact.context.join("\n")).toContain("Review state: stale after 1 edit(s)")
+        expect(compact.context.join("\n")).toContain("Review state: GLM:")
       },
     })
   })
@@ -1178,13 +1178,21 @@ test("review_state resets on apply_patch and mutating bash", async () => {
           },
         } as any)
 
-        // Set review to done via task
+        // Set GLM review to done via task
         await Plugin.trigger(
           "tool.execute.after",
           { tool: "task", sessionID: "session_review_reset", callID: "call_review_set", args: { command: "review", subagent_type: "review" } },
           { title: "review", output: "Review done with sufficient output content", metadata: {} },
         )
+        // Set Codex review to done via task
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "task", sessionID: "session_review_reset", callID: "call_codex_set", args: { command: "review", subagent_type: "codex-review" } },
+          { title: "review", output: "Codex review done with sufficient output content", metadata: {} },
+        )
         let state = await Bun.file(files.state).json()
+        expect(state.review_glm_state).toBe("done")
+        expect(state.review_codex_state).toBe("done")
         expect(state.review_state).toBe("done")
 
         // apply_patch should reset review_state
@@ -1197,11 +1205,16 @@ test("review_state resets on apply_patch and mutating bash", async () => {
         expect(state.review_state).toBe("")
         expect(state.edits_since_review).toBe(1)
 
-        // Set review back to done
+        // Set both reviews back to done
         await Plugin.trigger(
           "tool.execute.after",
           { tool: "task", sessionID: "session_review_reset", callID: "call_review_set2", args: { command: "review", subagent_type: "review" } },
           { title: "review", output: "Review done with sufficient output content", metadata: {} },
+        )
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "task", sessionID: "session_review_reset", callID: "call_codex_set2", args: { command: "review", subagent_type: "codex-review" } },
+          { title: "review", output: "Codex review done with sufficient output content", metadata: {} },
         )
         state = await Bun.file(files.state).json()
         expect(state.review_state).toBe("done")
