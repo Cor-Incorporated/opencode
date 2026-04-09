@@ -1475,6 +1475,7 @@ export default async function guardrail(input: {
         if (/\b(review|code[\.\-_]review|diff[\.\-_]review)\b/i.test(prompt)) {
           const codexFindings = parseFindings(str(out.output))
           await mark({
+            reviewed: true,
             review_codex_state: "done",
             review_codex_at: new Date().toISOString(),
           })
