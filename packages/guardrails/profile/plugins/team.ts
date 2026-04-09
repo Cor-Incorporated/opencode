@@ -271,26 +271,34 @@ async function yardadd(dir: string, id: string) {
   const base = yard(dir)
   const next = path.join(base, slug(id))
   await mkdir(base, { recursive: true })
+
+  // Verify repository has commits
   const head = await git(dir, ["rev-parse", "--verify", "HEAD"])
   if (head.code !== 0) {
     throw new Error("Cannot create worktree: repository has no commits. Create an initial commit first.")
   }
-  const made = await git(dir, ["worktree", "add", "--detach", next, "HEAD"])
-  if (made.code !== 0) throw new Error(made.err || made.out || "Failed to create git worktree")
-  // Verify worktree actually has files (Issue #144: empty git init)
-  const files = await git(next, ["ls-files", "--cached"]).catch(() => ({ code: 1, out: "", err: "" }))
-  if (files.code !== 0 || !files.out.trim()) {
-    // Worktree might be empty — force checkout HEAD contents
-    const checkout = await git(next, ["checkout", "HEAD", "--", "."])
-    if (checkout.code !== 0) {
-      throw new Error(`Worktree created but checkout failed: ${checkout.err || checkout.out}`)
-    }
-    // Re-verify files are present
-    const recheck = await git(next, ["ls-files", "--cached"]).catch(() => ({ code: 1, out: "", err: "" }))
-    if (recheck.code !== 0 || !recheck.out.trim()) {
-      throw new Error("Worktree is still empty after checkout — cannot proceed with delegation")
-    }
+
+  // Step 1: Create worktree without checking out files (upstream pattern)
+  const made = await git(dir, ["worktree", "add", "--detach", "--no-checkout", next, "HEAD"])
+  if (made.code !== 0) {
+    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    throw new Error(made.err || made.out || "Failed to create git worktree")
   }
+
+  // Step 2: Hard reset to populate working directory (upstream pattern)
+  const populated = await git(next, ["reset", "--hard"])
+  if (populated.code !== 0) {
+    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    throw new Error(`Worktree created but population failed: ${populated.err || populated.out}`)
+  }
+
+  // Step 3: Verify files are actually present in the working directory
+  const check = await git(next, ["ls-files", "--cached"])
+  if (check.code !== 0 || !check.out.trim()) {
+    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    throw new Error("Worktree is empty after reset --hard — cannot proceed with delegation")
+  }
+
   return next
 }
 
