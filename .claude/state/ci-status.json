@@ -1,6 +1,0 @@
-{
-  "timestamp": "2026-04-08T16:09:34Z",
-  "trigger_command": "cd /tmp/oc-firing-test && git remote set-url origin https://github.com/terisuke/oc-firing-test.git && git push -u origin dev 2>&1 && echo \"=== PUSH OK ===\" && echo \"Remote: $(git remote get-url origin)\" && echo \"Branch: $(git branch --show-current)\" && echo \"Plugins:\" && ls .opencode/plugins/ && echo \"Commands:\" && ls .opencode/commands/auto.md .opencode/commands/ship.md && echo \"Agents:\" && ls .opencode/agents/ship.md",
-  "status": "completed",
-  "conclusion": "success"
-}

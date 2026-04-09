@@ -1,7 +1,0 @@
-{
-  "timestamp": "2026-04-09T14:25:58Z",
-  "changed_file": "packages/opencode/src/session/prompt.ts",
-  "test_command": "npm test",
-  "related_test": "",
-  "recommendation": "テストの実行を推奨します"
-}
