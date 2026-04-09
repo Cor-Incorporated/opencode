@@ -264,6 +264,7 @@ export default async function guardrail(input: {
   const log = path.join(root, "events.jsonl")
   const state = path.join(root, "state.json")
   const allow: Record<string, Set<string>> = {}
+  let hasCodexMcp = true // assume available; updated at session.created
 
   // --- Delegation gate config ---
   const maxParallelTasks = 5
@@ -553,13 +554,11 @@ export default async function guardrail(input: {
       await seen("auto_review.max_attempts", { attempts })
       return
     }
-    const freshForGlm = JSON.parse(await Bun.file(state).text().catch(() => "{}"))
     await mark({
       auto_review_in_progress: false,
       auto_review_session: made.data.id,
       review_glm_state: "done",
       review_glm_at: new Date().toISOString(),
-      review_state: str(freshForGlm.review_codex_state) === "done" ? "done" : "",
       reviewed: true,
       workflow_review_attempts: attempts,
       review_at: new Date().toISOString(),
@@ -589,7 +588,7 @@ export default async function guardrail(input: {
       { name: "tests_pass", pass: flag(data.tests_executed) },
       { name: "review_glm", pass: str(data.review_glm_state) === "done" },
       { name: "review_codex", pass: str(data.review_codex_state) === "done" },
-      { name: "review_fresh", pass: num(data.edits_since_review) === 0 },
+      { name: "review_fresh", pass: (str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done") && num(data.edits_since_review) === 0 },
       { name: "ci_green", pass: flag(data.ci_green) },
       { name: "no_critical", pass: num(data.review_critical_count) === 0 && num(data.review_high_count) === 0 },
     ]
@@ -702,13 +701,13 @@ export default async function guardrail(input: {
         if (branchWarning) {
           await seen("branch_workflow.warning", { warning: branchWarning })
         }
-        // Codex MCP availability: auto-satisfy codex review if Codex MCP is not configured
+        // Codex MCP availability: cache flag and auto-satisfy codex review if not configured
         try {
           const settingsPath = path.join(process.env.HOME || "~", ".claude", "settings.json")
           const settings = JSON.parse(await Bun.file(settingsPath).text().catch(() => "{}"))
           const mcpServers = settings.mcpServers ?? settings.mcp_servers ?? {}
-          const hasCodex = Object.keys(mcpServers).some((k) => /codex/i.test(k))
-          if (!hasCodex) {
+          hasCodexMcp = Object.keys(mcpServers).some((k) => /codex/i.test(k))
+          if (!hasCodexMcp) {
             await mark({ review_codex_state: "done", review_codex_at: "auto:no-codex-mcp" })
             await seen("codex_mcp.not_configured", { auto_satisfied: true })
           }
@@ -1293,8 +1292,7 @@ export default async function guardrail(input: {
           await mark({
             edits_since_review: num(data.edits_since_review) + 1,
             review_glm_state: "",
-            review_codex_state: "",
-            review_state: "",
+            review_codex_state: hasCodexMcp ? "" : "done",
           })
         }
       }
@@ -1310,8 +1308,7 @@ export default async function guardrail(input: {
           edits_since_review: num(data.edits_since_review) + 1,
           last_edit: rel(input.worktree, file),
           review_glm_state: "",
-          review_codex_state: "",
-          review_state: "",
+          review_codex_state: hasCodexMcp ? "" : "done",
         })
 
         if (/\.(test|spec)\.(ts|tsx|js|jsx)$|(^|\/)test_.*\.py$|_test\.go$/.test(rel(input.worktree, file))) {
@@ -1416,7 +1413,6 @@ export default async function guardrail(input: {
         const agent = typeof item.args?.subagent_type === "string" ? item.args.subagent_type : ""
         if (cmd === "review" || agent.includes("review")) {
           const isCodexReview = /codex/i.test(agent) || /codex/i.test(cmd)
-          const freshForTask = JSON.parse(await Bun.file(state).text().catch(() => "{}"))
           if (isCodexReview) {
             await mark({
               reviewed: true,
@@ -1424,7 +1420,6 @@ export default async function guardrail(input: {
               review_agent: agent,
               review_codex_state: "done",
               review_codex_at: now,
-              review_state: str(freshForTask.review_glm_state) === "done" ? "done" : "",
               edits_since_review: 0,
             })
           } else {
@@ -1434,7 +1429,6 @@ export default async function guardrail(input: {
               review_agent: agent,
               review_glm_state: "done",
               review_glm_at: now,
-              review_state: str(freshForTask.review_codex_state) === "done" ? "done" : "",
               edits_since_review: 0,
             })
           }
@@ -1465,16 +1459,14 @@ export default async function guardrail(input: {
         }
       }
 
-      // Detect Codex review completion
-      if (item.tool === "mcp__codex__codex" || item.tool === "mcp__codex__codex-reply") {
-        const rawOut = str(out.output)
-        if (/\b(review|code.review|diff.review)\b/i.test(rawOut)) {
-          const codexFindings = parseFindings(rawOut)
-          const freshForCodex = JSON.parse(await Bun.file(state).text().catch(() => "{}"))
+      // Detect Codex review completion (input-based detection to prevent spoofing)
+      if (item.tool === "mcp__codex__codex") {
+        const prompt = str(item.args?.prompt || item.args?.command || "")
+        if (/\b(review|code[\.\-_]review|diff[\.\-_]review)\b/i.test(prompt)) {
+          const codexFindings = parseFindings(str(out.output))
           await mark({
             review_codex_state: "done",
             review_codex_at: new Date().toISOString(),
-            review_state: str(freshForCodex.review_glm_state) === "done" ? "done" : "",
           })
           await seen("codex_review.completed", { critical: codexFindings.critical, high: codexFindings.high })
         }
