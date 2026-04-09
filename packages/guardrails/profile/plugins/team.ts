@@ -280,7 +280,10 @@ async function yardadd(dir: string, id: string) {
 
   // Step 1: Create worktree without checking out files (upstream pattern)
   const made = await git(dir, ["worktree", "add", "--detach", "--no-checkout", next, "HEAD"])
-  if (made.code !== 0) throw new Error(made.err || made.out || "Failed to create git worktree")
+  if (made.code !== 0) {
+    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    throw new Error(made.err || made.out || "Failed to create git worktree")
+  }
 
   // Step 2: Hard reset to populate working directory (upstream pattern)
   const populated = await git(next, ["reset", "--hard"])
