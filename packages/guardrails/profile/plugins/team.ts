@@ -223,7 +223,7 @@ function patch(dir: string, run: string, id: string) {
 }
 
 function yard(dir: string) {
-  return path.join(path.dirname(dir), `.${path.basename(dir)}-opencode-team`)
+  return path.join(dir, ".opencode", "team")
 }
 
 function isRun(data: unknown): data is Run {
