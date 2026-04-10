@@ -18,7 +18,10 @@ type Review = {
 
 export function createGitHandlers(ctx: GuardrailContext, review: Review) {
   async function bashBeforeGit(cmd: string, out: { output?: string }, data: Record<string, unknown>) {
-    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+    const isMerge = /\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)
+    const isPrMerge = /\bgh\s+pr\s+merge\b/i.test(cmd)
+
+    if (isMerge) {
       const criticalCount = num(data.review_critical_count)
       const highCount = num(data.review_high_count)
       if (criticalCount > 0 || highCount > 0) {
@@ -59,14 +62,14 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+    if (isMerge) {
       const checks = review.checklist(data)
       if (checks.score < 3) {
         out.output = (out.output || "") + `\n\nCompletion checklist (${checks.score}/${checks.total}): ${checks.summary}\nBlocking: ${checks.blocking.join(", ")}`
       }
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (isPrMerge) {
       try {
         const prMatch = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
         const prArg = prMatch ? [prMatch[1]] : []
@@ -91,7 +94,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (isPrMerge) {
       try {
         const repoRes = await git(ctx.input.worktree, ["remote", "get-url", "origin"])
         const repo = repoRes.code === 0 ? repoRes.stdout.trim().replace(/.*github\.com[:/]/, "").replace(/\.git$/, "") : ""
@@ -114,7 +117,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (isPrMerge) {
       try {
         const curBranchRes = await git(ctx.input.worktree, ["branch", "--show-current"])
         const branch = curBranchRes.code === 0 ? curBranchRes.stdout.trim() : ""
@@ -198,7 +201,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       throw new Error("Guardrail policy blocked this action: branch rename/force-move blocked: prevents commit guard bypass")
     }
 
-    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+    if (isMerge) {
       const lastMerge = str(data.last_merge_at)
       if (lastMerge) {
         const elapsed = Date.now() - new Date(lastMerge).getTime()
@@ -219,7 +222,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       await ctx.seen("issue_close.unverified", { command: cmd })
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (isPrMerge) {
       const reviewAt = str(data.review_at)
       const lastPushAt = str(data.last_push_at)
       if (reviewAt && lastPushAt && new Date(reviewAt) < new Date(lastPushAt)) {
@@ -288,7 +291,12 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     const cmd = str(item.args?.command)
     if (item.tool !== "bash" || !cmd) return
 
-    if (/\b(git\s+push|gh\s+pr\s+create)\b/i.test(cmd)) {
+    const afterIsMerge = /\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)
+    const afterIsPrMerge = /\bgh\s+pr\s+merge\b/i.test(cmd)
+    const afterIsPrCreate = /\bgh\s+pr\s+create\b/i.test(cmd)
+    const afterIsPush = /\bgit\s+push\b/i.test(cmd)
+
+    if (afterIsPush || afterIsPrCreate) {
       out.output = (out.output || "") + "\n⚠️ Remember to verify CI status: `gh pr checks`"
       try {
         const proc = Bun.spawn(["gh", "pr", "view", "--json", "mergeable", "--jq", ".mergeable"], {
@@ -304,7 +312,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       } catch {}
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (afterIsPrMerge) {
       out.output = (out.output || "") + "\n🚀 Post-merge: verify deployment status and run smoke tests on the target environment."
       try {
         const prMatch = cmd.match(/\bgh\s+pr\s+merge\s+(\d+)/i)
@@ -334,14 +342,14 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       } catch {}
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (afterIsPrMerge) {
       await ctx.mark({ last_merge_at: new Date().toISOString() })
       if (/\b(fix(es)?|close[sd]?|resolve[sd]?)\s+#\d+/i.test(out.output)) {
         out.output = (out.output || "") + "\n📋 Detected issue reference in merge output. Verify referenced issues are closed."
       }
     }
 
-    if (/\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)) {
+    if (afterIsMerge) {
       const fresh = await stash(ctx.state)
       if (flag(fresh.soak_time_warning)) {
         out.output = (out.output || "") + "\n⏳ Soak time advisory: only " + num(fresh.soak_time_elapsed_h) + "h since last merge (12h recommended). Consider waiting before merging to main."
@@ -349,7 +357,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgit\s+push\b/i.test(cmd)) {
+    if (afterIsPush) {
       try {
         const branchRes = await git(ctx.input.worktree, ["branch", "--show-current"])
         const branch = branchRes.code === 0 ? branchRes.stdout.trim() : ""
@@ -370,7 +378,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       out.output = (out.output || "") + "\n🧠 Significant changes committed (" + num(data.edit_count) + " edits). Consider updating memory with key decisions or learnings."
     }
 
-    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+    if (afterIsPrCreate) {
       const prNum = (out.output || "").match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/)?.[1]
       if (prNum) {
         await ctx.mark({ review_pending: true, review_pending_pr: prNum })
@@ -379,7 +387,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+    if (afterIsPrCreate) {
       if (/--title\s+["']?fix/i.test(cmd) || /\bfix\//i.test(cmd)) {
         const fixes = num(data.consecutive_fix_prs) + 1
         await ctx.mark({ consecutive_fix_prs: fixes })
@@ -391,7 +399,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+    if (afterIsPrCreate) {
       const fresh = await stash(ctx.state)
       if (flag(fresh.pr_guard_warning)) {
         const tests = flag(fresh.pr_guard_tests)
@@ -406,7 +414,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\bgh\s+pr\s+merge\b/i.test(cmd)) {
+    if (afterIsPrMerge) {
       const fresh = await stash(ctx.state)
       if (flag(fresh.review_reading_warning)) {
         out.output = (out.output || "") + "\n📖 Stale review: code was pushed after the last review. Re-request review before merging."
@@ -414,7 +422,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       }
     }
 
-    if (/\b(git\s+push|gh\s+pr\s+merge)\b/i.test(cmd)) {
+    if (afterIsPush || afterIsPrMerge) {
       const fresh = await stash(ctx.state)
       if (flag(fresh.stop_test_warning)) {
         out.output = (out.output || "") + "\n🚫 Test gate: " + num(fresh.edit_count) + " edits without running tests. Run tests before pushing/merging."
