@@ -7,7 +7,6 @@ import {
   free,
   has,
   line,
-  list,
   num,
   pick,
   preview,
