@@ -23,7 +23,10 @@ import { Instruction } from "../../src/session/instruction"
 import { LLM } from "../../src/session/llm"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
+import { SessionRevert } from "../../src/session/revert"
+import { SessionRunState } from "../../src/session/run-state"
 import { SessionStatus } from "../../src/session/status"
+import { Skill } from "../../src/skill"
 import { Snapshot } from "../../src/snapshot"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
@@ -131,6 +134,9 @@ function make() {
       Layer.provideMerge(reg),
       Layer.provideMerge(trunc),
       Layer.provide(Instruction.defaultLayer),
+      Layer.provide(SessionRunState.defaultLayer),
+      Layer.provide(SessionRevert.defaultLayer),
+      Layer.provide(Skill.defaultLayer),
       Layer.provideMerge(deps),
     ),
   )
