@@ -1404,6 +1404,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }),
           )
 
+          // Background memory maintenance (non-blocking)
+          if (startHookCfg.memory?.enabled !== false) {
+            import("@/memory/maintenance").then(({ MemoryMaintenance }) => {
+              MemoryMaintenance.run(startProjectDir).catch(() => {})
+            }).catch(() => {})
+          }
+
           if (input.noReply === true) return message
           return yield* loop({ sessionID: input.sessionID })
         },
@@ -1591,7 +1598,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 Effect.promise(() => SystemPrompt.environment(model)),
                 instruction.system().pipe(Effect.orDie),
                 MessageV2.toModelMessagesEffect(msgs, model),
-                Effect.promise(() => MemoryInjector.load()),
+                Effect.promise(() => MemoryInjector.load(agent)),
               ])
               const system = [...env, ...(skills ? [skills] : []), ...instructions, ...(memory ? [memory] : [])]
               const format = lastUser.format ?? { type: "text" as const }
