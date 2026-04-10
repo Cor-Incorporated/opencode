@@ -196,7 +196,7 @@ export namespace MemoryStore {
         yield* db((d) =>
           d
             .update(MemoryTable)
-            .set({ relevance_score: score, time_updated: Date.now() })
+            .set({ relevance_score: score })
             .where(eq(MemoryTable.id, id))
             .run(),
         )
