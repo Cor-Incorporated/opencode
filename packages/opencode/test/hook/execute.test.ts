@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { runHook, runHooks, matchesTool, safeToolInput, type HookEnv } from "../../src/hook"
+import { runHook, runHooks, matchesTool, safeToolInput, safeToolOutput, type HookEnv } from "../../src/hook"
 import type { HookEntry } from "../../src/hook"
 
 function makeEnv(overrides?: Partial<HookEnv>): HookEnv {
@@ -71,6 +71,45 @@ describe("hook.execute", () => {
       const entry: HookEntry = { command: "/nonexistent/path/script.sh" }
       const result = await runHook(entry, makeEnv())
       expect(result.action).toBe("pass")
+    })
+
+    test("prompt type returns template text without shell spawn", async () => {
+      const entry: HookEntry = { type: "prompt", prompt: "Always review file changes carefully" }
+      const result = await runHook(entry, makeEnv())
+      expect(result.action).toBe("pass")
+      expect(result.message).toBe("Always review file changes carefully")
+      expect(result.status).toBe("ok")
+      expect(result.duration).toBe(0)
+    })
+
+    test("prompt type replaces {{TOOL_NAME}} placeholder", async () => {
+      const entry: HookEntry = { type: "prompt", prompt: "Tool: {{TOOL_NAME}}" }
+      const result = await runHook(entry, makeEnv({ OPENCODE_TOOL_NAME: "bash" }))
+      expect(result.message).toBe("Tool: bash")
+    })
+
+    test("prompt type replaces {{TOOL_INPUT}} placeholder", async () => {
+      const entry: HookEntry = { type: "prompt", prompt: "Input: {{TOOL_INPUT}}" }
+      const result = await runHook(entry, makeEnv({ OPENCODE_TOOL_INPUT: '{"cmd":"ls"}' }))
+      expect(result.message).toBe('Input: {"cmd":"ls"}')
+    })
+
+    test("prompt type replaces both placeholders", async () => {
+      const entry: HookEntry = { type: "prompt", prompt: "{{TOOL_NAME}} got {{TOOL_INPUT}}" }
+      const result = await runHook(entry, makeEnv({
+        OPENCODE_TOOL_NAME: "read",
+        OPENCODE_TOOL_INPUT: "file.ts",
+      }))
+      expect(result.message).toBe("read got file.ts")
+    })
+
+    test("prompt type replaces missing env vars with empty string", async () => {
+      const entry: HookEntry = { type: "prompt", prompt: "{{TOOL_NAME}}:{{TOOL_INPUT}}" }
+      const result = await runHook(entry, makeEnv({
+        OPENCODE_TOOL_NAME: undefined,
+        OPENCODE_TOOL_INPUT: undefined,
+      }))
+      expect(result.message).toBe(":")
     })
   })
 
@@ -170,6 +209,47 @@ describe("hook.execute", () => {
       const filler = "a".repeat(targetLen - overhead)
       const result = safeToolInput({ d: filler })
       expect(result).not.toContain("[truncated]")
+    })
+  })
+
+  describe("safeToolOutput", () => {
+    test("returns string output as-is when small", () => {
+      const result = safeToolOutput("hello world")
+      expect(result).toBe("hello world")
+    })
+
+    test("returns JSON for non-string output", () => {
+      const result = safeToolOutput({ key: "value" })
+      expect(result).toBe('{"key":"value"}')
+    })
+
+    test("truncates output exceeding 128KB", () => {
+      const largeOutput = "x".repeat(256 * 1024)
+      const result = safeToolOutput(largeOutput)
+      expect(result.length).toBeLessThanOrEqual(128 * 1024 + 12) // 128KB + "\n[truncated]"
+      expect(result).toEndWith("\n[truncated]")
+    })
+
+    test("does not truncate output exactly at 128KB", () => {
+      const exactOutput = "a".repeat(128 * 1024)
+      const result = safeToolOutput(exactOutput)
+      expect(result).not.toContain("[truncated]")
+    })
+  })
+
+  describe("toEnvRecord (via runHook env passthrough)", () => {
+    test("passes OPENCODE_TOOL_OUTPUT to script env", async () => {
+      const entry: HookEntry = { command: 'echo "$OPENCODE_TOOL_OUTPUT" >&2' }
+      const result = await runHook(entry, makeEnv({ OPENCODE_TOOL_OUTPUT: "result-data" }))
+      expect(result.action).toBe("pass")
+      expect(result.message).toBe("result-data")
+    })
+
+    test("omits OPENCODE_TOOL_OUTPUT when undefined", async () => {
+      const entry: HookEntry = { command: 'echo "${OPENCODE_TOOL_OUTPUT:-unset}" >&2' }
+      const result = await runHook(entry, makeEnv())
+      expect(result.action).toBe("pass")
+      expect(result.message).toBe("unset")
     })
   })
 })

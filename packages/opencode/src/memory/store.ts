@@ -1,4 +1,4 @@
-import { Database, eq, and, sql, lt } from "@/storage/db"
+import { Database, eq, and, sql, lt, isNull, inArray } from "@/storage/db"
 import { ulid } from "ulid"
 import { Effect, Layer, ServiceMap } from "effect"
 import { MemoryTable } from "./memory.sql"
@@ -34,6 +34,7 @@ export namespace MemoryStore {
 
   export interface Interface {
     readonly list: (projectPath: string) => Effect.Effect<Memory.Info[]>
+    readonly listGeneral: (projectPath: string) => Effect.Effect<Memory.Info[]>
     readonly get: (id: string) => Effect.Effect<Memory.Info | undefined>
     readonly create: (input: Memory.Create) => Effect.Effect<Memory.Info>
     readonly update: (input: Memory.Update) => Effect.Effect<Memory.Info | undefined>
@@ -44,6 +45,7 @@ export namespace MemoryStore {
     readonly listStale: (projectPath: string, maxAgeDays: number) => Effect.Effect<Memory.Info[]>
     readonly updateRelevance: (id: string, score: number) => Effect.Effect<void>
     readonly promote: (id: string, targetScope: Memory.Scope) => Effect.Effect<Memory.Info | undefined>
+    readonly incrementAccessBatch: (ids: string[]) => Effect.Effect<void>
   }
 
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/MemoryStore") {}
@@ -57,6 +59,17 @@ export namespace MemoryStore {
             .select()
             .from(MemoryTable)
             .where(eq(MemoryTable.project_path, projectPath))
+            .all(),
+        )
+        return rows.map(toInfo)
+      })
+
+      const listGeneral = Effect.fn("MemoryStore.listGeneral")(function* (projectPath: string) {
+        const rows = yield* db((d) =>
+          d
+            .select()
+            .from(MemoryTable)
+            .where(and(eq(MemoryTable.project_path, projectPath), isNull(MemoryTable.agent)))
             .all(),
         )
         return rows.map(toInfo)
@@ -122,7 +135,9 @@ export namespace MemoryStore {
             .get(),
         )
         if (!existing) return undefined
-        const values: Record<string, unknown> = { time_updated: Date.now() }
+        const values: Record<string, unknown> = input.skipTimeUpdate
+          ? { time_updated: existing.time_updated }
+          : { time_updated: Date.now() }
         if (input.name !== undefined) values.topic = input.name
         if (input.description !== undefined) values.description = input.description
         if (input.type !== undefined) values.type = input.type
@@ -211,7 +226,7 @@ export namespace MemoryStore {
             .get(),
         )
         if (!existing) return undefined
-        const previousScope = existing.scope ?? "personal"
+        const previousScope = existing.scope ?? "project"
         yield* db((d) =>
           d
             .update(MemoryTable)
@@ -234,10 +249,21 @@ export namespace MemoryStore {
         return updated ? toInfo(updated) : undefined
       })
 
+      const incrementAccessBatch = Effect.fn("MemoryStore.incrementAccessBatch")(function* (ids: string[]) {
+        if (ids.length === 0) return
+        yield* db((d) =>
+          d
+            .update(MemoryTable)
+            .set({ access_count: sql`${MemoryTable.access_count} + 1` })
+            .where(inArray(MemoryTable.id, ids))
+            .run(),
+        )
+      })
+
       return Service.of({
-        list, get, create, update, remove,
+        list, listGeneral, get, create, update, remove,
         listByType, listByScope, listByAgent, listStale,
-        updateRelevance, promote,
+        updateRelevance, promote, incrementAccessBatch,
       })
     }),
   )

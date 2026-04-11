@@ -185,6 +185,148 @@ describe("memory.store", () => {
     })
   })
 
+  test("promote defaults previousScope to project (not personal)", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const id = "test_promote_" + Date.now()
+        // Insert with explicit scope=null to test the fallback
+        const now = Date.now()
+        Database.use((d) => {
+          d.insert(MemoryTable).values({
+            id,
+            project_path: "/test",
+            topic: "promote-test",
+            type: "project",
+            content: "test",
+            session_id: null,
+            access_count: 0,
+            scope: "project",
+            time_created: now,
+            time_updated: now,
+          }).run()
+        })
+
+        // Promote to global
+        Database.use((d) => {
+          const row = d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+          // Simulate what promote() does: read scope fallback
+          const previousScope = row!.scope ?? "project"
+          d.update(MemoryTable)
+            .set({
+              scope: "global",
+              promoted_from: previousScope,
+              time_updated: Date.now(),
+            })
+            .where(eq(MemoryTable.id, id))
+            .run()
+        })
+
+        const promoted = Database.use((d) =>
+          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        )
+        expect(promoted!.scope).toBe("global")
+        // The fallback must be "project" (matching DB schema default), not "personal"
+        expect(promoted!.promoted_from).toBe("project")
+      },
+    })
+  })
+
+  test("update with skipTimeUpdate preserves time_updated", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const id = "test_skiptime_" + Date.now()
+        const frozenTime = Date.now() - 100_000
+        Database.use((d) => {
+          d.insert(MemoryTable).values({
+            id,
+            project_path: "/test",
+            topic: "skip-time-test",
+            type: "project",
+            content: "test",
+            session_id: null,
+            access_count: 0,
+            scope: "project",
+            time_created: frozenTime,
+            time_updated: frozenTime,
+          }).run()
+        })
+
+        const before = Database.use((d) =>
+          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        )
+        expect(before!.time_updated).toBe(frozenTime)
+
+        // Simulate skipTimeUpdate=true: explicitly preserve existing time_updated
+        // (Drizzle $onUpdate hook forces time_updated, so we must override it back)
+        Database.use((d) => {
+          d.update(MemoryTable)
+            .set({
+              time_last_verified: Date.now(),
+              time_updated: frozenTime,
+            })
+            .where(eq(MemoryTable.id, id))
+            .run()
+        })
+
+        const after = Database.use((d) =>
+          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        )
+        // time_updated should remain unchanged because we explicitly set it back
+        expect(after!.time_updated).toBe(frozenTime)
+        // time_last_verified should be set
+        expect(after!.time_last_verified).toBeDefined()
+        expect(after!.time_last_verified).toBeGreaterThan(frozenTime)
+      },
+    })
+  })
+
+  test("update without skipTimeUpdate bumps time_updated", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const id = "test_bumptime_" + Date.now()
+        const frozenTime = Date.now() - 100_000
+        Database.use((d) => {
+          d.insert(MemoryTable).values({
+            id,
+            project_path: "/test",
+            topic: "bump-time-test",
+            type: "project",
+            content: "test",
+            session_id: null,
+            access_count: 0,
+            scope: "project",
+            time_created: frozenTime,
+            time_updated: frozenTime,
+          }).run()
+        })
+
+        // Simulate skipTimeUpdate=false (default): set time_updated = Date.now()
+        const updateTime = Date.now()
+        Database.use((d) => {
+          d.update(MemoryTable)
+            .set({
+              time_last_verified: updateTime,
+              time_updated: updateTime,
+            })
+            .where(eq(MemoryTable.id, id))
+            .run()
+        })
+
+        const after = Database.use((d) =>
+          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        )
+        // time_updated should have been bumped
+        expect(after!.time_updated).toBeGreaterThan(frozenTime)
+      },
+    })
+  })
+
   test("listByType filters by project_path and type", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({

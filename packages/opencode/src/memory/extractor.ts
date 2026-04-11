@@ -116,10 +116,10 @@ export namespace MemoryExtractor {
     maybeFlush(sessionID)
   }
 
-  export function trackDecision(sessionID: string, decision: string, reasoning: string, agent?: string) {
+  export function trackDecision(sessionID: string, decision: string, reasoning: string, agent?: string, projectPath?: string) {
     const state = getState(sessionID)
     state.pending.push({
-      projectPath: Instance.directory,
+      projectPath: projectPath ?? Instance.directory,
       name: `Decision: ${decision.slice(0, 50)}`,
       type: "reference",
       content: `**Decision:** ${decision}\n**Reasoning:** ${reasoning}`,

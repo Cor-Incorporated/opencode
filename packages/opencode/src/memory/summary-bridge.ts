@@ -24,7 +24,7 @@ export namespace SummaryBridge {
 
     for (const candidate of candidates) {
       try {
-        MemoryExtractor.trackDecision(sessionID, candidate.name, candidate.content)
+        MemoryExtractor.trackDecision(sessionID, candidate.name, candidate.content, undefined, projectPath)
       } catch (err) {
         log.warn("failed to extract memory candidate", { error: err, name: candidate.name })
       }

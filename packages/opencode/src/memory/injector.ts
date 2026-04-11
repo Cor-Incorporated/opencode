@@ -26,9 +26,10 @@ export namespace MemoryInjector {
     const maxTokens = config.memory?.max_memory_tokens ?? 5000
 
     // Try DB-first, fallback to file-based
+    // Use listGeneral to exclude agent-tagged entries from the general pool
     let entries: Memory.Info[] = []
     try {
-      entries = await MemoryStore.runPromise((svc) => svc.list(Instance.directory))
+      entries = await MemoryStore.runPromise((svc) => svc.listGeneral(Instance.directory))
     } catch {
       // DB not available, fallback to file-based loading
       return loadFromFile(config.memory?.max_memory_lines ?? 200)
@@ -90,6 +91,16 @@ export namespace MemoryInjector {
     }
 
     if (sections.length === 0) return undefined
+
+    // Increment access counts for all injected entries
+    const injectedIds = [...entries, ...agentEntries].map((e) => e.id)
+    if (injectedIds.length > 0) {
+      try {
+        await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(injectedIds))
+      } catch {
+        // Non-critical: access count tracking failure should not block injection
+      }
+    }
 
     return [
       "# Memory",

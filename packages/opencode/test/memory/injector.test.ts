@@ -2,7 +2,7 @@ import { afterEach, describe, test, expect } from "bun:test"
 import path from "path"
 import fs from "fs"
 import { Instance } from "../../src/project/instance"
-import { Database } from "../../src/storage/db"
+import { Database, eq } from "../../src/storage/db"
 import { MemoryTable } from "../../src/memory/memory.sql"
 import { MemoryInjector } from "../../src/memory/injector"
 import { Log } from "../../src/util/log"
@@ -66,9 +66,10 @@ describe("MemoryInjector.load", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        const ts = Date.now()
         Database.use((d) => {
           seed(d, {
-            id: "mem-1",
+            id: `mem-1-${ts}`,
             projectPath: tmp.path,
             topic: "test-entry",
             type: "project",
@@ -91,11 +92,12 @@ describe("MemoryInjector.load", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        const ts = Date.now()
         Database.use((d) => {
-          seed(d, { id: "m1", projectPath: tmp.path, topic: "proj-note", type: "project", content: "Project info" })
-          seed(d, { id: "m2", projectPath: tmp.path, topic: "user-pref", type: "user", content: "User preference" })
-          seed(d, { id: "m3", projectPath: tmp.path, topic: "fb-pattern", type: "feedback", content: "Feedback pattern" })
-          seed(d, { id: "m4", projectPath: tmp.path, topic: "ref-link", type: "reference", content: "Reference link" })
+          seed(d, { id: `m1-${ts}`, projectPath: tmp.path, topic: "proj-note", type: "project", content: "Project info" })
+          seed(d, { id: `m2-${ts}`, projectPath: tmp.path, topic: "user-pref", type: "user", content: "User preference" })
+          seed(d, { id: `m3-${ts}`, projectPath: tmp.path, topic: "fb-pattern", type: "feedback", content: "Feedback pattern" })
+          seed(d, { id: `m4-${ts}`, projectPath: tmp.path, topic: "ref-link", type: "reference", content: "Reference link" })
         })
 
         const result = await MemoryInjector.load()
@@ -113,9 +115,10 @@ describe("MemoryInjector.load", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        const ts = Date.now()
         Database.use((d) => {
-          seed(d, { id: "g1", projectPath: tmp.path, topic: "general-note", type: "project", content: "General info" })
-          seed(d, { id: "a1", projectPath: tmp.path, topic: "agent-note", type: "project", content: "Agent-specific info", agent: "code-reviewer" })
+          seed(d, { id: `g1-${ts}`, projectPath: tmp.path, topic: "general-note", type: "project", content: "General info" })
+          seed(d, { id: `a1-${ts}`, projectPath: tmp.path, topic: "agent-note", type: "project", content: "Agent-specific info", agent: "code-reviewer" })
         })
 
         const result = await MemoryInjector.load("code-reviewer")
@@ -132,8 +135,9 @@ describe("MemoryInjector.load", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        const ts = Date.now()
         Database.use((d) => {
-          seed(d, { id: "shared-1", projectPath: tmp.path, topic: "shared-entry", type: "project", content: "Shared content", agent: "planner" })
+          seed(d, { id: `shared-1-${ts}`, projectPath: tmp.path, topic: "shared-entry", type: "project", content: "Shared content", agent: "planner" })
         })
 
         const result = await MemoryInjector.load("planner")
@@ -151,8 +155,8 @@ describe("MemoryInjector.load", () => {
       fn: async () => {
         const now = Date.now()
         Database.use((d) => {
-          seed(d, { id: "low", projectPath: tmp.path, topic: "low-relevance", type: "project", content: "Low score", relevanceScore: 0.2, accessCount: 1, timeUpdated: now })
-          seed(d, { id: "high", projectPath: tmp.path, topic: "high-relevance", type: "project", content: "High score", relevanceScore: 1.0, accessCount: 10, timeUpdated: now })
+          seed(d, { id: `low-${now}`, projectPath: tmp.path, topic: "low-relevance", type: "project", content: "Low score", relevanceScore: 0.2, accessCount: 1, timeUpdated: now })
+          seed(d, { id: `high-${now}`, projectPath: tmp.path, topic: "high-relevance", type: "project", content: "High score", relevanceScore: 1.0, accessCount: 10, timeUpdated: now })
         })
 
         const result = await MemoryInjector.load()
@@ -169,10 +173,11 @@ describe("MemoryInjector.load", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        const ts = Date.now()
         Database.use((d) => {
           for (let i = 0; i < 50; i++) {
             seed(d, {
-              id: `bulk-${i}`,
+              id: `bulk-${i}-${ts}`,
               projectPath: tmp.path,
               topic: `entry-${i}`,
               type: "project",
@@ -207,14 +212,81 @@ describe("MemoryInjector.load", () => {
     })
   })
 
+  test("agent-specific entries appear in Agent-Specific Knowledge section", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        Database.use((d) => {
+          seed(d, { id: `gen-only-${ts}`, projectPath: tmp.path, topic: "general-info", type: "project", content: "General project info" })
+          seed(d, { id: `agent-only-${ts}`, projectPath: tmp.path, topic: "agent-secret", type: "project", content: "Agent-specific detail", agent: "code-reviewer" })
+        })
+
+        const result = await MemoryInjector.load("code-reviewer")
+        expect(result).toBeDefined()
+        expect(result).toContain("## Agent-Specific Knowledge")
+        expect(result).toContain("agent-secret")
+        expect(result).toContain("general-info")
+      },
+    })
+  })
+
+  test("general entries do NOT include agent-tagged entries", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        Database.use((d) => {
+          seed(d, { id: `g-entry-${ts}`, projectPath: tmp.path, topic: "general-note", type: "project", content: "General content" })
+          seed(d, { id: `a-entry-${ts}`, projectPath: tmp.path, topic: "agent-note", type: "project", content: "Agent content", agent: "planner" })
+        })
+
+        // Load without agent -- agent-tagged entries should NOT appear
+        const result = await MemoryInjector.load()
+        expect(result).toBeDefined()
+        expect(result).toContain("general-note")
+        expect(result).not.toContain("agent-note")
+      },
+    })
+  })
+
+  test("accessCount is incremented for injected entries", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        const id = `access-test-${ts}`
+        Database.use((d) => {
+          seed(d, { id, projectPath: tmp.path, topic: "access-entry", type: "project", content: "Access test content", accessCount: 0 })
+        })
+
+        const before = Database.use((d) =>
+          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        )
+        expect(before!.access_count).toBe(0)
+
+        await MemoryInjector.load()
+
+        const after = Database.use((d) =>
+          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        )
+        expect(after!.access_count).toBe(1)
+      },
+    })
+  })
+
   test("includes description in entry output when present", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
+        const ts = Date.now()
         Database.use((d) => {
           seed(d, {
-            id: "desc-1",
+            id: `desc-1-${ts}`,
             projectPath: tmp.path,
             topic: "described-entry",
             type: "user",

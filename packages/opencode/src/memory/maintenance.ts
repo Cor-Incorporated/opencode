@@ -152,13 +152,14 @@ export namespace MemoryMaintenance {
             id: entry.id,
             relevanceScore: newScore,
             timeLastVerified: Date.now(),
+            skipTimeUpdate: true,
           }),
         )
         verified++
       } else {
         // Mark as verified without penalty
         await MemoryStore.runPromise((svc) =>
-          svc.update({ id: entry.id, timeLastVerified: Date.now() }),
+          svc.update({ id: entry.id, timeLastVerified: Date.now(), skipTimeUpdate: true }),
         )
       }
     }
