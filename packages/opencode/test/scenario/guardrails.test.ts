@@ -1909,11 +1909,8 @@ test("system transform includes delegation rules", async () => {
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {
-        await Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n").catch(() => {
-          fs.mkdir(path.join(dir, "src"), { recursive: true }).then(() =>
-            Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n"),
-          )
-        })
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n")
       },
     })
 
