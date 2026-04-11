@@ -4,10 +4,13 @@ import path from "path"
 import { Effect, Layer, ServiceMap } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Config } from "@/config/config"
+import { ConfigMarkdown } from "@/config/markdown"
+import { Filesystem } from "@/util/filesystem"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
 import { Flag } from "@/flag/flag"
 import { AppFileSystem } from "@/filesystem"
+import { Glob } from "@/util/glob"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "../global"
 import { Instance } from "../project/instance"
@@ -55,6 +58,12 @@ function extract(messages: MessageV2.WithParts[]) {
 }
 
 export namespace Instruction {
+  interface ParsedRule {
+    filepath: string
+    content: string // body WITHOUT frontmatter
+    globs: string[] | null // null = unconditional (always active)
+  }
+
   export interface Interface {
     readonly clear: (messageID: MessageID) => Effect.Effect<void>
     readonly systemPaths: () => Effect.Effect<Set<string>, AppFileSystem.Error>
@@ -82,6 +91,7 @@ export namespace Instruction {
             Effect.succeed({
               // Track which instruction files have already been attached for a given assistant message.
               claims: new Map<MessageID, Set<string>>(),
+              parsedRules: null as ParsedRule[] | null,
             }),
           ),
         )
@@ -106,6 +116,34 @@ export namespace Instruction {
         const read = Effect.fnUntraced(function* (filepath: string) {
           return yield* fs.readFileString(filepath).pipe(Effect.catch(() => Effect.succeed("")))
         })
+
+        const parseRuleFiles = async (files: string[]): Promise<ParsedRule[]> => {
+          const rules: ParsedRule[] = []
+          for (const filepath of files) {
+            try {
+              const md = await ConfigMarkdown.parse(filepath)
+              let globs: string[] | null = null
+              if (md.data?.globs) {
+                const raw = md.data.globs
+                if (typeof raw === "string") {
+                  globs = [raw]
+                } else if (Array.isArray(raw) && raw.length > 0 && raw.every((g: unknown) => typeof g === "string")) {
+                  globs = raw as string[]
+                }
+                // else: invalid or empty globs value, leave as null (unconditional)
+              }
+              rules.push({
+                filepath,
+                content: md.content,
+                globs,
+              })
+            } catch {
+              const content = await Filesystem.readText(filepath).catch(() => "")
+              rules.push({ filepath, content, globs: null })
+            }
+          }
+          return rules
+        }
 
         const fetch = Effect.fnUntraced(function* (url: string) {
           const res = yield* http.execute(HttpClientRequest.get(url)).pipe(
@@ -188,13 +226,18 @@ export namespace Instruction {
             ? []
             : yield* Effect.promise(() => filterSymlinkEscapes(rawProjectRuleFiles, projectRulesDir))
 
-          // Include all global rules (even if same filename exists in project)
-          for (const rule of globalRuleFiles) {
-            paths.add(path.resolve(rule))
+          // Parse rule files once and cache in state
+          const s = yield* InstanceState.get(state)
+          if (!s.parsedRules) {
+            const allRuleFiles = [...globalRuleFiles, ...projectRuleFiles]
+            s.parsedRules = yield* Effect.promise(() => parseRuleFiles(allRuleFiles))
           }
-          // Include all project rules
-          for (const rule of projectRuleFiles) {
-            paths.add(path.resolve(rule))
+
+          // Only add unconditional rules (no globs) to system paths
+          for (const rule of s.parsedRules) {
+            if (!rule.globs) {
+              paths.add(path.resolve(rule.filepath))
+            }
           }
 
           if (config.instructions) {
@@ -279,6 +322,36 @@ export namespace Instruction {
             }
 
             current = path.dirname(current)
+          }
+
+          // Check path-scoped rules (glob-matched)
+          if (s.parsedRules) {
+            const relativePath = path.relative(root, target)
+            for (const rule of s.parsedRules) {
+              if (!rule.globs) continue // unconditional rules are in systemPaths
+              if (sys.has(rule.filepath) || already.has(rule.filepath)) continue
+
+              let set = s.claims.get(messageID)
+              if (!set) {
+                set = new Set()
+                s.claims.set(messageID, set)
+              }
+              if (set.has(rule.filepath)) continue
+
+              // Check if any glob pattern matches the file being read
+              const matches = rule.globs.some(
+                (glob) => Glob.match(glob, relativePath) || Glob.match(glob, target),
+              )
+              if (!matches) continue
+
+              set.add(rule.filepath)
+              if (rule.content) {
+                results.push({
+                  filepath: rule.filepath,
+                  content: `Instructions from: ${rule.filepath}\n${rule.content}`,
+                })
+              }
+            }
           }
 
           return results
