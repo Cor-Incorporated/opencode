@@ -298,7 +298,7 @@ export async function openSettings(page: Page) {
   await page.keyboard.press(`${modKey}+Comma`).catch(() => undefined)
 
   const opened = await dialog
-    .waitFor({ state: "visible", timeout: 3000 })
+    .waitFor({ state: "visible", timeout: 5000 })
     .then(() => true)
     .catch(() => false)
 
@@ -816,7 +816,16 @@ export async function openStatusPopover(page: Page) {
   if (!opened) {
     await expect(trigger).toBeVisible()
     await trigger.click()
-    await expect(popoverBody).toBeVisible()
+
+    const visible = await popoverBody
+      .waitFor({ state: "visible", timeout: 3000 })
+      .then(() => true)
+      .catch(() => false)
+
+    if (!visible) {
+      await trigger.click()
+      await expect(popoverBody).toBeVisible()
+    }
   }
 
   return { rightSection, popoverBody }

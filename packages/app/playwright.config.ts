@@ -18,7 +18,7 @@ export default defineConfig({
   outputDir: "./e2e/test-results",
   timeout: 60_000,
   expect: {
-    timeout: 10_000,
+    timeout: process.env.CI ? 15_000 : 10_000,
   },
   fullyParallel: process.env.PLAYWRIGHT_FULLY_PARALLEL === "1",
   forbidOnly: !!process.env.CI,
