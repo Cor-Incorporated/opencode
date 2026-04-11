@@ -177,6 +177,59 @@ When continuing this work in future sessions:
 - Scripted replays: `packages/opencode/test/scenario/replay.ts` and `packages/opencode/test/scenario/harness.ts`
 - Thin distribution package: `packages/guardrails/`
 
+## Deploy and firing verification checklist
+
+Every binary build + deploy must complete this checklist before the session ends.
+
+### 1. Binary deploy
+```bash
+PATH="$HOME/.bun/bin:$PATH" bun run --cwd packages/opencode script/build.ts --single --skip-embed-web-ui --skip-install
+cp packages/opencode/dist/opencode-darwin-arm64/bin/opencode ~/.local/bin/opencode
+opencode --version
+```
+
+### 2. Basic firing verification
+```bash
+opencode --help                # All commands visible
+opencode agent list            # Agents loaded
+opencode models                # Providers listed
+opencode debug skill           # Skills loaded
+```
+
+### 3. Global plugin activation (CRITICAL)
+
+The binary alone does NOT activate guardrail plugins. Plugins require both:
+- Symlinks in `~/.config/opencode/plugins/` (entry points only, NOT helper modules)
+- `"plugin"` field in `~/.config/opencode/opencode.jsonc`
+
+**Verify in a non-opencode repository:**
+```bash
+cd ~/Developer/<any-other-repo>
+opencode debug config | grep -A5 '"plugin"'
+# Must show guardrail.ts and team.ts
+```
+
+**If plugins are missing, set up:**
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -sf ~/Developer/opencode/packages/guardrails/profile/plugins/guardrail.ts ~/.config/opencode/plugins/
+ln -sf ~/Developer/opencode/packages/guardrails/profile/plugins/team.ts ~/.config/opencode/plugins/
+```
+
+Add to `~/.config/opencode/opencode.jsonc`:
+```jsonc
+"plugin": ["./plugins/guardrail.ts", "./plugins/team.ts"],
+```
+
+**WARNING:** Do NOT symlink helper files (`guardrail-access.ts`, `guardrail-context.ts`, `guardrail-git.ts`, `guardrail-patterns.ts`, `guardrail-review.ts`). OpenCode auto-loads all `.ts` files in the plugins directory. Helper modules are imported by `guardrail.ts` internally — symlinking them causes duplicate/broken loads.
+
+### Current symlink structure
+```
+~/.config/opencode/plugins/
+  guardrail.ts → packages/guardrails/profile/plugins/guardrail.ts
+  team.ts      → packages/guardrails/profile/plugins/team.ts
+```
+
 ## Primary references
 
 - OpenCode config: https://opencode.ai/docs/config
