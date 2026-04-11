@@ -18,6 +18,14 @@ function relevanceWeight(entry: Memory.Info): number {
   return entry.relevanceScore * recencyWeight * Math.log2(entry.accessCount + 2)
 }
 
+const DEFAULT_BUDGET_ALLOCATION = {
+  agent: 0.30,
+  project: 0.25,
+  feedback: 0.20,
+  user: 0.15,
+  reference: 0.10,
+} as const
+
 export namespace MemoryInjector {
   export async function load(agent?: string): Promise<string | undefined> {
     const config = await Config.get()
@@ -57,18 +65,25 @@ export namespace MemoryInjector {
     const generalIds = new Set(entries.map((e) => e.id))
     agentEntries = agentEntries.filter((e) => !generalIds.has(e.id))
 
-    // Build sections within token budget
+    // Build sections within token budget using proportional allocation
+    const allocation = DEFAULT_BUDGET_ALLOCATION
+    const agentBudget = Math.floor(maxTokens * allocation.agent)
+    const generalBudgets = {
+      "Project Knowledge": Math.floor(maxTokens * allocation.project),
+      "User Preferences": Math.floor(maxTokens * allocation.user),
+      "Feedback & Patterns": Math.floor(maxTokens * allocation.feedback),
+      "Reference": Math.floor(maxTokens * allocation.reference),
+    } as const
+
     const sections: string[] = []
-    let tokenBudget = maxTokens
-    const injectedIds: string[] = []
+    const allIncludedIds: string[] = []
 
     // Agent-specific section first (highest priority)
     if (agentEntries.length > 0) {
-      const agentSection = buildSection("Agent-Specific Knowledge", agentEntries, tokenBudget)
+      const agentSection = buildSection("Agent-Specific Knowledge", agentEntries, agentBudget)
       if (agentSection.text) {
         sections.push(agentSection.text)
-        tokenBudget -= agentSection.tokens
-        injectedIds.push(...agentSection.includedIds)
+        allIncludedIds.push(...agentSection.includedIds)
       }
     }
 
@@ -84,21 +99,20 @@ export namespace MemoryInjector {
       ["Feedback & Patterns", feedbackEntries],
       ["Reference", referenceEntries],
     ] as const) {
-      if (group.length === 0 || tokenBudget <= 0) continue
-      const section = buildSection(title, group, tokenBudget)
+      if (group.length === 0) continue
+      const section = buildSection(title, group, generalBudgets[title])
       if (section.text) {
         sections.push(section.text)
-        tokenBudget -= section.tokens
-        injectedIds.push(...section.includedIds)
+        allIncludedIds.push(...section.includedIds)
       }
     }
 
     if (sections.length === 0) return undefined
 
     // Increment access counts only for entries actually injected (within token budget)
-    if (injectedIds.length > 0) {
+    if (allIncludedIds.length > 0) {
       try {
-        await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(injectedIds))
+        await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(allIncludedIds))
       } catch {
         // Non-critical: access count tracking failure should not block injection
       }
