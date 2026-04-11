@@ -259,6 +259,17 @@ export default async function guardrail(
             await ctx.mark({ workflow_phase: "implementing", workflow_review_attempts: 0 })
             await ctx.seen("workflow.plan_approved", { sessionID: "plan_exit" })
           }
+          const taskCount = num(data.active_task_count)
+          const hasDelegation = taskCount > 0 || Object.keys(data).filter((k) => k.startsWith("delegation_")).some((k) => num(data[k]) > 0)
+          if (!hasDelegation) {
+            out.output = (out.output || "") + "\n\n⚠️ [DELEGATION ADVISORY] Plan approved without delegation assignments.\n" +
+              "ADR-004 rules: 2+ independent tasks → Agent Team (TeamCreate), " +
+              "1 large autonomous task → Codex CLI (route C), " +
+              "review → code-reviewer + Codex CLI (route A). " +
+              "Limits: sub-agents 5-7, Bash 3-4, Codex CLI 1. " +
+              "Consider assigning delegation before implementing."
+            await ctx.seen("delegation.plan_no_assignment", { task_count: taskCount })
+          }
         } catch {}
       }
 
@@ -563,6 +574,14 @@ export default async function guardrail(
         out.system.push("[WORKFLOW] Phase: " + phase + ". Pipeline: implement→test→review→fix→ship. Complete autonomously. Do not stop at PR creation.")
         out.system.push("When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline.")
       }
+      out.system.push(
+        "[DELEGATION] ADR-004 rules: " +
+        "2+ independent tasks → Agent Team (TeamCreate, max 5). " +
+        "1 large autonomous task → Codex CLI (route C). " +
+        "Review → code-reviewer + Codex CLI (route A). " +
+        "Limits: sub-agents 5-7, Bash 3-4, Codex CLI 1, total 7. " +
+        "Include delegation assignments in plans. Do not self-implement everything.",
+      )
     },
   }
 }
