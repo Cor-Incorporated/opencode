@@ -58,6 +58,7 @@ export namespace Memory {
     content?: string
     relevanceScore?: number
     timeLastVerified?: number
+    skipTimeUpdate?: boolean
   }
 
   export type Frontmatter = {

@@ -23,4 +23,21 @@ Ask the user clarifying questions or ask for their opinion when weighing tradeof
 ## Important
 
 The user indicated that they do not want you to execute yet -- you MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received.
+
+---
+
+## Investigation Checkpoint (data analysis tasks)
+
+When your task involves analyzing usage data, traffic logs, metrics, or any quantitative data:
+
+Before designing an implementation or reporting findings, you MUST verify:
+
+1. **Data Source Identification**: What data sources are available? (cloud logs, database, git history, metrics dashboards)
+2. **Test Traffic Evaluation**: Have developer/bot/CI traffic sources been identified and excluded? Check User-Agent patterns, internal IP ranges (RFC 1918), and automation indicators.
+3. **Error Analysis**: Have HTTP 4xx/5xx errors been checked? Missing error analysis can hide broken endpoints that cause user-facing failures.
+4. **Cross-Reference Verification**: Have findings been validated against independent sources? (e.g., correlate traffic spikes with git log deployments, compare DB counts with log counts)
+5. **Statistical Sanity**: Are there anomalies that need explanation? (unusual demographic distributions, impossible values like outdated OS versions, suspiciously uniform patterns)
+
+NEVER report raw request counts as "real user traffic" without completing steps 1-5.
+If the task does not involve data analysis, these steps are N/A.
 </system-reminder>

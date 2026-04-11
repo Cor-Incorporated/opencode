@@ -13,10 +13,17 @@ export function safeToolInput(args: unknown): string {
   return raw.slice(0, MAX_HOOK_INPUT_ENV) + "\n[truncated]"
 }
 
+export function safeToolOutput(output: unknown): string {
+  const raw = typeof output === "string" ? output : JSON.stringify(output)
+  if (raw.length <= MAX_HOOK_INPUT_ENV) return raw
+  return raw.slice(0, MAX_HOOK_INPUT_ENV) + "\n[truncated]"
+}
+
 export interface HookEnv {
   OPENCODE_HOOK_EVENT: string
   OPENCODE_TOOL_NAME?: string
   OPENCODE_TOOL_INPUT?: string
+  OPENCODE_TOOL_OUTPUT?: string
   OPENCODE_PROJECT_DIR: string
   OPENCODE_SESSION_ID: string
 }
@@ -77,8 +84,22 @@ export function clearHookCache(): void {
 }
 
 export async function runHook(entry: HookEntry, env: HookEnv): Promise<HookResult> {
+  // Handle prompt-type hooks: return the prompt template as a message directly (no shell spawn)
+  if (entry.type === "prompt" && entry.prompt) {
+    const message = entry.prompt
+      .replace(/\{\{TOOL_NAME\}\}/g, env.OPENCODE_TOOL_NAME ?? "")
+      .replace(/\{\{TOOL_INPUT\}\}/g, env.OPENCODE_TOOL_INPUT ?? "")
+    return { action: "pass" as const, message, status: "ok" as const, duration: 0 }
+  }
+
   const isPreToolUse = env.OPENCODE_HOOK_EVENT === "PreToolUse"
   const timeout = entry.timeout ?? DEFAULT_TIMEOUT
+
+  if (!entry.command) {
+    log.error("hook entry missing command for non-prompt type", { type: entry.type })
+    return { action: "pass" as const }
+  }
+
   const command = entry.command.replace(/^~/, process.env.HOME ?? "~")
 
   // Check cache for PreToolUse hooks
@@ -161,6 +182,7 @@ function toEnvRecord(env: HookEnv): Record<string, string> {
   }
   if (env.OPENCODE_TOOL_NAME !== undefined) record.OPENCODE_TOOL_NAME = env.OPENCODE_TOOL_NAME
   if (env.OPENCODE_TOOL_INPUT !== undefined) record.OPENCODE_TOOL_INPUT = env.OPENCODE_TOOL_INPUT
+  if (env.OPENCODE_TOOL_OUTPUT !== undefined) record.OPENCODE_TOOL_OUTPUT = env.OPENCODE_TOOL_OUTPUT
   return record
 }
 

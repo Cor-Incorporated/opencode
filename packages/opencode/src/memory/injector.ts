@@ -26,9 +26,10 @@ export namespace MemoryInjector {
     const maxTokens = config.memory?.max_memory_tokens ?? 5000
 
     // Try DB-first, fallback to file-based
+    // Use listGeneral to exclude agent-tagged entries from the general pool
     let entries: Memory.Info[] = []
     try {
-      entries = await MemoryStore.runPromise((svc) => svc.list(Instance.directory))
+      entries = await MemoryStore.runPromise((svc) => svc.listGeneral(Instance.directory))
     } catch {
       // DB not available, fallback to file-based loading
       return loadFromFile(config.memory?.max_memory_lines ?? 200)
@@ -59,6 +60,7 @@ export namespace MemoryInjector {
     // Build sections within token budget
     const sections: string[] = []
     let tokenBudget = maxTokens
+    const injectedIds: string[] = []
 
     // Agent-specific section first (highest priority)
     if (agentEntries.length > 0) {
@@ -66,6 +68,7 @@ export namespace MemoryInjector {
       if (agentSection.text) {
         sections.push(agentSection.text)
         tokenBudget -= agentSection.tokens
+        injectedIds.push(...agentSection.includedIds)
       }
     }
 
@@ -86,10 +89,20 @@ export namespace MemoryInjector {
       if (section.text) {
         sections.push(section.text)
         tokenBudget -= section.tokens
+        injectedIds.push(...section.includedIds)
       }
     }
 
     if (sections.length === 0) return undefined
+
+    // Increment access counts only for entries actually injected (within token budget)
+    if (injectedIds.length > 0) {
+      try {
+        await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(injectedIds))
+      } catch {
+        // Non-critical: access count tracking failure should not block injection
+      }
+    }
 
     return [
       "# Memory",
@@ -101,10 +114,15 @@ export namespace MemoryInjector {
     ].join("\n")
   }
 
-  function buildSection(title: string, entries: Memory.Info[], tokenBudget: number): { text: string; tokens: number } {
+  function buildSection(
+    title: string,
+    entries: Memory.Info[],
+    tokenBudget: number,
+  ): { text: string; tokens: number; includedIds: string[] } {
     const header = `## ${title}\n`
     let tokens = estimateTokens(header)
     const lines: string[] = [header]
+    const includedIds: string[] = []
 
     for (const entry of entries) {
       const desc = entry.description ? ` -- ${entry.description}` : ""
@@ -113,10 +131,11 @@ export namespace MemoryInjector {
       if (tokens + lineTokens > tokenBudget) break
       lines.push(line)
       tokens += lineTokens
+      includedIds.push(entry.id)
     }
 
-    if (lines.length <= 1) return { text: "", tokens: 0 }
-    return { text: lines.join(""), tokens }
+    if (lines.length <= 1) return { text: "", tokens: 0, includedIds: [] }
+    return { text: lines.join(""), tokens, includedIds }
   }
 
   async function loadFromFile(maxLines: number): Promise<string | undefined> {

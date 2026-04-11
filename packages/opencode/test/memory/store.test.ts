@@ -3,6 +3,7 @@ import { eq, and, sql } from "drizzle-orm"
 import { Instance } from "../../src/project/instance"
 import { Database } from "../../src/storage/db"
 import { MemoryTable } from "../../src/memory/memory.sql"
+import { MemoryStore } from "../../src/memory/store"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
 
@@ -181,6 +182,109 @@ describe("memory.store", () => {
         )
         expect(listB.length).toBe(1)
         expect(listB[0].topic).toBe("b")
+      },
+    })
+  })
+
+  test("promote defaults previousScope to project (not personal)", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Use MemoryStore.create so the entry goes through the real production path.
+        // The DB schema enforces scope NOT NULL DEFAULT 'project', so we test the
+        // promote() fallback by starting with the default scope and verifying that
+        // promoted_from is recorded as "project" (not "personal").
+        const created = await MemoryStore.runPromise((svc) =>
+          svc.create({
+            projectPath: tmp.path,
+            name: "promote-test",
+            type: "project",
+            content: "test content",
+            scope: "project",
+          })
+        )
+
+        // Call the real MemoryStore.promote() — this is what the test must exercise
+        const promoted = await MemoryStore.runPromise((svc) =>
+          svc.promote(created.id, "global")
+        )
+
+        expect(promoted).toBeDefined()
+        expect(promoted!.scope).toBe("global")
+        // The fallback must be "project" (matching DB schema default), not "personal"
+        expect(promoted!.promotedFrom).toBe("project")
+      },
+    })
+  })
+
+  test("update with skipTimeUpdate preserves time_updated", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Create via MemoryStore so the entry has a known time_updated
+        const created = await MemoryStore.runPromise((svc) =>
+          svc.create({
+            projectPath: tmp.path,
+            name: "skip-time-test",
+            type: "project",
+            content: "original content",
+          })
+        )
+        const originalTimeUpdated = created.timeUpdated
+
+        // Small delay to ensure clock would advance if skipTimeUpdate is not respected
+        await new Promise((r) => setTimeout(r, 10))
+
+        // Call the real MemoryStore.update() with skipTimeUpdate=true
+        const updated = await MemoryStore.runPromise((svc) =>
+          svc.update({
+            id: created.id,
+            content: "updated content",
+            skipTimeUpdate: true,
+          })
+        )
+
+        expect(updated).toBeDefined()
+        expect(updated!.content).toBe("updated content")
+        // time_updated must not change when skipTimeUpdate=true
+        expect(updated!.timeUpdated).toBe(originalTimeUpdated)
+      },
+    })
+  })
+
+  test("update without skipTimeUpdate bumps time_updated", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // Create via MemoryStore to get a baseline time_updated
+        const created = await MemoryStore.runPromise((svc) =>
+          svc.create({
+            projectPath: tmp.path,
+            name: "bump-time-test",
+            type: "project",
+            content: "original content",
+          })
+        )
+        const originalTimeUpdated = created.timeUpdated
+
+        // Small delay so the new timestamp is strictly greater
+        await new Promise((r) => setTimeout(r, 10))
+
+        // Call the real MemoryStore.update() without skipTimeUpdate (default false)
+        const updated = await MemoryStore.runPromise((svc) =>
+          svc.update({
+            id: created.id,
+            content: "updated content",
+          })
+        )
+
+        expect(updated).toBeDefined()
+        expect(updated!.content).toBe("updated content")
+        // time_updated must have advanced when skipTimeUpdate is not set
+        expect(updated!.timeUpdated).toBeGreaterThan(originalTimeUpdated)
       },
     })
   })

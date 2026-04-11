@@ -62,11 +62,13 @@ function extractScriptPaths(config: HookConfig, hookDir: string): Set<string> {
   const paths = new Set<string>()
   if (!config) return paths
 
-  const events = ["PreToolUse", "PostToolUse", "SessionStart", "Notification"] as const
+  const events = ["PreToolUse", "PostToolUse", "SessionStart", "Notification", "SessionEnd", "PreCompact", "PostCompact"] as const
   for (const event of events) {
     const entries = config[event]
     if (!entries) continue
     for (const entry of entries) {
+      // Skip prompt-type entries (no shell script to verify)
+      if (!entry.command) continue
       const scriptPath = resolveScriptPath(entry.command, hookDir)
       if (scriptPath) paths.add(scriptPath)
     }

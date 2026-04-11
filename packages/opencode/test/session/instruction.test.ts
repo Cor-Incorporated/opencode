@@ -186,6 +186,102 @@ describe("Instruction.resolve", () => {
   test.todo("fetches remote instructions from config URLs via HttpClient", () => {})
 })
 
+describe("OPENCODE.md support", () => {
+  test("systemPaths discovers OPENCODE.md at project root", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "OPENCODE.md"), "# OpenCode Instructions\nProject-level opencode config")
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const paths = await Instruction.systemPaths()
+        expect(paths.has(path.join(tmp.path, "OPENCODE.md"))).toBe(true)
+      },
+    })
+  })
+
+  test("OPENCODE.md takes priority over CLAUDE.md (first match wins)", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "OPENCODE.md"), "# OpenCode Instructions")
+        await Bun.write(path.join(dir, "CLAUDE.md"), "# Claude Instructions")
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const paths = await Instruction.systemPaths()
+        // OPENCODE.md is found first in FILES → break → CLAUDE.md never searched
+        expect(paths.has(path.join(tmp.path, "OPENCODE.md"))).toBe(true)
+        expect(paths.has(path.join(tmp.path, "CLAUDE.md"))).toBe(false)
+      },
+    })
+  })
+
+  test("falls back to CLAUDE.md when OPENCODE.md does not exist", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "CLAUDE.md"), "# Claude Instructions")
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const paths = await Instruction.systemPaths()
+        expect(paths.has(path.join(tmp.path, "CLAUDE.md"))).toBe(true)
+        expect(paths.has(path.join(tmp.path, "OPENCODE.md"))).toBe(false)
+      },
+    })
+  })
+
+  test("resolve discovers subdirectory OPENCODE.md", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "subdir", "OPENCODE.md"), "# Subdir OpenCode Instructions")
+        await Bun.write(path.join(dir, "subdir", "nested", "file.ts"), "const x = 1")
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const results = await Instruction.resolve(
+          [],
+          path.join(tmp.path, "subdir", "nested", "file.ts"),
+          MessageID.make("message-opencode-1"),
+        )
+        expect(results.length).toBe(1)
+        expect(results[0].filepath).toBe(path.join(tmp.path, "subdir", "OPENCODE.md"))
+      },
+    })
+  })
+
+  test("global OPENCODE.md is picked up from Global.Path.config", async () => {
+    await using globalTmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "OPENCODE.md"), "# Global OpenCode Instructions")
+      },
+    })
+    await using projectTmp = await tmpdir()
+
+    const originalGlobalConfig = Global.Path.config
+    ;(Global.Path as { config: string }).config = globalTmp.path
+
+    try {
+      await Instance.provide({
+        directory: projectTmp.path,
+        fn: async () => {
+          const paths = await Instruction.systemPaths()
+          expect(paths.has(path.join(globalTmp.path, "OPENCODE.md"))).toBe(true)
+        },
+      })
+    } finally {
+      ;(Global.Path as { config: string }).config = originalGlobalConfig
+    }
+  })
+})
+
 describe("Instruction.systemPaths OPENCODE_CONFIG_DIR", () => {
   let originalConfigDir: string | undefined
 

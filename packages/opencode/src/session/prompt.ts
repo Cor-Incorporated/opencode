@@ -44,7 +44,7 @@ import { Shell } from "@/shell/shell"
 import { AppFileSystem } from "@/filesystem"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
-import { runHooks, safeToolInput, type HookEnv, type HookResult } from "../hook"
+import { runHooks, safeToolInput, safeToolOutput, type HookEnv, type HookResult } from "../hook"
 import { Config } from "../config/config"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Layer, Option, Scope, ServiceMap } from "effect"
@@ -462,6 +462,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     runHooks(hookCfg.hooks?.PostToolUse, item.id, {
                       ...hookEnv,
                       OPENCODE_HOOK_EVENT: "PostToolUse",
+                      OPENCODE_TOOL_OUTPUT: safeToolOutput(output.output),
                     }).catch((): HookResult => ({ action: "pass" })),
                   )
 
@@ -548,6 +549,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   runHooks(mcpHookCfg.hooks?.PostToolUse, key, {
                     ...mcpHookEnv,
                     OPENCODE_HOOK_EVENT: "PostToolUse",
+                    OPENCODE_TOOL_OUTPUT: safeToolOutput(result.content.map((c: { type: string; text?: string }) => c.type === "text" ? c.text : `[${c.type}]`).join("\n")),
                   }).catch((): HookResult => ({ action: "pass" })),
                 )
 
