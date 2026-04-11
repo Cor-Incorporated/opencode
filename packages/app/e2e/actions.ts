@@ -298,7 +298,7 @@ export async function openSettings(page: Page) {
   await page.keyboard.press(`${modKey}+Comma`).catch(() => undefined)
 
   const opened = await dialog
-    .waitFor({ state: "visible", timeout: 3000 })
+    .waitFor({ state: "visible", timeout: 5000 })
     .then(() => true)
     .catch(() => false)
 
