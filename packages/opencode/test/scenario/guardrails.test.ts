@@ -1807,6 +1807,139 @@ test("team plugin resets need gate after team tool completes", async () => {
   })
 })
 
+test("plan_exit delegation enforcement emits advisory when no delegation assigned", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // 1. Initialize session
+        await Plugin.trigger(
+          "event",
+          { event: { type: "session.created", properties: { sessionID: "session_plan_test" } } },
+          {},
+        )
+        await wait()
+
+        // 2. Fire plan_exit without any prior task delegation
+        const planOut = { title: "plan_exit", output: "Plan approved", metadata: {} }
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "plan_exit", sessionID: "session_plan_test", callID: "call_plan_exit", args: {} },
+          planOut,
+        )
+        await wait()
+
+        // Verify delegation advisory is emitted
+        expect(planOut.output).toContain("DELEGATION ADVISORY")
+        expect(planOut.output).toContain("ADR-004")
+
+        // Verify workflow phase transitioned
+        const state = await Bun.file(files.state).json()
+        expect(state.workflow_phase).toBe("implementing")
+
+        // Verify event logged
+        const log = await Bun.file(files.log).text()
+        expect(log).toContain("delegation.plan_no_assignment")
+      },
+    })
+  })
+})
+
+test("plan_exit delegation enforcement skips advisory when delegation exists", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await fs.mkdir(path.join(dir, "src"), { recursive: true })
+        await Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n")
+      },
+    })
+    const files = guard(tmp.path)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        // 1. Initialize session
+        await Plugin.trigger(
+          "event",
+          { event: { type: "session.created", properties: { sessionID: "session_plan_deleg" } } },
+          {},
+        )
+        await wait()
+
+        // 2. Create a task (delegation exists)
+        await Plugin.trigger(
+          "tool.execute.before",
+          { tool: "task", sessionID: "session_plan_deleg", callID: "call_task_pre" },
+          { args: { subagent_type: "explore", prompt: "research" } },
+        )
+        await wait()
+
+        // 3. Fire plan_exit — advisory should NOT appear
+        const planOut = { title: "plan_exit", output: "Plan approved", metadata: {} }
+        await Plugin.trigger(
+          "tool.execute.after",
+          { tool: "plan_exit", sessionID: "session_plan_deleg", callID: "call_plan_exit_2", args: {} },
+          planOut,
+        )
+        await wait()
+
+        // Verify NO delegation advisory
+        expect(planOut.output).not.toContain("DELEGATION ADVISORY")
+
+        // Verify workflow phase still transitions
+        const state = await Bun.file(files.state).json()
+        expect(state.workflow_phase).toBe("implementing")
+      },
+    })
+  })
+})
+
+test("system transform includes delegation rules", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n").catch(() => {
+          fs.mkdir(path.join(dir, "src"), { recursive: true }).then(() =>
+            Bun.write(path.join(dir, "src", "app.ts"), "export const app = 1\n"),
+          )
+        })
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await Plugin.trigger(
+          "event",
+          { event: { type: "session.created", properties: { sessionID: "session_sys_deleg" } } },
+          {},
+        )
+        await wait()
+
+        const sysOut = { system: [] as string[] }
+        await Plugin.trigger(
+          "experimental.chat.system.transform",
+          {},
+          sysOut,
+        )
+
+        expect(sysOut.system.some((s) => s.includes("[DELEGATION]") && s.includes("ADR-004"))).toBe(true)
+      },
+    })
+  })
+})
+
 for (const replay of Object.values(replays)) {
   it.live(`guardrail replay keeps ${replay.command} executable`, () =>
     run(replay).pipe(
