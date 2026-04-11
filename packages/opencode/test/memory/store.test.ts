@@ -3,6 +3,7 @@ import { eq, and, sql } from "drizzle-orm"
 import { Instance } from "../../src/project/instance"
 import { Database } from "../../src/storage/db"
 import { MemoryTable } from "../../src/memory/memory.sql"
+import { MemoryStore } from "../../src/memory/store"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
 
@@ -190,45 +191,29 @@ describe("memory.store", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const id = "test_promote_" + Date.now()
-        // Insert with explicit scope=null to test the fallback
-        const now = Date.now()
-        Database.use((d) => {
-          d.insert(MemoryTable).values({
-            id,
-            project_path: "/test",
-            topic: "promote-test",
+        // Use MemoryStore.create so the entry goes through the real production path.
+        // The DB schema enforces scope NOT NULL DEFAULT 'project', so we test the
+        // promote() fallback by starting with the default scope and verifying that
+        // promoted_from is recorded as "project" (not "personal").
+        const created = await MemoryStore.runPromise((svc) =>
+          svc.create({
+            projectPath: tmp.path,
+            name: "promote-test",
             type: "project",
-            content: "test",
-            session_id: null,
-            access_count: 0,
+            content: "test content",
             scope: "project",
-            time_created: now,
-            time_updated: now,
-          }).run()
-        })
-
-        // Promote to global
-        Database.use((d) => {
-          const row = d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
-          // Simulate what promote() does: read scope fallback
-          const previousScope = row!.scope ?? "project"
-          d.update(MemoryTable)
-            .set({
-              scope: "global",
-              promoted_from: previousScope,
-              time_updated: Date.now(),
-            })
-            .where(eq(MemoryTable.id, id))
-            .run()
-        })
-
-        const promoted = Database.use((d) =>
-          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+          })
         )
+
+        // Call the real MemoryStore.promote() — this is what the test must exercise
+        const promoted = await MemoryStore.runPromise((svc) =>
+          svc.promote(created.id, "global")
+        )
+
+        expect(promoted).toBeDefined()
         expect(promoted!.scope).toBe("global")
         // The fallback must be "project" (matching DB schema default), not "personal"
-        expect(promoted!.promoted_from).toBe("project")
+        expect(promoted!.promotedFrom).toBe("project")
       },
     })
   })
@@ -238,48 +223,33 @@ describe("memory.store", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const id = "test_skiptime_" + Date.now()
-        const frozenTime = Date.now() - 100_000
-        Database.use((d) => {
-          d.insert(MemoryTable).values({
-            id,
-            project_path: "/test",
-            topic: "skip-time-test",
+        // Create via MemoryStore so the entry has a known time_updated
+        const created = await MemoryStore.runPromise((svc) =>
+          svc.create({
+            projectPath: tmp.path,
+            name: "skip-time-test",
             type: "project",
-            content: "test",
-            session_id: null,
-            access_count: 0,
-            scope: "project",
-            time_created: frozenTime,
-            time_updated: frozenTime,
-          }).run()
-        })
-
-        const before = Database.use((d) =>
-          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+            content: "original content",
+          })
         )
-        expect(before!.time_updated).toBe(frozenTime)
+        const originalTimeUpdated = created.timeUpdated
 
-        // Simulate skipTimeUpdate=true: explicitly preserve existing time_updated
-        // (Drizzle $onUpdate hook forces time_updated, so we must override it back)
-        Database.use((d) => {
-          d.update(MemoryTable)
-            .set({
-              time_last_verified: Date.now(),
-              time_updated: frozenTime,
-            })
-            .where(eq(MemoryTable.id, id))
-            .run()
-        })
+        // Small delay to ensure clock would advance if skipTimeUpdate is not respected
+        await new Promise((r) => setTimeout(r, 10))
 
-        const after = Database.use((d) =>
-          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+        // Call the real MemoryStore.update() with skipTimeUpdate=true
+        const updated = await MemoryStore.runPromise((svc) =>
+          svc.update({
+            id: created.id,
+            content: "updated content",
+            skipTimeUpdate: true,
+          })
         )
-        // time_updated should remain unchanged because we explicitly set it back
-        expect(after!.time_updated).toBe(frozenTime)
-        // time_last_verified should be set
-        expect(after!.time_last_verified).toBeDefined()
-        expect(after!.time_last_verified).toBeGreaterThan(frozenTime)
+
+        expect(updated).toBeDefined()
+        expect(updated!.content).toBe("updated content")
+        // time_updated must not change when skipTimeUpdate=true
+        expect(updated!.timeUpdated).toBe(originalTimeUpdated)
       },
     })
   })
@@ -289,40 +259,32 @@ describe("memory.store", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const id = "test_bumptime_" + Date.now()
-        const frozenTime = Date.now() - 100_000
-        Database.use((d) => {
-          d.insert(MemoryTable).values({
-            id,
-            project_path: "/test",
-            topic: "bump-time-test",
+        // Create via MemoryStore to get a baseline time_updated
+        const created = await MemoryStore.runPromise((svc) =>
+          svc.create({
+            projectPath: tmp.path,
+            name: "bump-time-test",
             type: "project",
-            content: "test",
-            session_id: null,
-            access_count: 0,
-            scope: "project",
-            time_created: frozenTime,
-            time_updated: frozenTime,
-          }).run()
-        })
-
-        // Simulate skipTimeUpdate=false (default): set time_updated = Date.now()
-        const updateTime = Date.now()
-        Database.use((d) => {
-          d.update(MemoryTable)
-            .set({
-              time_last_verified: updateTime,
-              time_updated: updateTime,
-            })
-            .where(eq(MemoryTable.id, id))
-            .run()
-        })
-
-        const after = Database.use((d) =>
-          d.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get()
+            content: "original content",
+          })
         )
-        // time_updated should have been bumped
-        expect(after!.time_updated).toBeGreaterThan(frozenTime)
+        const originalTimeUpdated = created.timeUpdated
+
+        // Small delay so the new timestamp is strictly greater
+        await new Promise((r) => setTimeout(r, 10))
+
+        // Call the real MemoryStore.update() without skipTimeUpdate (default false)
+        const updated = await MemoryStore.runPromise((svc) =>
+          svc.update({
+            id: created.id,
+            content: "updated content",
+          })
+        )
+
+        expect(updated).toBeDefined()
+        expect(updated!.content).toBe("updated content")
+        // time_updated must have advanced when skipTimeUpdate is not set
+        expect(updated!.timeUpdated).toBeGreaterThan(originalTimeUpdated)
       },
     })
   })

@@ -55,7 +55,8 @@ export namespace InvestigationValidator {
 
     // Check for bot User-Agent patterns
     for (const pattern of BOT_UA_PATTERNS) {
-      const matches = output.match(new RegExp(pattern.source, "gi"))
+      const flags = pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g"
+      const matches = output.match(new RegExp(pattern.source, flags))
       if (matches && matches.length > 0) {
         testTrafficIndicators.push(`${pattern.source}: ${matches.length} occurrence(s)`)
       }
@@ -63,7 +64,8 @@ export namespace InvestigationValidator {
 
     // Check for internal IPs
     for (const pattern of INTERNAL_IP_PATTERNS) {
-      const matches = output.match(new RegExp(pattern.source, "g"))
+      const flags = pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g"
+      const matches = output.match(new RegExp(pattern.source, flags))
       if (matches) {
         internalIpCount += matches.length
       }

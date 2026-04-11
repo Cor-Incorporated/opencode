@@ -94,7 +94,13 @@ export async function runHook(entry: HookEntry, env: HookEnv): Promise<HookResul
 
   const isPreToolUse = env.OPENCODE_HOOK_EVENT === "PreToolUse"
   const timeout = entry.timeout ?? DEFAULT_TIMEOUT
-  const command = (entry.command ?? "").replace(/^~/, process.env.HOME ?? "~")
+
+  if (!entry.command) {
+    log.error("hook entry missing command for non-prompt type", { type: entry.type })
+    return { action: "pass" as const }
+  }
+
+  const command = entry.command.replace(/^~/, process.env.HOME ?? "~")
 
   // Check cache for PreToolUse hooks
   if (isPreToolUse) {

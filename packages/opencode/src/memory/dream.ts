@@ -63,10 +63,11 @@ export namespace MemoryDream {
       }
 
       // Phase 2: Consolidate — merge semantically similar entries
-      // Group by normalized name prefix (first 3 words, lowercased)
+      // Group by type + scope + agent + normalized name prefix (first 3 words, lowercased).
+      // Including type/scope/agent prevents entries from different buckets being merged.
       const groups = new Map<string, typeof entries>()
       for (const entry of entries) {
-        const key = normalizeKey(entry.name)
+        const key = `${entry.type}|${entry.scope}|${entry.agent ?? ""}|${normalizeKey(entry.name)}`
         const group = groups.get(key) ?? []
         group.push(entry)
         groups.set(key, group)

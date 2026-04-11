@@ -60,6 +60,7 @@ export namespace MemoryInjector {
     // Build sections within token budget
     const sections: string[] = []
     let tokenBudget = maxTokens
+    const injectedIds: string[] = []
 
     // Agent-specific section first (highest priority)
     if (agentEntries.length > 0) {
@@ -67,6 +68,7 @@ export namespace MemoryInjector {
       if (agentSection.text) {
         sections.push(agentSection.text)
         tokenBudget -= agentSection.tokens
+        injectedIds.push(...agentSection.includedIds)
       }
     }
 
@@ -87,13 +89,13 @@ export namespace MemoryInjector {
       if (section.text) {
         sections.push(section.text)
         tokenBudget -= section.tokens
+        injectedIds.push(...section.includedIds)
       }
     }
 
     if (sections.length === 0) return undefined
 
-    // Increment access counts for all injected entries
-    const injectedIds = [...entries, ...agentEntries].map((e) => e.id)
+    // Increment access counts only for entries actually injected (within token budget)
     if (injectedIds.length > 0) {
       try {
         await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(injectedIds))
@@ -112,10 +114,15 @@ export namespace MemoryInjector {
     ].join("\n")
   }
 
-  function buildSection(title: string, entries: Memory.Info[], tokenBudget: number): { text: string; tokens: number } {
+  function buildSection(
+    title: string,
+    entries: Memory.Info[],
+    tokenBudget: number,
+  ): { text: string; tokens: number; includedIds: string[] } {
     const header = `## ${title}\n`
     let tokens = estimateTokens(header)
     const lines: string[] = [header]
+    const includedIds: string[] = []
 
     for (const entry of entries) {
       const desc = entry.description ? ` -- ${entry.description}` : ""
@@ -124,10 +131,11 @@ export namespace MemoryInjector {
       if (tokens + lineTokens > tokenBudget) break
       lines.push(line)
       tokens += lineTokens
+      includedIds.push(entry.id)
     }
 
-    if (lines.length <= 1) return { text: "", tokens: 0 }
-    return { text: lines.join(""), tokens }
+    if (lines.length <= 1) return { text: "", tokens: 0, includedIds: [] }
+    return { text: lines.join(""), tokens, includedIds }
   }
 
   async function loadFromFile(maxLines: number): Promise<string | undefined> {
