@@ -5,6 +5,7 @@ import { Effect, Layer, ServiceMap } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
+import { Filesystem } from "@/util/filesystem"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
 import { Flag } from "@/flag/flag"
@@ -123,7 +124,13 @@ export namespace Instruction {
               const md = await ConfigMarkdown.parse(filepath)
               let globs: string[] | null = null
               if (md.data?.globs) {
-                globs = Array.isArray(md.data.globs) ? md.data.globs : [md.data.globs]
+                const raw = md.data.globs
+                if (typeof raw === "string") {
+                  globs = [raw]
+                } else if (Array.isArray(raw) && raw.length > 0 && raw.every((g: unknown) => typeof g === "string")) {
+                  globs = raw as string[]
+                }
+                // else: invalid or empty globs value, leave as null (unconditional)
               }
               rules.push({
                 filepath,
@@ -131,8 +138,6 @@ export namespace Instruction {
                 globs,
               })
             } catch {
-              // Failed to parse frontmatter, treat as unconditional
-              const { Filesystem } = await import("../util/filesystem")
               const content = await Filesystem.readText(filepath).catch(() => "")
               rules.push({ filepath, content, globs: null })
             }
@@ -221,16 +226,15 @@ export namespace Instruction {
             ? []
             : yield* Effect.promise(() => filterSymlinkEscapes(rawProjectRuleFiles, projectRulesDir))
 
-          // Parse all rule files and cache them
-          const allRuleFiles = [...globalRuleFiles, ...projectRuleFiles]
-          const parsed = yield* Effect.promise(() => parseRuleFiles(allRuleFiles))
-
-          // Store parsed rules in state for resolve() to use
+          // Parse rule files once and cache in state
           const s = yield* InstanceState.get(state)
-          s.parsedRules = parsed
+          if (!s.parsedRules) {
+            const allRuleFiles = [...globalRuleFiles, ...projectRuleFiles]
+            s.parsedRules = yield* Effect.promise(() => parseRuleFiles(allRuleFiles))
+          }
 
           // Only add unconditional rules (no globs) to system paths
-          for (const rule of parsed) {
+          for (const rule of s.parsedRules) {
             if (!rule.globs) {
               paths.add(path.resolve(rule.filepath))
             }
