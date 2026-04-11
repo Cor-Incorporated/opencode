@@ -278,6 +278,121 @@ describe("MemoryInjector.load", () => {
     })
   })
 
+  test("all sections get entries when budget is sufficient", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        Database.use((d) => {
+          seed(d, { id: `proj-${ts}`, projectPath: tmp.path, topic: "proj-entry", type: "project", content: "Project content" })
+          seed(d, { id: `user-${ts}`, projectPath: tmp.path, topic: "user-entry", type: "user", content: "User content" })
+          seed(d, { id: `fb-${ts}`, projectPath: tmp.path, topic: "fb-entry", type: "feedback", content: "Feedback content" })
+          seed(d, { id: `ref-${ts}`, projectPath: tmp.path, topic: "ref-entry", type: "reference", content: "Reference content" })
+        })
+
+        const result = await MemoryInjector.load()
+        expect(result).toBeDefined()
+        expect(result).toContain("proj-entry")
+        expect(result).toContain("user-entry")
+        expect(result).toContain("fb-entry")
+        expect(result).toContain("ref-entry")
+      },
+    })
+  })
+
+  test("large agent section does not starve other sections", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        Database.use((d) => {
+          // Fill agent section with many large entries
+          for (let i = 0; i < 20; i++) {
+            seed(d, {
+              id: `agent-bulk-${i}-${ts}`,
+              projectPath: tmp.path,
+              topic: `agent-entry-${i}`,
+              type: "project",
+              content: "A".repeat(400),
+              agent: "code-reviewer",
+            })
+          }
+          // Add general entries that should still appear
+          seed(d, { id: `gen-proj-${ts}`, projectPath: tmp.path, topic: "general-project", type: "project", content: "General project entry" })
+          seed(d, { id: `gen-fb-${ts}`, projectPath: tmp.path, topic: "general-feedback", type: "feedback", content: "General feedback entry" })
+        })
+
+        const result = await MemoryInjector.load("code-reviewer")
+        expect(result).toBeDefined()
+        // General sections must not be starved even with large agent section
+        expect(result).toContain("general-project")
+        expect(result).toContain("general-feedback")
+      },
+    })
+  })
+
+  test("empty sections produce no output headers", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        // Only seed project and feedback — user and reference are empty
+        Database.use((d) => {
+          seed(d, { id: `only-proj-${ts}`, projectPath: tmp.path, topic: "only-project", type: "project", content: "Only project entry" })
+          seed(d, { id: `only-fb-${ts}`, projectPath: tmp.path, topic: "only-feedback", type: "feedback", content: "Only feedback entry" })
+        })
+
+        const result = await MemoryInjector.load()
+        expect(result).toBeDefined()
+        // Present sections appear
+        expect(result).toContain("only-project")
+        expect(result).toContain("only-feedback")
+        // Empty sections produce no header
+        expect(result).not.toContain("## User Preferences")
+        expect(result).not.toContain("## Reference")
+      },
+    })
+  })
+
+  test("budget from empty sections is redistributed to active sections", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: { memory: { max_memory_tokens: 200 } } as any,
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        // Only seed "project" entries — user/feedback/reference are empty
+        Database.use((d) => {
+          for (let i = 0; i < 10; i++) {
+            seed(d, {
+              id: `redist-${i}-${ts}`,
+              projectPath: tmp.path,
+              topic: `redist-entry-${i}`,
+              type: "project",
+              content: `Redistributed budget content item ${i}`,
+            })
+          }
+        })
+
+        const result = await MemoryInjector.load()
+        expect(result).toBeDefined()
+        // With redistribution, project section gets the full general pool (no agent entries)
+        // so it should fit more than 1 entry even with a tight 200-token budget
+        const entryCount = (result!.match(/redist-entry-\d+/g) || []).length
+        expect(entryCount).toBeGreaterThan(1)
+        // Empty sections should not appear
+        expect(result).not.toContain("## User Preferences")
+        expect(result).not.toContain("## Feedback & Patterns")
+        expect(result).not.toContain("## Reference")
+      },
+    })
+  })
+
   test("includes description in entry output when present", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({

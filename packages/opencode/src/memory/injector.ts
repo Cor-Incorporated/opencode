@@ -18,6 +18,14 @@ function relevanceWeight(entry: Memory.Info): number {
   return entry.relevanceScore * recencyWeight * Math.log2(entry.accessCount + 2)
 }
 
+const DEFAULT_BUDGET_ALLOCATION = {
+  agent: 0.30,
+  project: 0.25,
+  feedback: 0.20,
+  user: 0.15,
+  reference: 0.10,
+} as const
+
 export namespace MemoryInjector {
   export async function load(agent?: string): Promise<string | undefined> {
     const config = await Config.get()
@@ -57,18 +65,21 @@ export namespace MemoryInjector {
     const generalIds = new Set(entries.map((e) => e.id))
     agentEntries = agentEntries.filter((e) => !generalIds.has(e.id))
 
-    // Build sections within token budget
+    // Build sections with proportional budget, redistributing unused portions
+    const allocation = DEFAULT_BUDGET_ALLOCATION
     const sections: string[] = []
-    let tokenBudget = maxTokens
-    const injectedIds: string[] = []
+    const allIncludedIds: string[] = []
+
+    // Only reserve agent budget when agent entries exist
+    const agentBudget = agentEntries.length > 0 ? Math.floor(maxTokens * allocation.agent) : 0
+    const generalPool = maxTokens - agentBudget
 
     // Agent-specific section first (highest priority)
     if (agentEntries.length > 0) {
-      const agentSection = buildSection("Agent-Specific Knowledge", agentEntries, tokenBudget)
+      const agentSection = buildSection("Agent-Specific Knowledge", agentEntries, agentBudget)
       if (agentSection.text) {
         sections.push(agentSection.text)
-        tokenBudget -= agentSection.tokens
-        injectedIds.push(...agentSection.includedIds)
+        allIncludedIds.push(...agentSection.includedIds)
       }
     }
 
@@ -78,27 +89,51 @@ export namespace MemoryInjector {
     const feedbackEntries = entries.filter((e) => e.type === "feedback")
     const referenceEntries = entries.filter((e) => e.type === "reference")
 
-    for (const [title, group] of [
-      ["Project Knowledge", projectEntries],
-      ["User Preferences", userEntries],
-      ["Feedback & Patterns", feedbackEntries],
-      ["Reference", referenceEntries],
-    ] as const) {
-      if (group.length === 0 || tokenBudget <= 0) continue
-      const section = buildSection(title, group, tokenBudget)
-      if (section.text) {
-        sections.push(section.text)
-        tokenBudget -= section.tokens
-        injectedIds.push(...section.includedIds)
+    // Compute active sections and redistribute budget proportionally
+    const generalSections = [
+      ["Project Knowledge", projectEntries, allocation.project] as const,
+      ["User Preferences", userEntries, allocation.user] as const,
+      ["Feedback & Patterns", feedbackEntries, allocation.feedback] as const,
+      ["Reference", referenceEntries, allocation.reference] as const,
+    ]
+    const activeSections = generalSections.filter(([, group]) => group.length > 0)
+    const activeWeight = activeSections.reduce((sum, [, , weight]) => sum + weight, 0)
+
+    // Pass 1: Build sections with initial proportional budgets
+    const sectionResults = activeSections.map(([title, group, weight]) => {
+      const budget = activeWeight > 0 ? Math.floor(generalPool * (weight / activeWeight)) : 0
+      return { title, group, weight, budget, result: buildSection(title, group, budget) }
+    })
+
+    // Pass 2: Redistribute budget from sections that couldn't fit any entries
+    const failedBudget = sectionResults
+      .filter((s) => !s.result.text)
+      .reduce((sum, s) => sum + s.budget, 0)
+
+    if (failedBudget > 0) {
+      const viableWeight = sectionResults
+        .filter((s) => s.result.text)
+        .reduce((sum, s) => sum + s.weight, 0)
+      for (const s of sectionResults) {
+        if (!s.result.text || viableWeight <= 0) continue
+        const extra = Math.floor(failedBudget * (s.weight / viableWeight))
+        s.result = buildSection(s.title, s.group, s.budget + extra)
+      }
+    }
+
+    for (const s of sectionResults) {
+      if (s.result.text) {
+        sections.push(s.result.text)
+        allIncludedIds.push(...s.result.includedIds)
       }
     }
 
     if (sections.length === 0) return undefined
 
     // Increment access counts only for entries actually injected (within token budget)
-    if (injectedIds.length > 0) {
+    if (allIncludedIds.length > 0) {
       try {
-        await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(injectedIds))
+        await MemoryStore.runPromise((svc) => svc.incrementAccessBatch(allIncludedIds))
       } catch {
         // Non-critical: access count tracking failure should not block injection
       }
