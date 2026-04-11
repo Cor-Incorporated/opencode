@@ -325,10 +325,9 @@ export namespace Instruction {
           }
 
           // Check path-scoped rules (glob-matched)
-          const s2 = yield* InstanceState.get(state)
-          if (s2.parsedRules) {
+          if (s.parsedRules) {
             const relativePath = path.relative(root, target)
-            for (const rule of s2.parsedRules) {
+            for (const rule of s.parsedRules) {
               if (!rule.globs) continue // unconditional rules are in systemPaths
               if (sys.has(rule.filepath) || already.has(rule.filepath)) continue
 
