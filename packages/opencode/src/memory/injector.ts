@@ -65,18 +65,14 @@ export namespace MemoryInjector {
     const generalIds = new Set(entries.map((e) => e.id))
     agentEntries = agentEntries.filter((e) => !generalIds.has(e.id))
 
-    // Build sections within token budget using proportional allocation
+    // Build sections with proportional budget, redistributing unused portions
     const allocation = DEFAULT_BUDGET_ALLOCATION
-    const agentBudget = Math.floor(maxTokens * allocation.agent)
-    const generalBudgets = {
-      "Project Knowledge": Math.floor(maxTokens * allocation.project),
-      "User Preferences": Math.floor(maxTokens * allocation.user),
-      "Feedback & Patterns": Math.floor(maxTokens * allocation.feedback),
-      "Reference": Math.floor(maxTokens * allocation.reference),
-    } as const
-
     const sections: string[] = []
     const allIncludedIds: string[] = []
+
+    // Only reserve agent budget when agent entries exist
+    const agentBudget = agentEntries.length > 0 ? Math.floor(maxTokens * allocation.agent) : 0
+    const generalPool = maxTokens - agentBudget
 
     // Agent-specific section first (highest priority)
     if (agentEntries.length > 0) {
@@ -93,14 +89,20 @@ export namespace MemoryInjector {
     const feedbackEntries = entries.filter((e) => e.type === "feedback")
     const referenceEntries = entries.filter((e) => e.type === "reference")
 
-    for (const [title, group] of [
-      ["Project Knowledge", projectEntries],
-      ["User Preferences", userEntries],
-      ["Feedback & Patterns", feedbackEntries],
-      ["Reference", referenceEntries],
-    ] as const) {
-      if (group.length === 0) continue
-      const section = buildSection(title, group, generalBudgets[title])
+    // Compute active sections and redistribute budget proportionally
+    const generalSections = [
+      ["Project Knowledge", projectEntries, allocation.project] as const,
+      ["User Preferences", userEntries, allocation.user] as const,
+      ["Feedback & Patterns", feedbackEntries, allocation.feedback] as const,
+      ["Reference", referenceEntries, allocation.reference] as const,
+    ]
+    const activeSections = generalSections.filter(([, group]) => group.length > 0)
+    const activeWeight = activeSections.reduce((sum, [, , weight]) => sum + weight, 0)
+
+    for (const [title, group, weight] of activeSections) {
+      // Scale each active section's budget proportionally to fill the general pool
+      const budget = activeWeight > 0 ? Math.floor(generalPool * (weight / activeWeight)) : 0
+      const section = buildSection(title, group, budget)
       if (section.text) {
         sections.push(section.text)
         allIncludedIds.push(...section.includedIds)
