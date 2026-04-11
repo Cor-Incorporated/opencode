@@ -260,7 +260,7 @@ export default async function guardrail(
             await ctx.seen("workflow.plan_approved", { sessionID: "plan_exit" })
           }
           const taskCount = num(data.active_task_count)
-          const hasDelegation = taskCount > 0 || Object.keys(data).filter((k) => typeof k === "string" && k.startsWith("delegation_")).some((k) => num(data[k]) > 0)
+          const hasDelegation = taskCount > 0 || Object.keys(data).filter((k) => k.startsWith("delegation_")).some((k) => num(data[k]) > 0)
           if (!hasDelegation) {
             out.output = (out.output || "") + "\n\n⚠️ [DELEGATION ADVISORY] Plan approved without delegation assignments.\n" +
               "ADR-004 rules: 2+ independent tasks → Agent Team (TeamCreate), " +
