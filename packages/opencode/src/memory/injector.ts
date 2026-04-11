@@ -99,13 +99,32 @@ export namespace MemoryInjector {
     const activeSections = generalSections.filter(([, group]) => group.length > 0)
     const activeWeight = activeSections.reduce((sum, [, , weight]) => sum + weight, 0)
 
-    for (const [title, group, weight] of activeSections) {
-      // Scale each active section's budget proportionally to fill the general pool
+    // Pass 1: Build sections with initial proportional budgets
+    const sectionResults = activeSections.map(([title, group, weight]) => {
       const budget = activeWeight > 0 ? Math.floor(generalPool * (weight / activeWeight)) : 0
-      const section = buildSection(title, group, budget)
-      if (section.text) {
-        sections.push(section.text)
-        allIncludedIds.push(...section.includedIds)
+      return { title, group, weight, budget, result: buildSection(title, group, budget) }
+    })
+
+    // Pass 2: Redistribute budget from sections that couldn't fit any entries
+    const failedBudget = sectionResults
+      .filter((s) => !s.result.text)
+      .reduce((sum, s) => sum + s.budget, 0)
+
+    if (failedBudget > 0) {
+      const viableWeight = sectionResults
+        .filter((s) => s.result.text)
+        .reduce((sum, s) => sum + s.weight, 0)
+      for (const s of sectionResults) {
+        if (!s.result.text || viableWeight <= 0) continue
+        const extra = Math.floor(failedBudget * (s.weight / viableWeight))
+        s.result = buildSection(s.title, s.group, s.budget + extra)
+      }
+    }
+
+    for (const s of sectionResults) {
+      if (s.result.text) {
+        sections.push(s.result.text)
+        allIncludedIds.push(...s.result.includedIds)
       }
     }
 

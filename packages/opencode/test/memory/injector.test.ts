@@ -333,7 +333,7 @@ describe("MemoryInjector.load", () => {
     })
   })
 
-  test("empty sections do not waste budget", async () => {
+  test("empty sections produce no output headers", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
@@ -352,6 +352,42 @@ describe("MemoryInjector.load", () => {
         expect(result).toContain("only-feedback")
         // Empty sections produce no header
         expect(result).not.toContain("## User Preferences")
+        expect(result).not.toContain("## Reference")
+      },
+    })
+  })
+
+  test("budget from empty sections is redistributed to active sections", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: { memory: { max_memory_tokens: 200 } } as any,
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ts = Date.now()
+        // Only seed "project" entries — user/feedback/reference are empty
+        Database.use((d) => {
+          for (let i = 0; i < 10; i++) {
+            seed(d, {
+              id: `redist-${i}-${ts}`,
+              projectPath: tmp.path,
+              topic: `redist-entry-${i}`,
+              type: "project",
+              content: `Redistributed budget content item ${i}`,
+            })
+          }
+        })
+
+        const result = await MemoryInjector.load()
+        expect(result).toBeDefined()
+        // With redistribution, project section gets the full general pool (no agent entries)
+        // so it should fit more than 1 entry even with a tight 200-token budget
+        const entryCount = (result!.match(/redist-entry-\d+/g) || []).length
+        expect(entryCount).toBeGreaterThan(1)
+        // Empty sections should not appear
+        expect(result).not.toContain("## User Preferences")
+        expect(result).not.toContain("## Feedback & Patterns")
         expect(result).not.toContain("## Reference")
       },
     })
