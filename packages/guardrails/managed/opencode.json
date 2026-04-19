@@ -1,0 +1,123 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": [
+    "zai",
+    "zai-coding-plan",
+    "openai",
+    "openrouter"
+  ],
+  "share": "disabled",
+  "server": {
+    "hostname": "127.0.0.1",
+    "mdns": false
+  },
+  "provider": {
+    "zai": {
+      "whitelist": [
+        "glm-5",
+        "glm-4.5",
+        "glm-4.5-air"
+      ]
+    },
+    "zai-coding-plan": {
+      "whitelist": [
+        "glm-4.5",
+        "glm-4.5-air",
+        "glm-4.5-flash",
+        "glm-4.5v",
+        "glm-4.6",
+        "glm-4.6v",
+        "glm-4.7",
+        "glm-4.7-flash",
+        "glm-4.7-flashx",
+        "glm-5",
+        "glm-5-turbo",
+        "glm-5.1"
+      ]
+    },
+    "openai": {
+      "whitelist": [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.2",
+        "gpt-5.2-codex",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "gpt-5.1-codex-max",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
+        "gpt-4.1"
+      ]
+    },
+    "openrouter": {
+      "whitelist": [
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-opus-4.5",
+        "anthropic/claude-opus-4.6",
+        "anthropic/claude-sonnet-4.5",
+        "anthropic/claude-sonnet-4.6",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-pro",
+        "minimax/minimax-m2.1",
+        "minimax/minimax-m2.5",
+        "moonshotai/kimi-k2.5",
+        "openai/gpt-5.2",
+        "openai/gpt-5.2-codex",
+        "openai/gpt-5.3-codex",
+        "openai/gpt-5.4",
+        "openai/gpt-5.4-mini",
+        "qwen/qwen3-coder"
+      ]
+    }
+  },
+  "permission": {
+    "edit": "ask",
+    "task": "ask",
+    "webfetch": "ask",
+    "external_directory": "ask",
+    "bash": {
+      "*": "ask",
+      "node *": "allow",
+      "npm *": "allow",
+      "npx *": "allow",
+      "bun *": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git branch*": "allow",
+      "git remote*": "allow",
+      "git stash*": "allow",
+      "gh *": "allow",
+      "ls *": "allow",
+      "pwd": "allow",
+      "which *": "allow",
+      "echo *": "allow",
+      "cat *": "ask",
+      "rm -rf *": "deny",
+      "rm -r *": "deny",
+      "sudo *": "deny",
+      "curl * | sh*": "deny",
+      "wget * | sh*": "deny"
+    },
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "*id_rsa*": "deny",
+      "*id_ed25519*": "deny",
+      "*.pem": "deny",
+      "*.key": "deny",
+      "*.p12": "deny",
+      "*.pfx": "deny",
+      "*.cer": "deny",
+      "*.crt": "deny",
+      "*.der": "deny",
+      "*.kdbx": "deny",
+      "*credentials*": "deny"
+    }
+  }
+}
