@@ -52,6 +52,36 @@ const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
+const macosEntitlements = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-executable-page-protection</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
+`
+
+const signMacosBinary = async (binaryPath: string) => {
+  if (process.platform !== "darwin") return
+
+  const entitlementsPath = path.join(dir, "dist", "bun-macos-entitlements.plist")
+  await Bun.write(entitlementsPath, macosEntitlements)
+  try {
+    await $`codesign --remove-signature ${binaryPath}`.quiet().nothrow()
+    await $`codesign --force --deep --sign - --entitlements ${entitlementsPath} ${binaryPath}`
+  } finally {
+    await fs.promises.rm(entitlementsPath, { force: true }).catch(() => {})
+  }
+}
 
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
@@ -221,6 +251,10 @@ for (const item of targets) {
       OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
     },
   })
+
+  if (item.os === "darwin") {
+    await signMacosBinary(`dist/${name}/bin/opencode`)
+  }
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {

@@ -405,6 +405,10 @@ function yard(dir: string) {
   return path.join(dir, ".opencode", "team")
 }
 
+function projectRoot(directory: string, worktree: string) {
+  return worktree && worktree !== "/" ? worktree : directory
+}
+
 function rootkeep(dir: string) {
   if (dir === ".opencode") {
     return [
@@ -961,18 +965,22 @@ export default async function team(input: {
   worktree: string
   directory: string
 }) {
-  void sweep(input.client, input.worktree)
+  const inputRoot = projectRoot(input.directory, input.worktree)
+  void sweep(input.client, inputRoot)
   const job = async (ctx: Ctx, run: Run, item: Step) => {
+    const runRoot = projectRoot(ctx.directory, ctx.worktree)
+    const repoRoot = ctx.worktree && ctx.worktree !== "/" ? ctx.worktree : undefined
     const push = write(item.prompt, item.write)
     const prompt = direct(item.prompt)
-    const box = push && item.worktree ? await yardadd(ctx.worktree, `${run.id}-${item.id}`) : ctx.directory
-    const kept = box !== ctx.directory ? await carry(ctx.worktree, ctx.directory, box) : []
+    const useWorktree = push && item.worktree && !!repoRoot
+    const box = useWorktree ? await yardadd(repoRoot, `${run.id}-${item.id}`) : ctx.directory
+    const kept = useWorktree && repoRoot ? await carry(repoRoot, ctx.directory, box) : []
 
     todo(run, item.id, {
       state: "running",
       dir: box,
     })
-    await save(ctx.worktree, run)
+    await save(runRoot, run)
 
     const made = await input.client.session.create({
       body: {
@@ -989,7 +997,7 @@ export default async function team(input: {
     todo(run, item.id, {
       session: made.data.id,
     })
-    await save(ctx.worktree, run)
+    await save(runRoot, run)
 
     await input.client.session.promptAsync({
       path: { id: made.data.id },
@@ -1028,8 +1036,8 @@ export default async function team(input: {
     let err = out.error
     // [Phase6] Classify failure stage for abort reason tracking
     let failure_stage: Step["failure_stage"] = undefined
-    if (!err && push && box !== ctx.directory) {
-      const merged = await merge(ctx.worktree, box, run.id, item.id, kept)
+    if (!err && useWorktree && repoRoot && box !== ctx.directory) {
+      const merged = await merge(repoRoot, box, run.id, item.id, kept)
       patchfile = merged.patch
       if (!merged.merged) {
         err = merged.error || "Failed to merge worktree patch"
@@ -1045,7 +1053,7 @@ export default async function team(input: {
       error: err,
       failure_stage: err ? failure_stage : undefined,
     })
-    await save(ctx.worktree, run)
+    await save(runRoot, run)
     if (err) throw new Error(err)
     return out.text
   }
@@ -1069,7 +1077,9 @@ export default async function team(input: {
       ),
     },
     async execute(args, ctx) {
-      await sweep(input.client, ctx.worktree)
+      const runRoot = projectRoot(ctx.directory, ctx.worktree)
+      const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
+      await sweep(input.client, runRoot)
       defs(args.tasks)
       if (args.tasks.length < 1) throw new Error("team requires at least one task")
       const req = {
@@ -1107,7 +1117,7 @@ export default async function team(input: {
             depends: item.depends ?? [],
             agent: item.agent || "",
             write: write(item.prompt, item.write),
-            worktree: item.worktree !== false,
+            worktree: canIsolate && item.worktree !== false,
             provider: pick.provider,
             model: pick.model,
             variant: pick.variant,
@@ -1120,7 +1130,7 @@ export default async function team(input: {
           }
         }),
       }
-      await save(ctx.worktree, run)
+      await save(runRoot, run)
 
       const done = new Set<string>()
       const list = run.tasks
@@ -1141,7 +1151,7 @@ export default async function team(input: {
 
           if (args.strategy === "wave" && ready.length) {
             ready.forEach((item) => todo(run, item.id, { state: "queued" }))
-            await save(ctx.worktree, run)
+            await save(runRoot, run)
             await Promise.all(ready.map((item) => launch(item)))
           } else {
             ready.slice(0, Math.max(args.limit - active.size, 0)).forEach((item) => {
@@ -1156,20 +1166,20 @@ export default async function team(input: {
           }
 
           if (done.size === list.length) break
-          await save(ctx.worktree, run)
+          await save(runRoot, run)
         }
       } catch (err) {
         const item = run.tasks.find((item) => item.state === "error")
           ?? run.tasks.find((item) => item.state === "running" || item.state === "queued")
         fail(run, err instanceof Error ? err.message : String(err), item?.id)
-        await save(ctx.worktree, run)
+        await save(runRoot, run)
         await stop(input.client, run)
         throw err
       }
 
       run.state = run.tasks.some((item) => item.state === "error") ? "error" : "done"
       run.updated_at = now()
-      await save(ctx.worktree, run)
+      await save(runRoot, run)
       need.set(ctx.sessionID, {
         done: true,
         reason: "team",
@@ -1191,9 +1201,13 @@ export default async function team(input: {
       notify: z.boolean().optional().default(true),
     },
     async execute(args, ctx) {
-      await sweep(input.client, ctx.worktree)
+      const runRoot = projectRoot(ctx.directory, ctx.worktree)
+      const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
+      const detachedAbort = new AbortController()
+      await sweep(input.client, runRoot)
       const req = {
         ...ctx,
+        abort: detachedAbort.signal,
         permission: await rules(input.client, ctx),
       }
       const step: Step = {
@@ -1203,7 +1217,7 @@ export default async function team(input: {
         depends: [],
         agent: args.agent || "",
         write: write(args.prompt, args.write),
-        worktree: args.worktree !== false,
+        worktree: canIsolate && args.worktree !== false,
         ...lane({
           id: slug(args.description || args.agent || "worker") || "worker",
           description: args.description || "background worker",
@@ -1228,7 +1242,7 @@ export default async function team(input: {
         updated_at: now(),
         tasks: [step],
       }
-      await save(ctx.worktree, run)
+      await save(runRoot, run)
       req.metadata({
         title: args.description || "background run",
         metadata: {
@@ -1240,7 +1254,7 @@ export default async function team(input: {
         .then(async () => {
           run.state = "done"
           run.updated_at = now()
-          await save(ctx.worktree, run)
+          await save(runRoot, run)
           if (!args.notify) return
           await input.client.session.prompt({
             path: { id: req.sessionID },
@@ -1261,7 +1275,7 @@ export default async function team(input: {
         .catch(async (err: Error) => {
           const item = run.tasks.find((item) => item.state === "error" || item.state === "running" || item.state === "queued") || run.tasks[0]
           fail(run, err.message || "Unknown error", item?.id)
-          await save(ctx.worktree, run)
+          await save(runRoot, run)
           if (!args.notify) return
           await input.client.session.prompt({
             path: { id: req.sessionID },
@@ -1292,9 +1306,10 @@ export default async function team(input: {
       run_id: z.string().optional(),
     },
     async execute(args, ctx) {
-      await sweep(input.client, ctx.worktree)
-      const list = args.run_id ? [live.get(args.run_id) ?? (await load(ctx.worktree, args.run_id))].filter(isRun) : await scan(ctx.worktree)
-      const settled = await Promise.all(list.map((item) => reconcile(input.client, ctx.worktree, item)))
+      const runRoot = projectRoot(ctx.directory, ctx.worktree)
+      await sweep(input.client, runRoot)
+      const list = args.run_id ? [live.get(args.run_id) ?? (await load(runRoot, args.run_id))].filter(isRun) : await scan(runRoot)
+      const settled = await Promise.all(list.map((item) => reconcile(input.client, runRoot, item)))
       if (!settled.length) return "No team runs found."
       return settled.map((item) => note(item)).join("\n\n")
     },
@@ -1320,7 +1335,7 @@ export default async function team(input: {
         parts: Note[]
       },
     ) => {
-      void sweep(input.client, input.worktree)
+      void sweep(input.client, inputRoot)
       if (out.message.role !== "user") return
       if (kids.has(item.sessionID)) return
       if (item.agent && /(review|technical-writer|doc-updater)/i.test(item.agent)) return
@@ -1361,7 +1376,7 @@ export default async function team(input: {
         args: Record<string, unknown>
       },
     ) => {
-      void sweep(input.client, input.worktree)
+      void sweep(input.client, inputRoot)
       const gate = need.get(item.sessionID)
       if (!gate || gate.done) return
       if (item.tool === "team") return
@@ -1382,7 +1397,7 @@ export default async function team(input: {
         metadata: Record<string, unknown>
       },
     ) => {
-      void sweep(input.client, input.worktree)
+      void sweep(input.client, inputRoot)
       if (item.tool !== "team" && item.tool !== "background") return
       need.set(item.sessionID, {
         done: true,
@@ -1399,7 +1414,7 @@ export default async function team(input: {
         error: unknown
       },
     ) => {
-      void sweep(input.client, input.worktree)
+      void sweep(input.client, inputRoot)
       if (item.tool !== "team" && item.tool !== "background") return
       need.set(item.sessionID, {
         done: true,
@@ -1413,7 +1428,7 @@ export default async function team(input: {
         system: string[]
       },
     ) => {
-      void sweep(input.client, input.worktree)
+      void sweep(input.client, inputRoot)
       out.system.unshift(
         "When the user asks for a broad or multi-file implementation, decompose with the team tool before mutating files. Background work belongs in background; large implementation turns are hook-enforced.",
       )
