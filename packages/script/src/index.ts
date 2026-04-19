@@ -23,11 +23,21 @@ const env = {
   OPENCODE_VERSION: process.env["OPENCODE_VERSION"],
   OPENCODE_RELEASE: process.env["OPENCODE_RELEASE"],
 }
+const sanitizeChannel = (value: string) => {
+  const channel = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+
+  return channel || "dev"
+}
 const CHANNEL = await (async () => {
-  if (env.OPENCODE_CHANNEL) return env.OPENCODE_CHANNEL
+  if (env.OPENCODE_CHANNEL) return sanitizeChannel(env.OPENCODE_CHANNEL)
   if (env.OPENCODE_BUMP) return "latest"
   if (env.OPENCODE_VERSION && !env.OPENCODE_VERSION.startsWith("0.0.0-")) return "latest"
-  return await $`git branch --show-current`.text().then((x) => x.trim())
+  return await $`git branch --show-current`.text().then((x) => sanitizeChannel(x))
 })()
 const IS_PREVIEW = CHANNEL !== "latest"
 
