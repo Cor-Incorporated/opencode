@@ -3,6 +3,7 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
+import { pathToFileURL } from "url"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { Bus } from "../../src/bus"
 import { Command } from "../../src/command"
@@ -58,6 +59,8 @@ const ref = {
   providerID: ProviderID.make("test"),
   modelID: ModelID.make("test-model"),
 }
+
+const toolErrorPlugin = path.resolve(import.meta.dir, "../fixture/tool-error-plugin.ts")
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -509,6 +512,64 @@ it.live("glob tool keeps instance context during prompt runs", () =>
       }),
     { git: true, config: providerCfg },
   ),
+)
+
+it.live(
+  "tool.execute.error hook fires when inline tool execution fails",
+  () =>
+    provideTmpdirServer(
+      ({ dir, llm }) =>
+        Effect.gen(function* () {
+          const plugin = yield* Plugin.Service
+          const hooks = yield* plugin.list()
+          expect(hooks.some((hook) => typeof hook["tool.execute.error"] === "function")).toBe(true)
+
+          yield* plugin.trigger(
+            "tool.execute.error",
+            { tool: "manual", sessionID: "session", callID: "call", args: {} },
+            { error: new Error("manual failed") },
+          )
+          const warmup = path.join(dir, "tool-error.json")
+          const warmupPayload = yield* Effect.promise(() =>
+            Bun.file(warmup).json() as Promise<{ tool: string; message: string }>,
+          )
+          expect(warmupPayload.tool).toBe("manual")
+          expect(warmupPayload.message).toContain("manual failed")
+          yield* Effect.promise(() => Bun.file(warmup).delete())
+
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const chat = yield* sessions.create({
+            title: "Inline tool error hook",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          })
+          const missing = path.join(dir, "missing.txt")
+
+          yield* prompt.prompt({
+            sessionID: chat.id,
+            agent: "build",
+            noReply: true,
+            parts: [{ type: "text", text: "find text files" }],
+          })
+          yield* llm.tool("read", { filePath: missing })
+
+          yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.ignore)
+
+          const payload = yield* Effect.promise(() =>
+            Bun.file(path.join(dir, "tool-error.json")).json() as Promise<{ tool: string; message: string }>,
+          )
+          expect(payload.tool).toBe("read")
+          expect(payload.message).toContain("missing.txt")
+        }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          plugin: [pathToFileURL(toolErrorPlugin).href],
+        }),
+      },
+    ),
+  10_000,
 )
 
 it.live("loop continues when finish is stop but assistant has tool parts", () =>

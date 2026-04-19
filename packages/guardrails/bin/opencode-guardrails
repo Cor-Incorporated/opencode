@@ -1,0 +1,54 @@
+#!/usr/bin/env node
+
+import { spawnSync } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { parseEnv } from "node:util"
+
+function fail(msg) {
+  console.error(msg)
+  process.exit(1)
+}
+
+function bin() {
+  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "opencode", "package.json")
+  const root = path.dirname(file)
+  const json = JSON.parse(fs.readFileSync(file, "utf8"))
+  const rel = typeof json.bin === "string" ? json.bin : json.bin?.opencode
+  if (!rel) fail("Failed to resolve opencode bin from dependency")
+  return path.resolve(root, rel)
+}
+
+function env(dir) {
+  let cur = dir
+  for (;;) {
+    const file = path.join(cur, ".env")
+    if (fs.existsSync(file)) return file
+    const parent = path.dirname(cur)
+    if (parent === cur) return
+    cur = parent
+  }
+}
+
+function load(dir) {
+  const file = env(dir)
+  if (!file) return
+  const data = parseEnv(fs.readFileSync(file, "utf8").replace(/^\s*export\s+/gm, ""))
+  for (const [key, val] of Object.entries(data)) {
+    process.env[key] ??= val
+  }
+}
+
+const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "profile")
+load(process.cwd())
+process.env.OPENCODE_CONFIG_DIR ||= dir
+process.env.OPENCODE_EXPERIMENTAL_PLAN_MODE ||= "true"
+
+const out = spawnSync(bin(), process.argv.slice(2), {
+  stdio: "inherit",
+  env: process.env,
+})
+
+if (out.error) fail(out.error.message)
+process.exit(typeof out.status === "number" ? out.status : 1)

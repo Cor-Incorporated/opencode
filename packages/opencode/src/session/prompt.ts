@@ -411,26 +411,44 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             return run.promise(
               Effect.gen(function* () {
                 const ctx = context(args, options)
-                yield* plugin.trigger(
-                  "tool.execute.before",
-                  { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-                  { args },
+                const output = yield* Effect.gen(function* () {
+                  yield* plugin.trigger(
+                    "tool.execute.before",
+                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+                    { args },
+                  )
+                  const result = yield* item.execute(args, ctx)
+                  const output: Parameters<typeof input.processor.completeToolCall>[1] = {
+                    ...result,
+                    attachments: result.attachments?.map((attachment) => ({
+                      ...attachment,
+                      id: PartID.ascending(),
+                      sessionID: ctx.sessionID,
+                      messageID: input.processor.message.id,
+                    })),
+                  }
+                  yield* plugin.trigger(
+                    "tool.execute.after",
+                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                    output,
+                  )
+                  return output
+                }).pipe(
+                  Effect.catchCause((cause) => {
+                    const error = Cause.squash(cause)
+                    return plugin
+                      .trigger(
+                        "tool.execute.error",
+                        { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                        { error },
+                      )
+                      .pipe(
+                        Effect.catch(() => Effect.void),
+                        Effect.andThen(Effect.failCause(cause)),
+                      )
+                  }),
                 )
-                const result = yield* item.execute(args, ctx)
-                const output = {
-                  ...result,
-                  attachments: result.attachments?.map((attachment) => ({
-                    ...attachment,
-                    id: PartID.ascending(),
-                    sessionID: ctx.sessionID,
-                    messageID: input.processor.message.id,
-                  })),
-                }
-                yield* plugin.trigger(
-                  "tool.execute.after",
-                  { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-                  output,
-                )
+                if (!output) return yield* Effect.die(new Error("tool output missing after execution"))
                 if (options.abortSignal?.aborted) {
                   yield* input.processor.completeToolCall(options.toolCallId, output)
                 }
@@ -452,20 +470,36 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           run.promise(
             Effect.gen(function* () {
               const ctx = context(args, opts)
-              yield* plugin.trigger(
-                "tool.execute.before",
-                { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
-                { args },
+              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
+                yield* plugin.trigger(
+                  "tool.execute.before",
+                  { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
+                  { args },
+                )
+                yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+                const result = yield* Effect.promise(() => execute(args, opts))
+                yield* plugin.trigger(
+                  "tool.execute.after",
+                  { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
+                  result,
+                )
+                return result
+              }).pipe(
+                Effect.catchCause((cause) => {
+                  const error = Cause.squash(cause)
+                  return plugin
+                    .trigger(
+                      "tool.execute.error",
+                      { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
+                      { error },
+                    )
+                    .pipe(
+                      Effect.catch(() => Effect.void),
+                      Effect.andThen(Effect.failCause(cause)),
+                    )
+                }),
               )
-              yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
-                execute(args, opts),
-              )
-              yield* plugin.trigger(
-                "tool.execute.after",
-                { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
-                result,
-              )
+              if (!result) return yield* Effect.die(new Error("mcp tool result missing after execution"))
 
               const textParts: string[] = []
               const attachments: Omit<MessageV2.FilePart, "id" | "sessionID" | "messageID">[] = []

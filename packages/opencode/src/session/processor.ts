@@ -197,6 +197,18 @@ export const layer: Layer.Layer<
       const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
+        yield* plugin
+          .trigger(
+            "tool.execute.error",
+            {
+              tool: match.part.tool,
+              sessionID: match.part.sessionID,
+              callID: toolCallID,
+              args: match.part.state.input,
+            },
+            { error },
+          )
+          .pipe(Effect.catch(() => Effect.void))
         yield* session.updatePart({
           ...match.part,
           state: {
