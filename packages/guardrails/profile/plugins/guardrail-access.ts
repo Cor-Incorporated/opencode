@@ -29,9 +29,14 @@ export function createAccessHandlers(ctx: GuardrailContext) {
       const cmd = typeof out.args?.command === "string" ? out.args.command : ""
       const file = cmd.replaceAll("\\", "/")
       if (!cmd) return
-      if (has(file, sec) || file.includes(".opencode/guardrails/")) {
+      if (has(file, sec)) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "shell access to protected files" })
         throw new Error(text("shell access to protected files"))
+      }
+      const touchesGuardrailRuntime = file.includes(".opencode/guardrails/")
+      if (touchesGuardrailRuntime && bash(cmd)) {
+        await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
+        throw new Error(text("protected runtime or config mutation"))
       }
       if (/\bdocker\s+build\b/i.test(cmd)) {
         const secretPatterns = [
@@ -59,7 +64,7 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         }
       }
       if (!bash(cmd)) return
-      if (!cfg.some((rule) => rule.test(file)) && !file.includes(".opencode/guardrails/")) return
+      if (!cfg.some((rule) => rule.test(file)) && !touchesGuardrailRuntime) return
       await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
       throw new Error(text("protected runtime or config mutation"))
     }

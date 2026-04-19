@@ -3,6 +3,7 @@ import { UI } from "@/cli/ui"
 import { tui } from "./app"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { TuiConfig } from "@/cli/cmd/tui/config/tui"
+import { canonicalizeWorkingDirectory } from "../../../util/cwd"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -51,8 +52,7 @@ export const AttachCommand = cmd({
       const directory = (() => {
         if (!args.dir) return undefined
         try {
-          process.chdir(args.dir)
-          return process.cwd()
+          return canonicalizeWorkingDirectory(args.dir)
         } catch {
           // If the directory doesn't exist locally (remote attach), pass it through.
           return args.dir
