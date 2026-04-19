@@ -15,19 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "npx playwright*": allow
-    "bunx playwright*": allow
-    "npm test*": allow
-    "npm run*": allow
-    "bun test*": allow
-    "bun run*": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 End-to-end testing specialist using Playwright for browser automation.

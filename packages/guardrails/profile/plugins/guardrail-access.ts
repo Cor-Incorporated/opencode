@@ -25,17 +25,6 @@ export function createAccessHandlers(ctx: GuardrailContext) {
       }
     }
 
-    if (MUTATING_TOOLS.has(item.tool) && file && ctx.code(file)) {
-      const count = await ctx.budget()
-      if (count >= 4) {
-        const budgetData = await stash(ctx.state)
-        const readFiles = list(budgetData.read_files).slice(-5).join(", ")
-        const err = `context budget exceeded after ${count} source reads (recent: ${readFiles || "unknown"}). Recovery options:\n(1) call \`team\` tool to delegate edit to isolated worker\n(2) use \`background\` tool for side work\n(3) narrow edit scope to a specific function/section rather than whole file\n(4) start a new session and continue from where you left off`
-        await ctx.mark({ last_block: item.tool, last_file: rel(ctx.input.worktree, file), last_reason: err })
-        throw new Error(text(err))
-      }
-    }
-
     if (item.tool === "bash") {
       const cmd = typeof out.args?.command === "string" ? out.args.command : ""
       const file = cmd.replaceAll("\\", "/")
@@ -289,4 +278,3 @@ export function createAccessHandlers(ctx: GuardrailContext) {
 
   return { toolBeforeAccess, toolAfterAccess }
 }
-

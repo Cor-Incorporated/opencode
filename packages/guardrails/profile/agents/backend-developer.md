@@ -15,23 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "node *": allow
-    "bun *": allow
-    "npm test*": allow
-    "npm run*": allow
-    "npm install*": allow
-    "go build*": allow
-    "go test*": allow
-    "go vet*": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
-    "curl *": ask
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
     "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 Backend development specialist for server-side applications, APIs, and microservices.

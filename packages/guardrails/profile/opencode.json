@@ -113,7 +113,7 @@
       "git push --force*": "deny",
       "git push * --force*": "deny",
       "git reset --hard*": "deny",
-      "gh pr merge *": "deny",
+      "gh pr merge *": "ask",
       "curl * | sh*": "deny",
       "wget * | sh*": "deny"
     },

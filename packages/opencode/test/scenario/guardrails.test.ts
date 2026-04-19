@@ -254,6 +254,8 @@ Use the project-local command.
 
         const map = Object.fromEntries(cmds.map((item) => [item.name, item]))
         expect(map.implement?.agent).toBe("implement")
+        expect(map.init?.agent).toBe("technical-writer")
+        expect(map.init?.subtask).toBe(false)
         expect(map.review?.agent).toBe("review")
         expect(map.review?.subtask).toBe(true)
         expect(map.ship?.agent).toBe("ship")
@@ -618,7 +620,11 @@ test("guardrail profile plugin enforces version baselines and context budget", a
               },
             },
           ),
-        ).rejects.toThrow("context budget exceeded")
+        ).resolves.toMatchObject({
+          args: {
+            filePath: path.join(tmp.path, "src", "e.ts"),
+          },
+        })
       },
     })
   })
@@ -1749,6 +1755,53 @@ test("team plugin allows review agent to skip parallel enforcement", async () =>
   })
 })
 
+test("team plugin allows technical-writer agent to skip parallel enforcement for init-style prompts", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const text =
+          "Create or update AGENTS.md for this repository.\n\n" +
+          "Read the highest-value sources first:\n" +
+          "- README files and root manifests\n" +
+          "- build, test, lint, formatter, and CI config\n" +
+          "- existing instruction files like AGENTS.md and CLAUDE.md\n" +
+          "- repo-local OpenCode config\n\n" +
+          "Extract exact commands, package boundaries, entrypoints, testing quirks, and repo-specific constraints. " +
+          "Keep the file concise and verified."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_team_init", agent: "technical-writer" },
+          {
+            message: { id: "msg_init", sessionID: "session_team_init", role: "user" },
+            parts,
+          },
+        )
+
+        const parallelInjected = parts.find(
+          (item) => item.type === "text" && typeof item.text === "string" && item.text.includes("Parallel implementation policy is active"),
+        )
+        expect(parallelInjected).toBeUndefined()
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_init", callID: "call_init_edit" },
+            { args: { filePath: path.join(tmp.path, "AGENTS.md"), oldString: "old", newString: "new" } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
 test("team plugin resets need gate after team tool completes", async () => {
   await withProfile(async () => {
     await using tmp = await tmpdir({ git: true })
@@ -1799,6 +1852,114 @@ test("team plugin resets need gate after team tool completes", async () => {
           Plugin.trigger(
             "tool.execute.before",
             { tool: "edit", sessionID: "session_team_reset", callID: "call_edit_post" },
+            { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("team plugin resets need gate after team tool fails", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const text =
+          "Implement the following across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Add new types\n" +
+          "- 2. Update imports\n" +
+          "- 3. Add tests\n" +
+          "- 4. Fix consumers\n" +
+          "Large multi-file implementation."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_team_fail", agent: "implement" },
+          {
+            message: { id: "msg_fail", sessionID: "session_team_fail", role: "user" },
+            parts,
+          },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_fail", callID: "call_edit_pre_fail" },
+            { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).rejects.toThrow("Parallel implementation is enforced")
+
+        await Plugin.trigger(
+          "tool.execute.error",
+          { tool: "team", sessionID: "session_team_fail", callID: "call_team_fail", args: {} },
+          { error: new Error("team failed") },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_team_fail", callID: "call_edit_post_fail" },
+            { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).resolves.toBeDefined()
+      },
+    })
+  })
+})
+
+test("team plugin resets need gate after background tool fails", async () => {
+  await withProfile(async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const text =
+          "Implement the following across packages/a, packages/b, and packages/c:\n" +
+          "- 1. Add new types\n" +
+          "- 2. Update imports\n" +
+          "- 3. Add tests\n" +
+          "- 4. Fix consumers\n" +
+          "Large multi-file implementation."
+
+        const parts: { id?: string; sessionID?: string; messageID?: string; type?: string; text?: string }[] = [
+          { type: "text", text },
+        ]
+
+        await Plugin.trigger(
+          "chat.message",
+          { sessionID: "session_background_fail", agent: "implement" },
+          {
+            message: { id: "msg_background_fail", sessionID: "session_background_fail", role: "user" },
+            parts,
+          },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_background_fail", callID: "call_edit_pre_background_fail" },
+            { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
+          ),
+        ).rejects.toThrow("Parallel implementation is enforced")
+
+        await Plugin.trigger(
+          "tool.execute.error",
+          { tool: "background", sessionID: "session_background_fail", callID: "call_background_fail", args: {} },
+          { error: new Error("background failed") },
+        )
+
+        await expect(
+          Plugin.trigger(
+            "tool.execute.before",
+            { tool: "edit", sessionID: "session_background_fail", callID: "call_edit_post_background_fail" },
             { args: { filePath: path.join(tmp.path, "src", "a.ts"), oldString: "a", newString: "b" } },
           ),
         ).resolves.toBeDefined()

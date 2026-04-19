@@ -225,7 +225,7 @@ const cfg = {
   },
 }
 
-function providerCfg(url: string) {
+function providerCfg(url: string): Partial<Config.Info> {
   return {
     ...cfg,
     provider: {
@@ -432,6 +432,39 @@ it.live("loop calls LLM and returns assistant message", () =>
       expect(yield* llm.hits).toHaveLength(1)
     }),
     { git: true, config: providerCfg },
+  ),
+)
+
+it.live("prompt merges tool restrictions with existing session permissions", () =>
+  provideTmpdirInstance(
+    Effect.fnUntraced(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Permission merge",
+        permission: [{ permission: "bash", pattern: "git ls-files", action: "allow" }],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "general",
+        noReply: true,
+        parts: [{ type: "text", text: "inspect repo" }],
+        tools: {
+          edit: false,
+          write: false,
+          apply_patch: false,
+          task: false,
+          todowrite: false,
+        },
+      })
+
+      const updated = yield* sessions.get(chat.id)
+      expect(Permission.evaluate("bash", "git ls-files", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("edit", "README.md", updated.permission ?? []).action).toBe("deny")
+      expect(Permission.evaluate("task", "*", updated.permission ?? []).action).toBe("deny")
+    }),
+    { git: true, config: providerCfg("http://localhost:1/v1") },
   ),
 )
 

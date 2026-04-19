@@ -15,15 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
-    "curl *": ask
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
     "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 API design specialist for REST, GraphQL, and OpenAPI specification creation.

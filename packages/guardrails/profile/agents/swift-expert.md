@@ -15,19 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "swift build*": allow
-    "swift test*": allow
-    "swift package*": allow
-    "xcodebuild -showBuildSettings*": allow
-    "xcodebuild -list*": allow
-    "xcrun *": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 Swift development specialist for iOS/macOS apps, SwiftUI, and async/await concurrency.

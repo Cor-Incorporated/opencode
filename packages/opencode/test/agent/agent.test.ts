@@ -1,4 +1,5 @@
 import { afterEach, test, expect } from "bun:test"
+import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
@@ -239,6 +240,162 @@ test("global permission config applies to all agents", async () => {
       const build = await Agent.get("build")
       expect(build).toBeDefined()
       expect(evalPerm(build, "bash")).toBe("deny")
+    },
+  })
+})
+
+test("planner agent auto-allows read-only gh queries while blocking mutating commands", async () => {
+  const plannerAgent = `---
+description: Bounded planning agent. Read-only exploration with plan file output.
+mode: primary
+permission:
+  plan_enter: allow
+  plan_exit: allow
+  question: allow
+  edit:
+    "*": deny
+  write:
+    "*": deny
+  bash:
+    "*": allow
+    "git push*": deny
+    "git commit*": deny
+    "git merge*": deny
+    "git rebase*": deny
+    "gh pr create*": deny
+    "gh pr merge*": deny
+    "gh issue close*": deny
+---
+
+You are a planning agent.
+`
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await fs.mkdir(path.join(dir, ".opencode", "agent"), { recursive: true })
+      await fs.writeFile(path.join(dir, ".opencode", "agent", "planner.md"), plannerAgent)
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const planner = await Agent.get("planner")
+      expect(planner).toBeDefined()
+      expect(
+        Permission.evaluate(
+          "bash",
+          "gh pr list --repo Cor-Incorporated/insite-ai --state open --json number,title",
+          planner!.permission,
+        ).action,
+      ).toBe("allow")
+      expect(
+        Permission.evaluate(
+          "bash",
+          "gh issue list --repo Cor-Incorporated/insite-ai --assignee terisuke --state open",
+          planner!.permission,
+        ).action,
+      ).toBe("allow")
+      expect(Permission.evaluate("bash", "gh pr merge 72 --merge", planner!.permission).action).toBe("deny")
+      expect(Permission.evaluate("bash", "git commit -m \"test\"", planner!.permission).action).toBe("deny")
+    },
+  })
+})
+
+test("write-capable team subagents use minimal-deny bash baseline", async () => {
+  const sourceDir = path.resolve(import.meta.dir, "../../../../packages/guardrails/profile/agents")
+  const targetAgents = [
+    "api-designer",
+    "backend-developer",
+    "build-error-resolver",
+    "deployment-engineer",
+    "doc-updater",
+    "e2e-runner",
+    "golang-pro",
+    "incident-responder",
+    "mobile-developer",
+    "python-pro",
+    "refactor-cleaner",
+    "sql-pro",
+    "swift-expert",
+    "technical-writer",
+    "terraform-engineer",
+    "typescript-pro",
+    "websocket-engineer",
+  ]
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const agentDir = path.join(dir, ".opencode", "agent")
+      await fs.mkdir(agentDir, { recursive: true })
+      await Promise.all(
+        targetAgents.map(async (name) => {
+          const content = await fs.readFile(path.join(sourceDir, `${name}.md`), "utf8")
+          await fs.writeFile(path.join(agentDir, `${name}.md`), content)
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      for (const name of targetAgents) {
+        const agent = await Agent.get(name)
+        expect(agent).toBeDefined()
+        expect(
+          Permission.evaluate(
+            "bash",
+            "gh pr list --repo Cor-Incorporated/insite-ai --state open --json number,title",
+            agent!.permission,
+          ).action,
+        ).toBe("allow")
+        expect(Permission.evaluate("bash", "git reset --hard", agent!.permission).action).toBe("deny")
+        expect(Permission.evaluate("bash", "rm -rf /tmp/foo", agent!.permission).action).toBe("deny")
+      }
+
+      const deployment = await Agent.get("deployment-engineer")
+      expect(Permission.evaluate("bash", "docker push app:latest", deployment!.permission).action).toBe("deny")
+      expect(Permission.evaluate("bash", "kubectl apply -f deploy.yaml", deployment!.permission).action).toBe(
+        "deny",
+      )
+
+      const terraform = await Agent.get("terraform-engineer")
+      expect(Permission.evaluate("bash", "terraform apply -auto-approve", terraform!.permission).action).toBe(
+        "deny",
+      )
+
+      const sql = await Agent.get("sql-pro")
+      expect(Permission.evaluate("bash", "psql -c 'DROP TABLE users'", sql!.permission).action).toBe("deny")
+    },
+  })
+})
+
+test("implement agent uses minimal-deny bash baseline for team and background delegation", async () => {
+  const source = path.resolve(import.meta.dir, "../../../../packages/guardrails/profile/agents/implement.md")
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const agentDir = path.join(dir, ".opencode", "agent")
+      await fs.mkdir(agentDir, { recursive: true })
+      const content = await fs.readFile(source, "utf8")
+      await fs.writeFile(path.join(agentDir, "implement.md"), content)
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const agent = await Agent.get("implement")
+      expect(agent).toBeDefined()
+      expect(Permission.evaluate("bash", "pnpm --filter management lint", agent!.permission).action).toBe("allow")
+      expect(
+        Permission.evaluate(
+          "bash",
+          "gh api repos/Cor-Incorporated/insite-ai/pulls/72 --jq '.state'",
+          agent!.permission,
+        ).action,
+      ).toBe("allow")
+      expect(Permission.evaluate("bash", "gh pr merge 72 --merge", agent!.permission).action).toBe("deny")
+      expect(Permission.evaluate("bash", "git reset --hard HEAD", agent!.permission).action).toBe("deny")
     },
   })
 })

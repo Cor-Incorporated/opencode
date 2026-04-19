@@ -5,7 +5,7 @@ permission:
   question: allow
   plan_enter: allow
   bash:
-    "*": ask
+    "*": allow
     "git checkout -- *": deny
     "git merge *": deny
     "git push --force*": deny

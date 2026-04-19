@@ -23,21 +23,19 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "terraform plan*": allow
-    "terraform validate*": allow
-    "terraform fmt*": allow
-    "terraform init*": allow
-    "terraform state list*": allow
-    "terraform state show*": allow
-    "terraform output*": allow
-    "terraform providers*": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
+    "terraform apply*": deny
 ---
 
 Terraform infrastructure-as-code specialist for module design, state management, and multi-cloud provisioning.

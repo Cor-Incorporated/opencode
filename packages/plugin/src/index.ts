@@ -245,6 +245,10 @@ export interface Hooks {
       metadata: any
     },
   ) => Promise<void>
+  "tool.execute.error"?: (
+    input: { tool: string; sessionID: string; callID: string; args: any },
+    output: { error: unknown },
+  ) => Promise<void>
   "experimental.chat.messages.transform"?: (
     input: {},
     output: {

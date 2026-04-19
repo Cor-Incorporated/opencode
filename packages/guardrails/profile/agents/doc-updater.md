@@ -15,14 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "git show*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 Documentation and codemap maintenance specialist.

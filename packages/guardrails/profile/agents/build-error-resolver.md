@@ -15,18 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "bun *": allow
-    "npm run*": allow
-    "npx tsc*": allow
-    "npx tsgo*": allow
-    "node *": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 Build and TypeScript error resolution specialist for getting builds green quickly.

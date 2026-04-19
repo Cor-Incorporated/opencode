@@ -11,17 +11,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "tsc *": allow
-    "bun *": allow
-    "node *": allow
-    "npm *": allow
-    "npx *": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 TypeScript development specialist for advanced type patterns and build optimization.

@@ -436,26 +436,39 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     }
                   }
 
-                  yield* plugin.trigger(
-                    "tool.execute.before",
-                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-                    { args },
-                  )
-                  const result = yield* Effect.promise(() => item.execute(args, ctx))
-                  const output = {
-                    ...result,
-                    attachments: result.attachments?.map((attachment) => ({
-                      ...attachment,
-                      id: PartID.ascending(),
-                      sessionID: ctx.sessionID,
-                      messageID: input.processor.message.id,
-                    })),
+                  let output: Parameters<typeof input.processor.completeToolCall>[1] | undefined
+                  try {
+                    yield* plugin.trigger(
+                      "tool.execute.before",
+                      { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+                      { args },
+                    )
+                    const result = yield* Effect.promise(() => item.execute(args, ctx))
+                    output = {
+                      ...result,
+                      attachments: result.attachments?.map((attachment) => ({
+                        ...attachment,
+                        id: PartID.ascending(),
+                        sessionID: ctx.sessionID,
+                        messageID: input.processor.message.id,
+                      })),
+                    }
+                    yield* plugin.trigger(
+                      "tool.execute.after",
+                      { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                      output,
+                    )
+                  } catch (error) {
+                    yield* plugin
+                      .trigger(
+                        "tool.execute.error",
+                        { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                        { error },
+                      )
+                      .pipe(Effect.catch(() => Effect.void))
+                    return yield* Effect.die(error)
                   }
-                  yield* plugin.trigger(
-                    "tool.execute.after",
-                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-                    output,
-                  )
+                  if (!output) return yield* Effect.die(new Error("tool output missing after execution"))
 
                   // PostToolUse hooks
                   const postHookResult = yield* Effect.promise(() =>
@@ -529,20 +542,31 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   }
                 }
 
-                yield* plugin.trigger(
-                  "tool.execute.before",
-                  { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
-                  { args },
-                )
-                yield* Effect.promise(() => ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] }))
-                const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
-                  execute(args, opts),
-                )
-                yield* plugin.trigger(
-                  "tool.execute.after",
-                  { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
-                  result,
-                )
+                let result: Awaited<ReturnType<NonNullable<typeof execute>>> | undefined
+                try {
+                  yield* plugin.trigger(
+                    "tool.execute.before",
+                    { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
+                    { args },
+                  )
+                  yield* Effect.promise(() => ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] }))
+                  result = yield* Effect.promise(() => execute(args, opts))
+                  yield* plugin.trigger(
+                    "tool.execute.after",
+                    { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
+                    result,
+                  )
+                } catch (error) {
+                  yield* plugin
+                    .trigger(
+                      "tool.execute.error",
+                      { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
+                      { error },
+                    )
+                    .pipe(Effect.catch(() => Effect.void))
+                  return yield* Effect.die(error)
+                }
+                if (!result) return yield* Effect.die(new Error("mcp tool result missing after execution"))
 
                 // PostToolUse hooks
                 const mcpPostResult = yield* Effect.promise(() =>
@@ -1391,8 +1415,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
           }
           if (permissions.length > 0) {
-            session.permission = permissions
-            yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+            const next = Permission.merge(session.permission ?? [], permissions)
+            session.permission = next
+            yield* sessions.setPermission({ sessionID: session.id, permission: next })
           }
 
           // SessionStart hooks
@@ -1775,9 +1800,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           messageID: input.messageID,
           model: userModel,
           agent: userAgent,
+          tools: input.command === Command.Default.INIT ? { task: false } : undefined,
           parts,
           variant: input.variant,
         })
+        if (input.command === Command.Default.INIT) {
+          const session = yield* sessions.get(input.sessionID)
+          const agentsPath = path.join(session.directory, "AGENTS.md")
+          const agentsExists = yield* Effect.promise(() => Bun.file(agentsPath).exists())
+          if (!agentsExists) {
+            const error = new NamedError.Unknown({
+              message: `Init command completed without creating ${agentsPath}.`,
+            })
+            yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+            throw error
+          }
+        }
         yield* bus.publish(Command.Event.Executed, {
           name: input.command,
           sessionID: input.sessionID,

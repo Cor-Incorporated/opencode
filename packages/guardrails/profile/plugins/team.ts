@@ -1,6 +1,7 @@
-import { mkdir, readdir } from "fs/promises"
+import { cp, lstat, mkdir, readdir, readlink, rm, symlink } from "fs/promises"
 import path from "path"
 import { tool } from "@opencode-ai/plugin"
+import { Background } from "../../../opencode/src/util/background"
 
 const z = tool.schema
 
@@ -9,6 +10,8 @@ const cap = 5
 const kids = new Set<string>()
 const need = new Map<string, Need>()
 const live = new Map<string, Run>()
+const seen = new WeakMap<object, Seen>()
+const sweeping = new Map<string, Promise<void>>()
 
 type Need = {
   done: boolean
@@ -22,11 +25,18 @@ type Note = {
   messageID?: string
   type?: string
   text?: string
+  state?: {
+    status?: string
+    output?: string
+  }
 }
 
 type Msg = {
   info: {
     role: string
+    time?: {
+      completed?: number
+    }
     error?: {
       data?: {
         message?: string
@@ -40,9 +50,47 @@ type Stat = {
   type: string
 }
 
+type Rule = {
+  permission: string
+  pattern: string
+  action: "allow" | "deny" | "ask"
+}
+
 type Client = {
+  permission?: {
+    list(input?: { directory?: string; workspace?: string }): Promise<{
+      data?: {
+        id: string
+        sessionID: string
+        permission: string
+        patterns: string[]
+        metadata?: Record<string, unknown>
+      }[]
+    }>
+  }
+  question?: {
+    list(input?: { directory?: string; workspace?: string }): Promise<{
+      data?: {
+        id: string
+        sessionID: string
+        questions: {
+          question: string
+          header: string
+        }[]
+      }[]
+    }>
+  }
+  event?: {
+    subscribe(): Promise<{
+      stream: AsyncIterable<{
+        type?: string
+        properties?: Record<string, unknown>
+      }>
+    }>
+  }
   session: {
-    create(input: { body: { parentID: string; title: string }; query: { directory: string } }): Promise<{ data: { id: string } }>
+    get(input: { path: { id: string }; query: { directory: string } }): Promise<{ data?: { permission?: Rule[] } }>
+    create(input: { body: { parentID: string; title: string; permission?: Rule[] }; query: { directory: string } }): Promise<{ data: { id: string } }>
     promptAsync(input: {
       path: { id: string }
       query: { directory: string }
@@ -68,6 +116,15 @@ type Client = {
     status(input: { query: { directory: string } }): Promise<{ data?: Record<string, Stat> }>
     messages(input: { path: { id: string }; query: { directory: string } }): Promise<{ data?: Msg[] }>
     abort(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>
+    permission?(id: string): ReadonlyArray<{
+      permission?: string
+      patterns?: string[]
+      metadata?: Record<string, unknown>
+    }>
+    question?(id: string): ReadonlyArray<{
+      header?: string
+      question?: string
+    }>
   }
 }
 
@@ -89,7 +146,7 @@ type Step = {
   output: string
   error: string
   updated_at?: string
-  failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout"
+  failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout" | "blocked"
 }
 
 type Run = {
@@ -103,11 +160,18 @@ type Run = {
   tasks: Step[]
 }
 
+type Seen = {
+  on: boolean
+  per: Map<string, { permission: string; patterns: string[]; hint: string }>
+  idle: Set<string>
+}
+
 type Ctx = {
   sessionID: string
   directory: string
   worktree: string
   abort: AbortSignal
+  permission: Rule[]
   metadata(input: { title?: string; metadata?: Record<string, unknown> }): void
 }
 
@@ -138,11 +202,85 @@ function body(parts: Note[]) {
     .join("\n\n")
 }
 
+function summary(parts: Note[]) {
+  const text = body(parts)
+  if (text) return text
+  return parts
+    .filter(
+      (item): item is { type: "tool"; state: { status: string; output: string } } =>
+        item.type === "tool" &&
+        item.state?.status === "completed" &&
+        typeof item.state.output === "string",
+    )
+    .map((item) => item.state.output.trim())
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function pick(list: Msg[], completedOnly = false) {
+  const items = [...list].reverse().filter((item) => item.info.role === "assistant")
+  if (!items.length) return
+  return items.find((item) => typeof item.info.time?.completed === "number") ?? (completedOnly ? undefined : items[0])
+}
+
 function scrub(cmd: string) {
   return cmd
     .replace(/(?:\d*>>?|\&>>?|\&>)\s*\/dev\/null\b/g, " ")
     .replace(/\d*>\s*&\s*\d+\b/g, " ")
     .replace(/\d*>\s*&-/g, " ")
+}
+
+function redir(cmd: string) {
+  let sq = false
+  let dq = false
+  let bt = false
+  let esc = false
+
+  for (const ch of cmd) {
+    if (esc) {
+      esc = false
+      continue
+    }
+
+    if (ch === "\\") {
+      if (!sq) esc = true
+      continue
+    }
+
+    if (sq) {
+      if (ch === "'") sq = false
+      continue
+    }
+
+    if (dq) {
+      if (ch === '"') dq = false
+      continue
+    }
+
+    if (bt) {
+      if (ch === "`") bt = false
+      continue
+    }
+
+    if (ch === "'") {
+      sq = true
+      continue
+    }
+
+    if (ch === '"') {
+      dq = true
+      continue
+    }
+
+    if (ch === "`") {
+      bt = true
+      continue
+    }
+
+    if (ch === ">") return true
+  }
+
+  return false
 }
 
 function mut(cmd: string) {
@@ -158,10 +296,9 @@ function mut(cmd: string) {
     /\btee\b/i,
     /\bsed\s+-i\b/i,
     /\bperl\s+-pi\b/i,
-    />/,
     /\bgit\s+(apply|am|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
     /\bgit\s+merge(\s|$)/i,
-  ].some((item) => item.test(data))
+  ].some((item) => item.test(data)) || redir(data)
 }
 
 function big(text: string) {
@@ -186,6 +323,48 @@ function big(text: string) {
 function write(text: string, flag?: boolean) {
   if (typeof flag === "boolean") return flag
   return /(implement|implementation|write|edit|patch|code|fix|refactor|modify|修正|実装|編集|追加|改修)/i.test(text)
+}
+
+function direct(text: string) {
+  const next = /\bopencode\s+run\s+\/init\b/i.test(text)
+    ? text.replace(
+      /\bopencode\s+run\s+\/init\b/gi,
+      "perform the equivalent /init repository inspection and AGENTS.md bootstrap directly in this worktree",
+    ).trim()
+    : text.trim()
+  return `Worker execution rules:
+- Prefer file inspection tools such as Glob, Read, and Grep over bash for repository discovery whenever possible.
+- Use bash only when the non-shell tools cannot answer the question or complete the step.
+- Do not invoke nested OpenCode slash commands from inside this team worker.
+- If you are running in an isolated worktree, operate only on files inside the current worktree directory. Do not read from or write to the parent repository path directly.
+
+${next}`
+}
+
+function permit(base: Rule[]) {
+  return [
+    ...base,
+    { permission: "bash", pattern: "pwd", action: "allow" as const },
+    { permission: "bash", pattern: "ls", action: "allow" as const },
+    { permission: "bash", pattern: "ls *", action: "allow" as const },
+    { permission: "bash", pattern: "find *", action: "allow" as const },
+    { permission: "bash", pattern: "rg *", action: "allow" as const },
+    { permission: "bash", pattern: "cat *", action: "allow" as const },
+    { permission: "bash", pattern: "sed *", action: "allow" as const },
+    { permission: "bash", pattern: "head *", action: "allow" as const },
+    { permission: "bash", pattern: "tail *", action: "allow" as const },
+    { permission: "bash", pattern: "git status*", action: "allow" as const },
+    { permission: "bash", pattern: "git diff*", action: "allow" as const },
+    { permission: "bash", pattern: "git log*", action: "allow" as const },
+    { permission: "bash", pattern: "git rev-parse*", action: "allow" as const },
+    { permission: "bash", pattern: "git ls-tree*", action: "allow" as const },
+    { permission: "bash", pattern: "git show*", action: "allow" as const },
+    { permission: "bash", pattern: "git ls-files*", action: "allow" as const },
+    { permission: "bash", pattern: "git grep *", action: "allow" as const },
+    { permission: "bash", pattern: "opencode *", action: "deny" as const },
+    { permission: "bash", pattern: "claude *", action: "deny" as const },
+    { permission: "bash", pattern: "codex *", action: "deny" as const },
+  ]
 }
 
 function lane(item: Pick<Step, "id" | "description" | "agent" | "prompt" | "depends">) {
@@ -224,6 +403,157 @@ function patch(dir: string, run: string, id: string) {
 
 function yard(dir: string) {
   return path.join(dir, ".opencode", "team")
+}
+
+function rootkeep(dir: string) {
+  if (dir === ".opencode") {
+    return [
+      "agent",
+      "agents",
+      "command",
+      "commands",
+      "env.d.ts",
+      "hooks",
+      "node_modules",
+      "opencode.json",
+      "opencode.jsonc",
+      "package-lock.json",
+      "package.json",
+      "plugin",
+      "plugins",
+      "rule",
+      "rules",
+      "skill",
+      "skills",
+      "themes",
+      "tui.json",
+      "tui.jsonc",
+    ]
+  }
+
+  if (dir === ".claude") {
+    return [
+      "agents",
+      "commands",
+      "hooks",
+      "settings.json",
+      "settings.local.json",
+      "skills",
+    ]
+  }
+
+  if (dir === ".agents") {
+    return [
+      "agents",
+      "commands",
+      "hooks",
+      "skills",
+    ]
+  }
+
+  if (dir === ".cursor") {
+    return [
+      "rules",
+    ]
+  }
+
+  if (dir === ".github") {
+    return [
+      "copilot-instructions.md",
+    ]
+  }
+
+  return []
+}
+
+const runtime = [
+  ".opencode/guardrails",
+  ".opencode/memory",
+]
+
+function runtimeSpec() {
+  return runtime.map((item) => `:(exclude)${item}`)
+}
+
+function docs() {
+  return [
+    "AGENTS.md",
+    "OPENCODE.md",
+    "CLAUDE.md",
+    "CONTEXT.md",
+  ]
+}
+
+function roots() {
+  return [
+    ".opencode",
+    ".claude",
+    ".agents",
+    ".cursor",
+    ".github",
+  ]
+}
+
+async function has(file: string) {
+  return lstat(file).then(() => true).catch(() => false)
+}
+
+async function graft(src: string, dst: string) {
+  const stat = await lstat(src).catch(() => undefined)
+  if (!stat || (await has(dst))) return false
+
+  const kind = stat.isDirectory() ? (process.platform === "win32" ? "junction" : "dir") : "file"
+  const link = stat.isSymbolicLink() ? await readlink(src) : src
+  const made = await symlink(link, dst, kind as Parameters<typeof symlink>[2]).then(() => true).catch(() => false)
+  if (made) return true
+
+  return cp(src, dst, {
+    recursive: stat.isDirectory(),
+    force: false,
+    errorOnExist: true,
+  })
+    .then(() => true)
+    .catch(() => false)
+}
+
+async function carry(root: string, dir: string, next: string) {
+  const kept: string[] = []
+  for (let cur = dir;; cur = path.dirname(cur)) {
+    const rel = path.relative(root, cur)
+
+    for (const name of docs()) {
+      const file = path.join(next, rel, name)
+      if (await graft(path.join(cur, name), file)) {
+        kept.push(path.relative(next, file))
+      }
+    }
+
+    for (const base of roots()) {
+      const src = path.join(cur, base)
+      if (await has(src)) {
+        const dst = path.join(next, rel, base)
+        await mkdir(dst, { recursive: true })
+        for (const name of rootkeep(base)) {
+          const file = path.join(dst, name)
+          if (await graft(path.join(src, name), file)) {
+            kept.push(path.relative(next, file))
+          }
+        }
+      }
+    }
+
+    if (cur === root || path.dirname(cur) === cur) return kept
+  }
+}
+
+async function rules(client: Client, ctx: Pick<Ctx, "sessionID" | "directory">) {
+  const out = await client.session
+    .get({
+      path: { id: ctx.sessionID },
+      query: { directory: ctx.directory },
+    })
+    .catch(() => undefined)
+  return Array.isArray(out?.data?.permission) ? out.data.permission : []
 }
 
 function isRun(data: unknown): data is Run {
@@ -306,16 +636,24 @@ async function yardrm(dir: string, item: string) {
   await git(dir, ["worktree", "remove", "--force", item])
 }
 
-async function merge(dir: string, item: string, run: string, id: string) {
-  // Stage all files (including untracked) to capture new files in the diff
-  const add = await git(item, ["add", "-A"])
+async function merge(dir: string, item: string, run: string, id: string, kept: string[] = []) {
+  await Promise.all(kept.map((file) => rm(path.join(item, file), { force: true, recursive: true }).catch(() => undefined)))
+  const spec = runtimeSpec()
+  // Stage all worker-owned files while excluding runtime state that is created locally during execution.
+  const add = await git(item, ["add", "-A", "--", ".", ...spec])
   if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
-  const diff = await git(item, ["diff", "--cached", "--binary"])
-  if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
-  if (!diff.out.trim()) {
+  const changed = await git(item, ["diff", "--cached", "--name-only", "--diff-filter=ACDMRTUXB", "--", ".", ...spec])
+  if (changed.code !== 0) throw new Error(changed.err || changed.out || "Failed to list worktree changes")
+  const files = changed.out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!files.length) {
     await yardrm(dir, item)
     return { patch: "", merged: true }
   }
+  const diff = await git(item, ["diff", "--cached", "--binary", "--", ".", ...spec])
+  if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
   const next = patch(dir, run, id)
   await Bun.write(next, diff.out)
   const out = await git(dir, ["apply", "--3way", next])
@@ -334,15 +672,8 @@ async function merge(dir: string, item: string, run: string, id: string) {
       verification.issues.push(`${untracked} untracked files after merge — check for stale artifacts`)
     }
   } catch { /* verification is advisory */ }
-  // Auto-commit applied changes so they are not left uncommitted in the parent worktree.
-  // Without this, patched changes remain as unstaged modifications — the root cause of
-  // "worktree changes returned but not committed" (Issue #144, Claude Code Agent parity gap).
-  // Auto-commit only the patch-applied files (not unrelated local edits).
-  // Use `git diff --name-only` to identify files changed by the patch, then stage only those.
+  // Auto-commit only the files produced by the worker patch so unrelated parent edits stay untouched.
   try {
-    const changed = await git(dir, ["diff", "--name-only"])
-    const untracked = await git(dir, ["ls-files", "--others", "--exclude-standard"])
-    const files = [...changed.out.trim().split("\n"), ...untracked.out.trim().split("\n")].filter(Boolean)
     if (files.length > 0) {
       await git(dir, ["add", "--", ...files])
       const commitMsg = `chore(team): apply worker changes from task ${id}`
@@ -357,29 +688,123 @@ async function merge(dir: string, item: string, run: string, id: string) {
 }
 
 async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
+  let seen = false
+  const hit = mark(client)
   for (;;) {
     if (abort.aborted) throw new Error("Aborted")
+    if (hit.idle.has(id)) return
+    const blocked = await wait(client, id, dir)
+    if (blocked) throw new Error(blocked)
+    const done = await snap(client, id, dir, true)
+    if (done.completed) return
     const stat = await client.session.status({
       query: {
         directory: dir,
       },
     })
     const item = stat.data?.[id]
-    if (!item || item.type === "idle") return
+    if (!item) {
+      if (hit.idle.has(id)) return
+      if (seen) return
+      await Bun.sleep(gap)
+      continue
+    }
+    seen = true
+    if (item.type === "idle") return
     await Bun.sleep(gap)
   }
 }
 
-async function snap(client: Client, id: string, dir: string) {
+async function snap(client: Client, id: string, dir: string, completedOnly = false) {
   const list = await client.session.messages({
     path: { id },
     query: { directory: dir },
   })
-  const msg = [...(list.data ?? [])].reverse().find((item) => item.info.role === "assistant")
-  if (!msg || msg.info.role !== "assistant") return { text: "", error: "" }
-  const out = body(msg.parts)
+  const msg = pick(list.data ?? [], completedOnly)
+  if (!msg || msg.info.role !== "assistant") return { text: "", error: "", completed: false }
+  const out = summary(msg.parts)
   const err = msg.info.error?.data?.message ?? ""
-  return { text: clip(out), error: err }
+  return { text: clip(out), error: err, completed: typeof msg.info.time?.completed === "number" }
+}
+
+function stage(err: string): Step["failure_stage"] {
+  return /blocked on (permission|question)/i.test(err) ? "blocked"
+    : /abort/i.test(err) ? "aborted"
+    : /timeout/i.test(err) ? "timeout"
+    : "execution"
+}
+
+function why(item: Step | undefined, err: string): Step["failure_stage"] {
+  return !item?.dir ? "worktree_setup"
+    : !item?.session ? "session_create"
+    : /merge|patch|apply/.test(err) ? "merge_back"
+    : stage(err)
+}
+
+function fail(run: Run, err: string, id?: string) {
+  const text = err || "Unknown error"
+  run.tasks
+    .filter((item) => item.state === "pending" || item.state === "queued" || item.state === "running")
+    .forEach((item) => {
+      todo(run, item.id, {
+        state: "error",
+        error: item.error || text,
+        failure_stage: item.failure_stage || (item.id === id ? why(item, text) : stage(text)),
+      })
+    })
+  run.state = "error"
+  run.updated_at = now()
+}
+
+async function reconcile(client: Client, dir: string, run: Run) {
+  if (run.state !== "running") return run
+  let changed = false
+  for (const item of run.tasks) {
+    if (item.state !== "running" || !item.session || !item.dir) continue
+    const blocked = await wait(client, item.session, item.dir)
+    if (blocked) {
+      todo(run, item.id, {
+        state: "error",
+        error: blocked,
+        failure_stage: "blocked",
+      })
+      changed = true
+      continue
+    }
+    const out = await snap(client, item.session, item.dir, true)
+    if (!out.completed) continue
+    todo(run, item.id, {
+      state: out.error ? "error" : "done",
+      output: out.text,
+      error: out.error,
+      failure_stage: out.error ? stage(out.error) : undefined,
+    })
+    changed = true
+  }
+  if (run.tasks.every((item) => item.state === "done" || item.state === "error")) {
+    run.state = run.tasks.some((item) => item.state === "error") ? "error" : "done"
+    run.updated_at = now()
+    changed = true
+  }
+  if (changed) await save(dir, run)
+  return run
+}
+
+async function sweep(client: Client, dir: string) {
+  const active = sweeping.get(dir)
+  if (active) return active
+  const task = (async () => {
+    const list = await scan(dir)
+    const running = list.filter((item) => item.state === "running")
+    if (!running.length) return
+    await Promise.all(running.map((item) => reconcile(client, dir, item)))
+  })()
+    .catch(() => undefined)
+    .finally(() => {
+      if (sweeping.get(dir) === task) sweeping.delete(dir)
+    })
+  sweeping.set(dir, task)
+  return task
 }
 
 function note(run: Run) {
@@ -425,6 +850,99 @@ function todo(run: Run, id: string, data: Partial<Step>) {
   run.updated_at = now()
 }
 
+function mark(client: Client) {
+  const key = client as object
+  const hit = seen.get(key)
+  if (hit) return hit
+  const next: Seen = {
+    on: false,
+    per: new Map(),
+    idle: new Set(),
+  }
+  seen.set(key, next)
+  if (!client.event?.subscribe) return next
+  next.on = true
+  void (async () => {
+    for (;;) {
+      const sub = await client.event?.subscribe().catch(() => undefined)
+      if (!sub?.stream) {
+        await Bun.sleep(gap)
+        continue
+      }
+      try {
+        for await (const evt of sub.stream) {
+          if (evt.type === "permission.updated" || evt.type === "permission.asked") {
+            const props = evt.properties ?? {}
+            const session = typeof props.sessionID === "string" ? props.sessionID : ""
+            if (!session) continue
+            const permission = typeof props.permission === "string" ? props.permission : typeof props.type === "string" ? props.type : "unknown"
+            const raw = props.patterns ?? props.pattern
+            const patterns = Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : typeof raw === "string" ? [raw] : []
+            const label = typeof props.title === "string" && props.title ? props.title : typeof props.description === "string" ? props.description : ""
+            const title = label ? ` (${label})` : ""
+            next.per.set(session, { permission, patterns, hint: title })
+          }
+          if (evt.type === "permission.replied") {
+            const props = evt.properties ?? {}
+            const session = typeof props.sessionID === "string" ? props.sessionID : ""
+            if (!session) continue
+            next.per.delete(session)
+          }
+          if (evt.type === "session.idle") {
+            const props = evt.properties ?? {}
+            const session = typeof props.sessionID === "string" ? props.sessionID : ""
+            if (!session) continue
+            next.idle.add(session)
+          }
+        }
+      } catch {
+        await Bun.sleep(gap)
+      }
+    }
+  })().catch(() => {})
+  return next
+}
+
+async function wait(client: Client, id: string, dir: string) {
+  const hit = mark(client)
+  const perm = await client.permission?.list?.({ directory: dir }).catch(() => ({ data: [] as { sessionID: string; permission: string; patterns: string[]; metadata?: Record<string, unknown> }[] }))
+  const blocked = perm?.data?.find((item) => item.sessionID === id)
+  if (blocked) {
+    const meta = blocked.metadata?.description
+    const hint = typeof meta === "string" && meta ? ` (${meta})` : ""
+    return `Blocked on permission: ${blocked.permission}${hint} :: ${blocked.patterns.join(" | ")}`
+  }
+  const local = client.session.permission?.(id)?.[0]
+  if (local?.permission) {
+    const meta = local.metadata?.description
+    const hint = typeof meta === "string" && meta ? ` (${meta})` : ""
+    return `Blocked on permission: ${local.permission}${hint} :: ${(local.patterns ?? []).join(" | ")}`
+  }
+  const hold = hit.per.get(id)
+  if (hold) {
+    return `Blocked on permission: ${hold.permission}${hold.hint} :: ${hold.patterns.join(" | ")}`
+  }
+  const localState = await Bun.file(path.join(dir, ".opencode", "guardrails", "state.json")).json().catch(() => undefined) as
+    | { last_event?: unknown; last_permission?: unknown; last_patterns?: unknown }
+    | undefined
+  if (localState?.last_event === "permission.asked" && typeof localState.last_permission === "string") {
+    const patterns = Array.isArray(localState.last_patterns)
+      ? localState.last_patterns.filter((item): item is string => typeof item === "string")
+      : []
+    return `Blocked on permission: ${localState.last_permission} :: ${patterns.join(" | ")}`
+  }
+  const ask = await client.question?.list?.({ directory: dir }).catch(() => ({ data: [] as { sessionID: string; questions: { question: string; header: string }[] }[] }))
+  const asked = ask?.data?.find((item) => item.sessionID === id)
+  if (asked) {
+    const text = asked.questions.map((item) => `${item.header}: ${item.question}`).join(" | ")
+    return `Blocked on question: ${text}`
+  }
+  const quiz = client.session.question?.(id)
+  if (quiz?.length) {
+    return `Blocked on question: ${quiz.map((item) => `${item.header ?? ""}: ${item.question ?? ""}`).join(" | ")}`
+  }
+}
+
 async function stop(client: Client, run: Run) {
   await Promise.all(
     run.tasks
@@ -443,9 +961,12 @@ export default async function team(input: {
   worktree: string
   directory: string
 }) {
+  void sweep(input.client, input.worktree)
   const job = async (ctx: Ctx, run: Run, item: Step) => {
     const push = write(item.prompt, item.write)
+    const prompt = direct(item.prompt)
     const box = push && item.worktree ? await yardadd(ctx.worktree, `${run.id}-${item.id}`) : ctx.directory
+    const kept = box !== ctx.directory ? await carry(ctx.worktree, ctx.directory, box) : []
 
     todo(run, item.id, {
       state: "running",
@@ -457,6 +978,7 @@ export default async function team(input: {
       body: {
         parentID: ctx.sessionID,
         title: item.description,
+        permission: permit(ctx.permission),
       },
       query: {
         directory: box,
@@ -483,16 +1005,17 @@ export default async function team(input: {
         tools: push
           ? undefined
           : {
-              bash: false,
               edit: false,
               write: false,
               apply_patch: false,
+              task: false,
+              todowrite: false,
             },
         variant: item.variant || undefined,
         parts: [
           {
             type: "text",
-            text: item.prompt,
+            text: prompt,
           },
         ],
       },
@@ -506,18 +1029,14 @@ export default async function team(input: {
     // [Phase6] Classify failure stage for abort reason tracking
     let failure_stage: Step["failure_stage"] = undefined
     if (!err && push && box !== ctx.directory) {
-      const merged = await merge(ctx.worktree, box, run.id, item.id)
+      const merged = await merge(ctx.worktree, box, run.id, item.id, kept)
       patchfile = merged.patch
       if (!merged.merged) {
         err = merged.error || "Failed to merge worktree patch"
         failure_stage = "merge_back"
       }
     }
-    if (err && !failure_stage) {
-      failure_stage = /abort/i.test(err) ? "aborted"
-        : /timeout/i.test(err) ? "timeout"
-        : "execution"
-    }
+    if (err && !failure_stage) failure_stage = stage(err)
 
     todo(run, item.id, {
       state: err ? "error" : "done",
@@ -550,9 +1069,14 @@ export default async function team(input: {
       ),
     },
     async execute(args, ctx) {
+      await sweep(input.client, ctx.worktree)
       defs(args.tasks)
       if (args.tasks.length < 1) throw new Error("team requires at least one task")
-      ctx.metadata({
+      const req = {
+        ...ctx,
+        permission: await rules(input.client, ctx),
+      }
+      req.metadata({
         title: "team run",
         metadata: {
           tasks: args.tasks.length,
@@ -603,7 +1127,7 @@ export default async function team(input: {
       const active = new Map<string, Promise<void>>()
 
       const launch = (item: Step) => {
-        const task = job(ctx, run, item).then(() => {
+        const task = job(req, run, item).then(() => {
           done.add(item.id)
           active.delete(item.id)
         })
@@ -635,8 +1159,9 @@ export default async function team(input: {
           await save(ctx.worktree, run)
         }
       } catch (err) {
-        run.state = "error"
-        run.updated_at = now()
+        const item = run.tasks.find((item) => item.state === "error")
+          ?? run.tasks.find((item) => item.state === "running" || item.state === "queued")
+        fail(run, err instanceof Error ? err.message : String(err), item?.id)
         await save(ctx.worktree, run)
         await stop(input.client, run)
         throw err
@@ -666,6 +1191,11 @@ export default async function team(input: {
       notify: z.boolean().optional().default(true),
     },
     async execute(args, ctx) {
+      await sweep(input.client, ctx.worktree)
+      const req = {
+        ...ctx,
+        permission: await rules(input.client, ctx),
+      }
       const step: Step = {
         id: slug(args.description || args.agent || "worker") || "worker",
         description: args.description || "background worker",
@@ -699,23 +1229,23 @@ export default async function team(input: {
         tasks: [step],
       }
       await save(ctx.worktree, run)
-      ctx.metadata({
+      req.metadata({
         title: args.description || "background run",
         metadata: {
           run_id: run.id,
         },
       })
 
-      void job(ctx, run, step)
+      const task = job(req, run, step)
         .then(async () => {
           run.state = "done"
           run.updated_at = now()
           await save(ctx.worktree, run)
           if (!args.notify) return
           await input.client.session.prompt({
-            path: { id: ctx.sessionID },
+            path: { id: req.sessionID },
             query: {
-              directory: ctx.directory,
+              directory: req.directory,
             },
             body: {
               noReply: true,
@@ -729,36 +1259,30 @@ export default async function team(input: {
           })
         })
         .catch(async (err: Error) => {
-          run.state = "error"
-          run.updated_at = now()
-          // Classify failure stage from step state and error content
-          const task = run.tasks.find((t) => t.state === "error" || t.state === "running") || run.tasks[0]
-          const stage: Step["failure_stage"] = !task?.dir ? "worktree_setup"
-            : !task?.session ? "session_create"
-            : /merge|patch|apply/.test(err.message || "") ? "merge_back"
-            : /abort/i.test(err.message || "") ? "aborted"
-            : "execution"
-          if (task) task.failure_stage = stage
+          const item = run.tasks.find((item) => item.state === "error" || item.state === "running" || item.state === "queued") || run.tasks[0]
+          fail(run, err.message || "Unknown error", item?.id)
           await save(ctx.worktree, run)
           if (!args.notify) return
           await input.client.session.prompt({
-            path: { id: ctx.sessionID },
+            path: { id: req.sessionID },
             query: {
-              directory: ctx.directory,
+              directory: req.directory,
             },
             body: {
               noReply: true,
               parts: [
                 {
                   type: "text",
-                  text: `Background run ${run.id} failed at stage: ${stage}.\n\n${err.message || "Unknown error"}\n\n${note(run)}`,
+                  text: `Background run ${run.id} failed at stage: ${run.tasks.find((item) => item.state === "error")?.failure_stage || "execution"}.\n\n${err.message || "Unknown error"}\n\n${note(run)}`,
                 },
               ],
             },
           })
         })
+      Background.add(req.directory, task)
+      await Promise.race([task.catch(() => {}), new Promise((ok) => setTimeout(ok, gap))])
 
-      return `run_id: ${run.id}\nstate: running`
+      return note(run)
     },
   })
 
@@ -768,9 +1292,11 @@ export default async function team(input: {
       run_id: z.string().optional(),
     },
     async execute(args, ctx) {
+      await sweep(input.client, ctx.worktree)
       const list = args.run_id ? [live.get(args.run_id) ?? (await load(ctx.worktree, args.run_id))].filter(isRun) : await scan(ctx.worktree)
-      if (!list.length) return "No team runs found."
-      return list.map((item) => note(item)).join("\n\n")
+      const settled = await Promise.all(list.map((item) => reconcile(input.client, ctx.worktree, item)))
+      if (!settled.length) return "No team runs found."
+      return settled.map((item) => note(item)).join("\n\n")
     },
   })
 
@@ -794,9 +1320,10 @@ export default async function team(input: {
         parts: Note[]
       },
     ) => {
+      void sweep(input.client, input.worktree)
       if (out.message.role !== "user") return
       if (kids.has(item.sessionID)) return
-      if (item.agent && /review/i.test(item.agent)) return
+      if (item.agent && /(review|technical-writer|doc-updater)/i.test(item.agent)) return
       const text = body(out.parts)
       if (text.includes("under the guardrail profile.")) return
       if (!big(text)) return
@@ -834,6 +1361,7 @@ export default async function team(input: {
         args: Record<string, unknown>
       },
     ) => {
+      void sweep(input.client, input.worktree)
       const gate = need.get(item.sessionID)
       if (!gate || gate.done) return
       if (item.tool === "team") return
@@ -854,10 +1382,28 @@ export default async function team(input: {
         metadata: Record<string, unknown>
       },
     ) => {
+      void sweep(input.client, input.worktree)
       if (item.tool !== "team") return
       need.set(item.sessionID, {
         done: true,
         reason: "team",
+        at: now(),
+      })
+    },
+    "tool.execute.error": async (
+      item: {
+        tool: string
+        sessionID: string
+      },
+      _out: {
+        error: unknown
+      },
+    ) => {
+      void sweep(input.client, input.worktree)
+      if (item.tool !== "team" && item.tool !== "background") return
+      need.set(item.sessionID, {
+        done: true,
+        reason: `${item.tool}-failed`,
         at: now(),
       })
     },
@@ -867,6 +1413,7 @@ export default async function team(input: {
         system: string[]
       },
     ) => {
+      void sweep(input.client, input.worktree)
       out.system.unshift(
         "When the user asks for a broad or multi-file implementation, decompose with the team tool before mutating files. Background work belongs in background; large implementation turns are hook-enforced.",
       )

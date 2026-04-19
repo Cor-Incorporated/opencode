@@ -21,30 +21,22 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "docker build*": allow
-    "docker compose*": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
     "docker compose push*": deny
     "docker push*": deny
-    "docker ps*": allow
-    "docker images*": allow
-    "docker logs*": allow
-    "kubectl get*": allow
-    "kubectl describe*": allow
-    "kubectl logs*": allow
-    "kubectl rollout status*": allow
-    "kubectl rollout history*": allow
-    "kubectl rollout restart*": ask
-    "kubectl rollout undo*": ask
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
-    "gh pr checks*": allow
-    "gh run view*": allow
-    "gh run list*": allow
+    "kubectl apply*": deny
+    "kubectl delete*": deny
 ---
 
 CI/CD pipeline and deployment automation specialist for zero-downtime releases.

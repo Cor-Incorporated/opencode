@@ -4,24 +4,22 @@ mode: subagent
 permission:
   glob: allow
   edit:
-    "*": ask
+    "*": allow
   write:
-    "*": ask
+    "*": allow
   bash:
-    "*": deny
-    "npx knip*": allow
-    "npx depcheck*": allow
-    "npx ts-prune*": allow
-    "npx eslint*": allow
-    "bun run *": allow
-    "bun test*": allow
-    "npm run*": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 Dead code cleanup, import consolidation, and codebase hygiene specialist.

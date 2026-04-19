@@ -3,12 +3,13 @@ description: Cross-platform mobile development specialist for React Native and F
 mode: subagent
 permission:
   bash:
-    "*": ask
+    "*": allow
     "git checkout -- *": deny
     "git merge *": deny
     "git push --force*": deny
     "git push * --force*": deny
     "git reset --hard*": deny
+    "gh pr merge *": deny
     "rm -rf *": deny
     "rm -r *": deny
     "sudo *": deny

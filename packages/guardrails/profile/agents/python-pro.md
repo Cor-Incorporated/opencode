@@ -15,24 +15,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
-    "python *": allow
-    "python3 *": allow
-    "pip install*": allow
-    "pip list*": allow
-    "pip show*": allow
-    "uv *": allow
-    "pytest *": allow
-    "mypy *": allow
-    "ruff *": allow
-    "black *": allow
-    "isort *": allow
-    "git diff*": allow
-    "git status*": allow
-    "git log*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
+    "*": allow
+    "git checkout -- *": deny
+    "git merge *": deny
+    "git push --force*": deny
+    "git push * --force*": deny
+    "git reset --hard*": deny
+    "gh pr merge *": deny
+    "rm -rf *": deny
+    "rm -r *": deny
+    "sudo *": deny
+    "curl * | sh*": deny
+    "wget * | sh*": deny
 ---
 
 Python development specialist for modern Python 3.10+ patterns, async services, and data pipelines.

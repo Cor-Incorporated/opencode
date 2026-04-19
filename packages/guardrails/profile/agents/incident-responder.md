@@ -11,30 +11,18 @@ permission:
   write:
     "*": allow
   bash:
-    "*": deny
+    "*": allow
     "git checkout -- *": deny
     "git merge *": deny
     "git push --force*": deny
     "git push * --force*": deny
     "git reset --hard*": deny
+    "gh pr merge *": deny
     "rm -rf *": deny
     "rm -r *": deny
     "sudo *": deny
-    "git log*": allow
-    "git diff*": allow
-    "git show*": allow
-    "git blame*": allow
-    "git status*": allow
-    "git stash list": allow
-    "git stash show*": allow
-    "ls *": allow
-    "pwd": allow
-    "which *": allow
-    "curl *": ask
     "curl * | sh*": deny
     "wget * | sh*": deny
-    "node *": allow
-    "bun *": allow
 ---
 
 Incident response specialist for rapid diagnosis and recovery.
