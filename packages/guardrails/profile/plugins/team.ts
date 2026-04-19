@@ -145,6 +145,7 @@ type Step = {
   patch: string
   output: string
   error: string
+  no_patch: boolean
   updated_at?: string
   failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout" | "blocked"
 }
@@ -498,6 +499,16 @@ function roots() {
   ]
 }
 
+function workspaceRuntime() {
+  return [
+    "node_modules",
+    ".pnpm-store",
+    ".yarn",
+    ".pnp.cjs",
+    ".pnp.loader.mjs",
+  ]
+}
+
 async function has(file: string) {
   return lstat(file).then(() => true).catch(() => false)
 }
@@ -542,6 +553,15 @@ async function carry(root: string, dir: string, next: string) {
           if (await graft(path.join(src, name), file)) {
             kept.push(path.relative(next, file))
           }
+        }
+      }
+    }
+
+    if (cur === root) {
+      for (const name of workspaceRuntime()) {
+        const file = path.join(next, name)
+        if (await graft(path.join(root, name), file)) {
+          kept.push(path.relative(next, file))
         }
       }
     }
@@ -822,6 +842,7 @@ function note(run: Run) {
       item.session ? `session=${item.session}` : "",
       item.dir ? `dir=${item.dir}` : "",
       item.patch ? `patch=${item.patch}` : "",
+      item.no_patch ? "no_patch=true" : "",
       item.failure_stage ? `failure_stage=${item.failure_stage}` : "",
       item.error ? `error=${clip(item.error, 240)}` : "",
       item.output ? `output=${clip(item.output, 240)}` : "",
@@ -1049,6 +1070,7 @@ export default async function team(input: {
     todo(run, item.id, {
       state: err ? "error" : "done",
       patch: patchfile,
+      no_patch: !err && item.write && useWorktree && patchfile === "",
       output: out.text,
       error: err,
       failure_stage: err ? failure_stage : undefined,
@@ -1125,6 +1147,7 @@ export default async function team(input: {
             dir: "",
             session: "",
             patch: "",
+            no_patch: false,
             output: "",
             error: "",
           }
@@ -1229,6 +1252,7 @@ export default async function team(input: {
         dir: "",
         session: "",
         patch: "",
+        no_patch: false,
         output: "",
         error: "",
       }

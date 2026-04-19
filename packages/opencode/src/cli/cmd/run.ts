@@ -27,6 +27,7 @@ import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "../../util"
 import { AppRuntime } from "@/effect/app-runtime"
+import { canonicalizeWorkingDirectory } from "../../util/cwd"
 
 type ToolProps<T> = {
   input: Tool.InferParameters<T>
@@ -309,8 +310,7 @@ export const RunCommand = cmd({
       if (!args.dir) return undefined
       if (args.attach) return args.dir
       try {
-        process.chdir(args.dir)
-        return process.cwd()
+        return canonicalizeWorkingDirectory(args.dir)
       } catch {
         UI.error("Failed to change directory to " + args.dir)
         process.exit(1)
@@ -669,7 +669,7 @@ export const RunCommand = cmd({
       return await execute(sdk)
     }
 
-    await bootstrap(process.cwd(), async () => {
+    await bootstrap(canonicalizeWorkingDirectory(), async () => {
       const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init)
         return Server.Default().app.fetch(request)

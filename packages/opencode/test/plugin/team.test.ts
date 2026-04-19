@@ -5,11 +5,17 @@ import team from "../../../../packages/guardrails/profile/plugins/team"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 
+type TeamClient = Parameters<typeof team>[0]["client"]
+
 afterEach(async () => {
   await Instance.disposeAll()
 })
 
-async function createPlugin(dir: string, worktree = dir) {
+async function createPlugin(
+  dir: string,
+  worktree = dir,
+  overrides?: Partial<NonNullable<TeamClient["session"]>>,
+) {
   return team({
     client: {
       permission: {
@@ -54,6 +60,7 @@ async function createPlugin(dir: string, worktree = dir) {
         async abort() {
           return {}
         },
+        ...overrides,
       },
     },
     worktree,
@@ -205,4 +212,56 @@ test("background detaches worker execution from the parent abort signal", async 
   )
 
   expect(result).toContain("state: done")
+})
+
+test("team worktrees carry root node_modules into isolated write tasks", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Bun.write(path.join(tmp.path, "package.json"), '{"name":"fixture","private":true}')
+  await Bun.write(path.join(tmp.path, "tracked.txt"), "tracked\n")
+  await Bun.$`git add package.json tracked.txt`.cwd(tmp.path).quiet()
+  await Bun.$`git commit -m "test: seed worktree fixture"`.cwd(tmp.path).quiet()
+  await Bun.$`mkdir -p node_modules`.cwd(tmp.path).quiet()
+  await Bun.write(path.join(tmp.path, "node_modules", ".keep"), "")
+
+  let workerDir = ""
+  let workerSawNodeModules = false
+  const plugin = await createPlugin(tmp.path, tmp.path, {
+    async promptAsync(input) {
+      workerDir = input.query.directory
+      workerSawNodeModules = await Bun.file(path.join(workerDir, "node_modules", ".keep")).exists()
+      return {}
+    },
+  })
+
+  const result = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "write-task",
+          description: "write task in isolated worktree",
+          prompt: "Edit a file in the repository and verify dependencies are available.",
+          write: true,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_team_worktree",
+      messageID: "msg_team_worktree",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: AbortSignal.timeout(5000),
+      metadata() {},
+      ask() {
+        return undefined as never
+      },
+    },
+  )
+
+  expect(workerDir).not.toBe(tmp.path)
+  expect(workerSawNodeModules).toBeTrue()
+  expect(result).toContain("state: done")
+  expect(result).toContain("no_patch=true")
 })
