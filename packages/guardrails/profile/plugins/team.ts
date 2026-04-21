@@ -479,6 +479,26 @@ function runtimeSpec() {
   return runtime.map((item) => `:(exclude)${item}`)
 }
 
+async function ignoredCarrySpec(dir: string, kept: string[]) {
+  const roots = new Set(
+    kept
+      .map((item) => item.split(/[\\/]/)[0])
+      .filter((item): item is string => Boolean(item)),
+  )
+  const spec: string[] = []
+  for (const root of roots) {
+    const ignored = await git(dir, ["check-ignore", "-q", "--", root, `${root}/`])
+    if (ignored.code === 0) spec.push(`:(exclude)${root}`, `:(exclude)${root}/**`)
+  }
+  return spec
+}
+
+async function workFiles(dir: string, spec: string[]) {
+  const out = await git(dir, ["ls-files", "-z", "--modified", "--deleted", "--others", "--exclude-standard", "--", ".", ...spec])
+  if (out.code !== 0) throw new Error(out.err || out.out || "Failed to list worktree changes")
+  return out.out.split("\0").filter(Boolean)
+}
+
 function docs() {
   return [
     "AGENTS.md",
@@ -642,21 +662,23 @@ async function yardrm(dir: string, item: string) {
 
 async function merge(dir: string, item: string, run: string, id: string, kept: string[] = []) {
   await Promise.all(kept.map((file) => rm(path.join(item, file), { force: true, recursive: true }).catch(() => undefined)))
-  const spec = runtimeSpec()
+  const spec = [...runtimeSpec(), ...(await ignoredCarrySpec(item, kept))]
   // Stage all worker-owned files while excluding runtime state that is created locally during execution.
-  const add = await git(item, ["add", "-A", "--", ".", ...spec])
-  if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
-  const changed = await git(item, ["diff", "--cached", "--name-only", "--diff-filter=ACDMRTUXB", "--", ".", ...spec])
-  if (changed.code !== 0) throw new Error(changed.err || changed.out || "Failed to list worktree changes")
-  const files = changed.out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
+  const files = await workFiles(item, spec)
   if (!files.length) {
     await yardrm(dir, item)
     return { patch: "", merged: true }
   }
-  const diff = await git(item, ["diff", "--cached", "--binary", "--", ".", ...spec])
+  const add = await git(item, ["add", "-A", "--", ...files])
+  if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
+  const changed = await git(item, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACDMRTUXB", "--", ...files])
+  if (changed.code !== 0) throw new Error(changed.err || changed.out || "Failed to list worktree changes")
+  const staged = changed.out.split("\0").filter(Boolean)
+  if (!staged.length) {
+    await yardrm(dir, item)
+    return { patch: "", merged: true }
+  }
+  const diff = await git(item, ["diff", "--cached", "--binary", "--", ...staged])
   if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
   const next = patch(dir, run, id)
   await Bun.write(next, diff.out)
@@ -678,8 +700,8 @@ async function merge(dir: string, item: string, run: string, id: string, kept: s
   } catch { /* verification is advisory */ }
   // Auto-commit only the files produced by the worker patch so unrelated parent edits stay untouched.
   try {
-    if (files.length > 0) {
-      await git(dir, ["add", "--", ...files])
+    if (staged.length > 0) {
+      await git(dir, ["add", "--", ...staged])
       const commitMsg = `chore(team): apply worker changes from task ${id}`
       const commit = await git(dir, ["commit", "-m", commitMsg])
       if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
