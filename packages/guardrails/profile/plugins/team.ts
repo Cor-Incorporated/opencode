@@ -410,6 +410,18 @@ function projectRoot(directory: string, worktree: string) {
   return worktree && worktree !== "/" ? worktree : directory
 }
 
+function within(root: string, file: string) {
+  const rel = path.relative(root, file)
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+}
+
+function rebase(text: string, root: string, box: string) {
+  const src = path.resolve(root)
+  const dst = path.resolve(box)
+  if (src === dst) return text
+  return text.split(src).join(dst)
+}
+
 function rootkeep(dir: string) {
   if (dir === ".opencode") {
     return [
@@ -655,21 +667,21 @@ async function yardadd(dir: string, id: string) {
   // Step 1: Create worktree without checking out files (upstream pattern)
   const made = await git(dir, ["worktree", "add", "--detach", "--no-checkout", next, "HEAD"])
   if (made.code !== 0) {
-    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    await yardrm(dir, next)
     throw new Error(made.err || made.out || "Failed to create git worktree")
   }
 
   // Step 2: Hard reset to populate working directory (upstream pattern)
   const populated = await git(next, ["reset", "--hard"])
   if (populated.code !== 0) {
-    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    await yardrm(dir, next)
     throw new Error(`Worktree created but population failed: ${populated.err || populated.out}`)
   }
 
   // Step 3: Verify files are actually present in the working directory
   const check = await git(next, ["ls-files", "--cached"])
   if (check.code !== 0 || !check.out.trim()) {
-    await git(dir, ["worktree", "remove", "--force", next]).catch(() => {})
+    await yardrm(dir, next)
     throw new Error("Worktree is empty after reset --hard — cannot proceed with delegation")
   }
 
@@ -677,60 +689,61 @@ async function yardadd(dir: string, id: string) {
 }
 
 async function yardrm(dir: string, item: string) {
-  await git(dir, ["worktree", "remove", "--force", item])
+  const base = path.resolve(yard(dir))
+  const next = path.resolve(item)
+  if (!within(base, next)) return
+  await git(dir, ["worktree", "remove", "--force", next]).catch(() => undefined)
+  await rm(next, { force: true, recursive: true }).catch(() => undefined)
 }
 
 async function merge(dir: string, item: string, run: string, id: string, kept: string[] = []) {
-  await Promise.all(kept.map((file) => rm(path.join(item, file), { force: true, recursive: true }).catch(() => undefined)))
-  const spec = [...runtimeSpec(), ...(await ignoredCarrySpec(item, kept))]
-  // Stage all worker-owned files while excluding runtime state that is created locally during execution.
-  const files = await workFiles(item, spec)
-  if (!files.length) {
-    await yardrm(dir, item)
-    return { patch: "", merged: true }
-  }
-  const add = await git(item, ["add", "-A", "--", ...files])
-  if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
-  const changed = await git(item, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACDMRTUXB", "--", ...files])
-  if (changed.code !== 0) throw new Error(changed.err || changed.out || "Failed to list worktree changes")
-  const staged = changed.out.split("\0").filter(Boolean)
-  if (!staged.length) {
-    await yardrm(dir, item)
-    return { patch: "", merged: true }
-  }
-  const diff = await git(item, ["diff", "--cached", "--binary", "--", ...staged])
-  if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
-  const next = patch(dir, run, id)
-  await Bun.write(next, diff.out)
-  const out = await git(dir, ["apply", "--3way", next])
-  if (out.code !== 0) return { patch: next, merged: false, error: out.err || out.out || "Failed to apply patch" }
-  // [Phase6] Post-merge verification: confirm patch applied cleanly
-  const verification: { ok: boolean; issues: string[] } = { ok: true, issues: [] }
   try {
-    const diffStat = await git(dir, ["diff", "--stat", "HEAD"])
-    if (!diffStat.out.trim() && diff.out.trim()) {
-      verification.ok = false
-      verification.issues.push("Patch was non-empty but no diff detected after apply")
-    }
-    const status = await git(dir, ["status", "--porcelain"])
-    const untracked = status.out.trim().split("\n").filter((l: string) => l.startsWith("??")).length
-    if (untracked > 5) {
-      verification.issues.push(`${untracked} untracked files after merge — check for stale artifacts`)
-    }
-  } catch { /* verification is advisory */ }
-  // Auto-commit only the files produced by the worker patch so unrelated parent edits stay untouched.
-  try {
-    if (staged.length > 0) {
-      await git(dir, ["add", "--", ...staged])
-      const commitMsg = `chore(team): apply worker changes from task ${id}`
-      const commit = await git(dir, ["commit", "-m", commitMsg])
-      if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
-        verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
+    await Promise.all(kept.map((file) => rm(path.join(item, file), { force: true, recursive: true }).catch(() => undefined)))
+    const spec = [...runtimeSpec(), ...(await ignoredCarrySpec(item, kept))]
+    // Stage all worker-owned files while excluding runtime state that is created locally during execution.
+    const files = await workFiles(item, spec)
+    if (!files.length) return { patch: "", merged: true }
+    const add = await git(item, ["add", "-A", "--", ...files])
+    if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
+    const changed = await git(item, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACDMRTUXB", "--", ...files])
+    if (changed.code !== 0) throw new Error(changed.err || changed.out || "Failed to list worktree changes")
+    const staged = changed.out.split("\0").filter(Boolean)
+    if (!staged.length) return { patch: "", merged: true }
+    const diff = await git(item, ["diff", "--cached", "--binary", "--", ...staged])
+    if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
+    const next = patch(dir, run, id)
+    await Bun.write(next, diff.out)
+    const out = await git(dir, ["apply", "--3way", next])
+    if (out.code !== 0) return { patch: next, merged: false, error: out.err || out.out || "Failed to apply patch" }
+    // [Phase6] Post-merge verification: confirm patch applied cleanly
+    const verification: { ok: boolean; issues: string[] } = { ok: true, issues: [] }
+    try {
+      const diffStat = await git(dir, ["diff", "--stat", "HEAD"])
+      if (!diffStat.out.trim() && diff.out.trim()) {
+        verification.ok = false
+        verification.issues.push("Patch was non-empty but no diff detected after apply")
       }
-    }
-  } catch { /* auto-commit is best-effort; parent session can still commit manually */ }
-  await yardrm(dir, item)
-  return { patch: next, merged: true, verification }
+      const status = await git(dir, ["status", "--porcelain"])
+      const untracked = status.out.trim().split("\n").filter((l: string) => l.startsWith("??")).length
+      if (untracked > 5) {
+        verification.issues.push(`${untracked} untracked files after merge — check for stale artifacts`)
+      }
+    } catch { /* verification is advisory */ }
+    // Auto-commit only the files produced by the worker patch so unrelated parent edits stay untouched.
+    try {
+      if (staged.length > 0) {
+        await git(dir, ["add", "--", ...staged])
+        const commitMsg = `chore(team): apply worker changes from task ${id}`
+        const commit = await git(dir, ["commit", "-m", commitMsg])
+        if (commit.code !== 0 && !commit.err.includes("nothing to commit")) {
+          verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
+        }
+      }
+    } catch { /* auto-commit is best-effort; parent session can still commit manually */ }
+    return { patch: next, merged: true, verification }
+  } finally {
+    await yardrm(dir, item).catch(() => undefined)
+  }
 }
 
 async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
@@ -1014,10 +1027,10 @@ export default async function team(input: {
     const runRoot = projectRoot(ctx.directory, ctx.worktree)
     const repoRoot = ctx.worktree && ctx.worktree !== "/" ? ctx.worktree : undefined
     const push = write(item.prompt, item.write)
-    const prompt = direct(item.prompt)
     const useWorktree = push && item.worktree && !!repoRoot
     const box = useWorktree ? await yardadd(repoRoot, `${run.id}-${item.id}`) : ctx.directory
     const kept = useWorktree && repoRoot ? await carry(repoRoot, ctx.directory, box) : []
+    const prompt = direct(useWorktree && repoRoot ? rebase(item.prompt, repoRoot, box) : item.prompt)
 
     todo(run, item.id, {
       state: "running",

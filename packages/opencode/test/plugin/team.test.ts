@@ -269,6 +269,107 @@ test("team merge tolerates uncommitted removal of the .opencode gitignore rule",
   expect(await Bun.file(path.join(tmp.path, ".gitignore")).text()).not.toContain(".opencode/")
 })
 
+test("team rewrites parent absolute paths into isolated worker prompts", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await mkdir(path.join(dir, "src"), { recursive: true })
+      await Bun.write(path.join(dir, "src", "target.txt"), "before\n")
+      await Bun.$`git add src/target.txt`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let box = ""
+  const parent = path.join(tmp.path, "src", "target.txt")
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "ses_child_absolute_path" } }
+        },
+        async promptAsync(input) {
+          box = input.query.directory
+          const text = input.body.parts[0]?.text ?? ""
+          const target = path.join(box, "src", "target.txt")
+          expect(text).toContain(target)
+          expect(text).not.toContain(parent)
+          await Bun.write(target, "after\n")
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return { data: { ses_child_absolute_path: { type: "idle" } } }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  time: { completed: Date.now() },
+                },
+                parts: [{ type: "text", text: "done" }],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "absolute-path",
+          prompt: `Edit ${parent} and replace the contents with after.`,
+          write: true,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: AbortSignal.timeout(5000),
+      metadata() {},
+      ask() {
+        return undefined as never
+      },
+    },
+  )
+
+  expect(out).toContain("- absolute-path: done")
+  expect(box).toContain(path.join(".opencode", "team"))
+  expect(await Bun.file(parent).text()).toBe("after\n")
+  const list = await readdir(path.join(tmp.path, ".opencode", "team"), { withFileTypes: true }).catch(() => [])
+  expect(list.filter((item) => item.isDirectory()).length).toBe(0)
+})
+
 test("background success clears the parallel implementation gate", async () => {
   await using tmp = await tmpdir({ git: true })
   const plugin = await createPlugin(tmp.path)
