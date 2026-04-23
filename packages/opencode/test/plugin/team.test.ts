@@ -567,3 +567,61 @@ test("team worktrees carry root node_modules into isolated write tasks", async (
   expect(result).toContain("state: done")
   expect(result).toContain("no_patch=true")
 })
+
+test("team does not finish on non-completed progress when child status disappears", async () => {
+  await using tmp = await tmpdir()
+  let turn = 0
+  const abort = new AbortController()
+  const plugin = await createPlugin(tmp.path, tmp.path, {
+    async status() {
+      turn += 1
+      if (turn === 1) return { data: { ses_child: { type: "busy" } } }
+      return { data: {} as Record<string, { type: string }> }
+    },
+    async messages() {
+      return {
+        data: [
+          {
+            info: {
+              role: "assistant",
+            },
+            parts: [{ type: "text", text: "Inspecting the repository before editing." }],
+          },
+        ],
+      }
+    },
+  })
+
+  setTimeout(() => abort.abort(), 1100)
+
+  await expect(
+    plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "verify",
+            prompt: "check repo facts",
+            write: false,
+            worktree: false,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: abort.signal,
+        metadata() {},
+        ask() {
+          return undefined as never
+        },
+      },
+    ),
+  ).rejects.toThrow("Aborted")
+
+  expect(turn).toBeGreaterThanOrEqual(2)
+})

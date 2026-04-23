@@ -337,6 +337,7 @@ function direct(text: string) {
 - Prefer file inspection tools such as Glob, Read, and Grep over bash for repository discovery whenever possible.
 - Use bash only when the non-shell tools cannot answer the question or complete the step.
 - Do not invoke nested OpenCode slash commands from inside this team worker.
+- Do not create git branches, clones, nested repositories, or nested worktrees. The team tool already created the isolated worktree; edit files in the current directory directly.
 - If you are running in an isolated worktree, operate only on files inside the current worktree directory. Do not read from or write to the parent repository path directly.
 
 ${next}`
@@ -764,7 +765,6 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
     const item = stat.data?.[id]
     if (!item) {
       if (hit.idle.has(id)) return
-      if (seen) return
       await Bun.sleep(gap)
       continue
     }
