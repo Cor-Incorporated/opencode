@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdir, readdir } from "fs/promises"
+import { mkdir, readdir, rm } from "fs/promises"
 import path from "path"
 import team from "../../../../packages/guardrails/profile/plugins/team"
 import { Instance } from "../../src/project/instance"
@@ -566,4 +566,62 @@ test("team worktrees carry root node_modules into isolated write tasks", async (
   expect(workerSawNodeModules).toBeTrue()
   expect(result).toContain("state: done")
   expect(result).toContain("no_patch=true")
+})
+
+test("team rejects a task directory outside the active worktree and removes provisional worktrees", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const outside = path.join(path.dirname(tmp.path), `opencode-outside-${crypto.randomUUID()}`)
+  await mkdir(outside, { recursive: true })
+
+  const plugin = await createPlugin(tmp.path, tmp.path, {
+    async create() {
+      throw new Error("session create should not run")
+    },
+    async promptAsync() {
+      throw new Error("prompt should not run")
+    },
+  })
+
+  try {
+    await expect(
+      plugin.tool.team.execute(
+        {
+          strategy: "parallel",
+          limit: 1,
+          tasks: [
+            {
+              id: "outside",
+              prompt: "write a file",
+              write: true,
+            },
+          ],
+        },
+        {
+          sessionID: "ses_parent",
+          messageID: "msg_parent",
+          agent: "implement",
+          directory: outside,
+          worktree: tmp.path,
+          abort: AbortSignal.timeout(5000),
+          metadata() {},
+          ask() {
+            return undefined as never
+          },
+        },
+      ),
+    ).rejects.toThrow("directory is outside worktree")
+
+    const list = await readdir(path.join(tmp.path, ".opencode", "team"), { withFileTypes: true }).catch(() => [])
+    expect(list.filter((item) => item.isDirectory()).length).toBe(0)
+  } finally {
+    await rm(outside, { recursive: true, force: true })
+  }
 })
