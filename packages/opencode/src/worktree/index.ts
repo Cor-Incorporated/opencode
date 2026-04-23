@@ -245,18 +245,20 @@ export const layer: Layer.Layer<
       const workspaceID = yield* InstanceState.workspaceID
       const projectID = ctx.project.id
       const extra = startCommand?.trim()
-
-      const populated = yield* git(["reset", "--hard"], { cwd: info.directory })
-      if (populated.code !== 0) {
-        const message = populated.stderr || populated.text || "Failed to populate worktree"
-        log.error("worktree checkout failed", { directory: info.directory, message })
+      const failed = (message: string) =>
         GlobalBus.emit("event", {
           directory: info.directory,
           project: ctx.project.id,
           workspace: workspaceID,
           payload: { type: Event.Failed.type, properties: { message } },
         })
-        return
+
+      const populated = yield* git(["reset", "--hard"], { cwd: info.directory })
+      if (populated.code !== 0) {
+        const message = populated.stderr || populated.text || "Failed to populate worktree"
+        log.error("worktree checkout failed", { directory: info.directory, message })
+        failed(message)
+        return { ok: false, message }
       }
 
       const booted = yield* Effect.promise(() =>
@@ -269,16 +271,17 @@ export const layer: Layer.Layer<
           .catch((error) => {
             const message = errorMessage(error)
             log.error("worktree bootstrap failed", { directory: info.directory, message })
-            GlobalBus.emit("event", {
-              directory: info.directory,
-              project: ctx.project.id,
-              workspace: workspaceID,
-              payload: { type: Event.Failed.type, properties: { message } },
-            })
+            failed(message)
             return false
           }),
       )
-      if (!booted) return
+      if (!booted) return { ok: false, message: "Failed to bootstrap worktree" }
+
+      const started = yield* runStartScripts(info.directory, { projectID, extra })
+      if (!started.ok) {
+        failed(started.message)
+        return started
+      }
 
       GlobalBus.emit("event", {
         directory: info.directory,
@@ -289,13 +292,13 @@ export const layer: Layer.Layer<
           properties: { name: info.name, branch: info.branch },
         },
       })
-
-      yield* runStartScripts(info.directory, { projectID, extra })
+      return { ok: true as const }
     })
 
     const createFromInfo = Effect.fn("Worktree.createFromInfo")(function* (info: Info, startCommand?: string) {
       yield* setup(info)
-      yield* boot(info, startCommand)
+      const result = yield* boot(info, startCommand)
+      if (!result.ok) throw new StartCommandFailedError({ message: result.message })
     })
 
     const create = Effect.fn("Worktree.create")(function* (input?: CreateInput) {
@@ -450,11 +453,12 @@ export const layer: Layer.Layer<
 
     const runStartScript = Effect.fnUntraced(function* (directory: string, cmd: string, kind: string) {
       const text = cmd.trim()
-      if (!text) return true
+      if (!text) return { ok: true as const }
       const result = yield* runStartCommand(directory, text)
-      if (result.code === 0) return true
-      log.error("worktree start command failed", { kind, directory, message: result.stderr })
-      return false
+      if (result.code === 0) return { ok: true as const }
+      const message = result.stderr || `Worktree ${kind} start command failed`
+      log.error("worktree start command failed", { kind, directory, message })
+      return { ok: false as const, message }
     })
 
     const runStartScripts = Effect.fnUntraced(function* (
@@ -467,9 +471,8 @@ export const layer: Layer.Layer<
       const project = row ? Project.fromRow(row) : undefined
       const startup = project?.commands?.start?.trim() ?? ""
       const ok = yield* runStartScript(directory, startup, "project")
-      if (!ok) return false
-      yield* runStartScript(directory, input.extra ?? "", "worktree")
-      return true
+      if (!ok.ok) return ok
+      return yield* runStartScript(directory, input.extra ?? "", "worktree")
     })
 
     const prune = Effect.fnUntraced(function* (root: string, entries: string[]) {

@@ -36,6 +36,26 @@ async function waitReady() {
   })
 }
 
+async function waitFailed() {
+  const { GlobalBus } = await import("../../src/bus/global")
+
+  return await new Promise<{ message: string }>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      GlobalBus.off("event", on)
+      reject(new Error("timed out waiting for worktree.failed"))
+    }, 10_000)
+
+    function on(evt: { directory?: string; payload: { type: string; properties: { message: string } } }) {
+      if (evt.payload.type !== Worktree.Event.Failed.type) return
+      clearTimeout(timer)
+      GlobalBus.off("event", on)
+      resolve(evt.payload.properties)
+    }
+
+    GlobalBus.on("event", on)
+  })
+}
+
 describe("Worktree", () => {
   afterEach(() => Instance.disposeAll())
 
@@ -156,6 +176,45 @@ describe("Worktree", () => {
             expect(info.branch).toBe("opencode/test-workspace")
 
             yield* Effect.promise(() => ready)
+            yield* Effect.promise(() => Instance.dispose()).pipe(provideInstance(info.directory))
+            yield* Effect.promise(() => Bun.sleep(100))
+            yield* svc.remove({ directory: info.directory })
+          }),
+        { git: true },
+      ),
+    )
+
+    it.live("fires Event.Ready only after start command completes", () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+            const ready = waitReady()
+            const info = yield* svc.create({ startCommand: "printf started > .opencode-started" })
+
+            yield* Effect.promise(() => ready)
+            const marker = yield* Effect.promise(() => fs.readFile(path.join(info.directory, ".opencode-started"), "utf8"))
+            expect(marker).toBe("started")
+
+            yield* Effect.promise(() => Instance.dispose()).pipe(provideInstance(info.directory))
+            yield* Effect.promise(() => Bun.sleep(100))
+            yield* svc.remove({ directory: info.directory })
+          }),
+        { git: true },
+      ),
+    )
+
+    it.live("emits Event.Failed when start command fails", () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+            const failed = waitFailed()
+            const info = yield* svc.create({ startCommand: "echo start failed >&2; exit 7" })
+
+            const props = yield* Effect.promise(() => failed)
+            expect(props.message).toContain("start failed")
+
             yield* Effect.promise(() => Instance.dispose()).pipe(provideInstance(info.directory))
             yield* Effect.promise(() => Bun.sleep(100))
             yield* svc.remove({ directory: info.directory })

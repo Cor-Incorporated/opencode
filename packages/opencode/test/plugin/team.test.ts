@@ -370,6 +370,54 @@ test("team rewrites parent absolute paths into isolated worker prompts", async (
   expect(list.filter((item) => item.isDirectory()).length).toBe(0)
 })
 
+test("team cleans up isolated worktree when worker prompt fails", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "tracked.txt"), "tracked\n")
+      await Bun.$`git add tracked.txt`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const plugin = await createPlugin(tmp.path, tmp.path, {
+    async promptAsync() {
+      throw new Error("worker prompt failed")
+    },
+  })
+
+  await expect(
+    plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "failing-worker",
+            prompt: "Edit tracked.txt",
+            write: true,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: AbortSignal.timeout(5000),
+        metadata() {},
+        ask() {
+          return undefined as never
+        },
+      },
+    ),
+  ).rejects.toThrow("worker prompt failed")
+
+  const list = await readdir(path.join(tmp.path, ".opencode", "team"), { withFileTypes: true }).catch(() => [])
+  expect(list.filter((item) => item.isDirectory()).length).toBe(0)
+})
+
 test("background success clears the parallel implementation gate", async () => {
   await using tmp = await tmpdir({ git: true })
   const plugin = await createPlugin(tmp.path)
