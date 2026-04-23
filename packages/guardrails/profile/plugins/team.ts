@@ -1,4 +1,4 @@
-import { cp, lstat, mkdir, readdir, readlink, rm, symlink } from "fs/promises"
+import { cp, lstat, mkdir, readdir, readlink, realpath, rm, symlink } from "fs/promises"
 import path from "path"
 import { tool } from "@opencode-ai/plugin"
 import { Background } from "../../../opencode/src/util/background"
@@ -564,6 +564,10 @@ async function graft(src: string, dst: string) {
 }
 
 async function carry(root: string, dir: string, next: string) {
+  const base = path.resolve(root)
+  const cwd = path.resolve(dir)
+  if (!within(base, cwd)) throw new Error(`Cannot prepare team worktree: directory is outside worktree (${dir})`)
+
   const kept: string[] = []
   for (let cur = dir;; cur = path.dirname(cur)) {
     const rel = path.relative(root, cur)
@@ -654,34 +658,54 @@ async function scan(dir: string) {
 }
 
 async function yardadd(dir: string, id: string) {
-  const base = yard(dir)
-  const next = path.join(base, slug(id))
+  const repo = await git(dir, ["rev-parse", "--show-toplevel"])
+  if (repo.code !== 0) {
+    throw new Error(`Cannot create worktree: ${dir} is not a git repository.`)
+  }
+
+  const top = await realpath(repo.out.trim()).catch(() => path.resolve(repo.out.trim() || dir))
+  const cwd = await realpath(dir).catch(() => path.resolve(dir))
+  if (!within(top, cwd)) {
+    throw new Error(`Cannot create worktree: ${dir} is outside git root ${top}.`)
+  }
+
+  const base = path.resolve(yard(cwd))
+  const next = path.join(base, slug(id) || "task")
+  if (!within(base, next)) {
+    throw new Error(`Cannot create worktree outside ${base}.`)
+  }
+
+  const drop = async () => {
+    await git(cwd, ["worktree", "remove", "--force", next]).catch(() => {})
+    await rm(next, { force: true, recursive: true }).catch(() => {})
+  }
+
   await mkdir(base, { recursive: true })
 
   // Verify repository has commits
-  const head = await git(dir, ["rev-parse", "--verify", "HEAD"])
+  const head = await git(cwd, ["rev-parse", "--verify", "HEAD"])
   if (head.code !== 0) {
     throw new Error("Cannot create worktree: repository has no commits. Create an initial commit first.")
   }
 
   // Step 1: Create worktree without checking out files (upstream pattern)
-  const made = await git(dir, ["worktree", "add", "--detach", "--no-checkout", next, "HEAD"])
+  const made = await git(cwd, ["worktree", "add", "--detach", "--no-checkout", next, "HEAD"])
   if (made.code !== 0) {
-    await yardrm(dir, next)
+    await drop()
     throw new Error(made.err || made.out || "Failed to create git worktree")
   }
 
   // Step 2: Hard reset to populate working directory (upstream pattern)
   const populated = await git(next, ["reset", "--hard"])
   if (populated.code !== 0) {
-    await yardrm(dir, next)
+    await drop()
     throw new Error(`Worktree created but population failed: ${populated.err || populated.out}`)
   }
 
   // Step 3: Verify files are actually present in the working directory
   const check = await git(next, ["ls-files", "--cached"])
   if (check.code !== 0 || !check.out.trim()) {
-    await yardrm(dir, next)
+    await drop()
     throw new Error("Worktree is empty after reset --hard — cannot proceed with delegation")
   }
 
@@ -1028,91 +1052,104 @@ export default async function team(input: {
     const repoRoot = ctx.worktree && ctx.worktree !== "/" ? ctx.worktree : undefined
     const push = write(item.prompt, item.write)
     const useWorktree = push && item.worktree && !!repoRoot
-    const box = useWorktree ? await yardadd(repoRoot, `${run.id}-${item.id}`) : ctx.directory
-    const kept = useWorktree && repoRoot ? await carry(repoRoot, ctx.directory, box) : []
-    const prompt = direct(useWorktree && repoRoot ? rebase(item.prompt, repoRoot, box) : item.prompt)
+    let box = ctx.directory
+    let kept: string[] = []
+    let child = ""
 
-    todo(run, item.id, {
-      state: "running",
-      dir: box,
-    })
-    await save(runRoot, run)
+    try {
+      if (useWorktree && repoRoot) {
+        box = await yardadd(repoRoot, `${run.id}-${item.id}`)
+        kept = await carry(repoRoot, ctx.directory, box)
+      }
+      const prompt = direct(useWorktree && repoRoot ? rebase(item.prompt, repoRoot, box) : item.prompt)
 
-    const made = await input.client.session.create({
-      body: {
-        parentID: ctx.sessionID,
-        title: item.description,
-        permission: permit(ctx.permission),
-      },
-      query: {
-        directory: box,
-      },
-    })
-    kids.add(made.data.id)
+      todo(run, item.id, {
+        state: "running",
+        dir: box,
+      })
+      await save(runRoot, run)
 
-    todo(run, item.id, {
-      session: made.data.id,
-    })
-    await save(runRoot, run)
-
-    await input.client.session.promptAsync({
-      path: { id: made.data.id },
-      query: {
-        directory: box,
-      },
-      body: {
-        agent: item.agent || undefined,
-        model: {
-          providerID: item.provider,
-          modelID: item.model,
+      const made = await input.client.session.create({
+        body: {
+          parentID: ctx.sessionID,
+          title: item.description,
+          permission: permit(ctx.permission),
         },
-        tools: push
-          ? undefined
-          : {
-              edit: false,
-              write: false,
-              apply_patch: false,
-              task: false,
-              todowrite: false,
-            },
-        variant: item.variant || undefined,
-        parts: [
-          {
-            type: "text",
-            text: prompt,
+        query: {
+          directory: box,
+        },
+      })
+      child = made.data.id
+      kids.add(child)
+
+      todo(run, item.id, {
+        session: child,
+      })
+      await save(runRoot, run)
+
+      await input.client.session.promptAsync({
+        path: { id: child },
+        query: {
+          directory: box,
+        },
+        body: {
+          agent: item.agent || undefined,
+          model: {
+            providerID: item.provider,
+            modelID: item.model,
           },
-        ],
-      },
-    })
+          tools: push
+            ? undefined
+            : {
+                edit: false,
+                write: false,
+                apply_patch: false,
+                task: false,
+                todowrite: false,
+              },
+          variant: item.variant || undefined,
+          parts: [
+            {
+              type: "text",
+              text: prompt,
+            },
+          ],
+        },
+      })
 
-    await idle(input.client, made.data.id, box, ctx.abort)
-    const out = await snap(input.client, made.data.id, box)
+      await idle(input.client, child, box, ctx.abort)
+      const out = await snap(input.client, child, box)
 
-    let patchfile = ""
-    let err = out.error
-    // [Phase6] Classify failure stage for abort reason tracking
-    let failure_stage: Step["failure_stage"] = undefined
-    if (!err && useWorktree && repoRoot && box !== ctx.directory) {
-      const merged = await merge(repoRoot, box, run.id, item.id, kept)
-      patchfile = merged.patch
-      if (!merged.merged) {
-        err = merged.error || "Failed to merge worktree patch"
-        failure_stage = "merge_back"
+      let patchfile = ""
+      let err = out.error
+      // [Phase6] Classify failure stage for abort reason tracking
+      let failure_stage: Step["failure_stage"] = undefined
+      if (!err && useWorktree && repoRoot && box !== ctx.directory) {
+        const merged = await merge(repoRoot, box, run.id, item.id, kept)
+        patchfile = merged.patch
+        if (!merged.merged) {
+          err = merged.error || "Failed to merge worktree patch"
+          failure_stage = "merge_back"
+        }
+      }
+      if (err && !failure_stage) failure_stage = stage(err)
+
+      todo(run, item.id, {
+        state: err ? "error" : "done",
+        patch: patchfile,
+        no_patch: !err && item.write && useWorktree && patchfile === "",
+        output: out.text,
+        error: err,
+        failure_stage: err ? failure_stage : undefined,
+      })
+      await save(runRoot, run)
+      if (err) throw new Error(err)
+      return out.text
+    } finally {
+      if (repoRoot && box !== ctx.directory) {
+        await yardrm(repoRoot, box).catch(() => {})
       }
     }
-    if (err && !failure_stage) failure_stage = stage(err)
-
-    todo(run, item.id, {
-      state: err ? "error" : "done",
-      patch: patchfile,
-      no_patch: !err && item.write && useWorktree && patchfile === "",
-      output: out.text,
-      error: err,
-      failure_stage: err ? failure_stage : undefined,
-    })
-    await save(runRoot, run)
-    if (err) throw new Error(err)
-    return out.text
   }
 
   const team = tool({
