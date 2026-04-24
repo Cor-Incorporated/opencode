@@ -1190,14 +1190,16 @@ export default async function team(input: { client: Client; worktree: string; di
     const runRoot = projectRoot(ctx.directory, ctx.worktree)
     const repoRoot = ctx.worktree && ctx.worktree !== "/" ? ctx.worktree : undefined
     const push = write(item.prompt, item.write)
-    const target = repoRoot && push ? await externalWorktree(repoRoot, item.prompt) : undefined
-    const useExistingWorktree = push && item.worktree && !!target
-    const useWorktree = push && item.worktree && !!repoRoot && !useExistingWorktree
+    let useWorktree = false
     let box = ctx.directory
     let kept: string[] = []
     let child = ""
 
     try {
+      const target = repoRoot && push ? await externalWorktree(repoRoot, item.prompt) : undefined
+      const useExistingWorktree = push && item.worktree && !!target
+      useWorktree = push && item.worktree && !!repoRoot && !useExistingWorktree
+
       if (useExistingWorktree && target) {
         box = target
       } else if (useWorktree && repoRoot) {
@@ -1299,6 +1301,18 @@ export default async function team(input: { client: Client; worktree: string; di
       await save(runRoot, run)
       if (err) throw new Error(err)
       return out.text
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err)
+      const current = run.tasks.find((step) => step.id === item.id)
+      if (current && current.state !== "error") {
+        todo(run, item.id, {
+          state: "error",
+          error: text,
+          failure_stage: current.failure_stage || why(current, text),
+        })
+        await save(runRoot, run).catch(() => undefined)
+      }
+      throw err
     } finally {
       if (useWorktree && repoRoot && box !== ctx.directory) {
         await yardrm(repoRoot, box).catch(() => {})
@@ -1388,10 +1402,13 @@ export default async function team(input: { client: Client; worktree: string; di
       const active = new Map<string, Promise<void>>()
 
       const launch = (item: Step) => {
-        const task = job(req, run, item).then(() => {
-          done.add(item.id)
-          active.delete(item.id)
-        })
+        const task = job(req, run, item)
+          .then(() => {
+            done.add(item.id)
+          })
+          .finally(() => {
+            active.delete(item.id)
+          })
         active.set(item.id, task)
         return task
       }
