@@ -17,6 +17,10 @@ type Review = {
 }
 
 export function createGitHandlers(ctx: GuardrailContext, review: Review) {
+  function teamWorker() {
+    return /(?:^|[\\/])\.opencode[\\/]team[\\/]/.test(ctx.input.worktree)
+  }
+
   async function bashBeforeGit(cmd: string, out: { output?: string }, data: Record<string, unknown>) {
     const isMerge = /\bgit\s+merge(\s|$)/i.test(cmd) || /\bgh\s+pr\s+merge(\s|$)/i.test(cmd)
     const isPrMerge = /\bgh\s+pr\s+merge\b/i.test(cmd)
@@ -138,6 +142,11 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     }
 
     const protectedBranch = /^(main|master|develop|dev)$/
+    if (/\bgit\s+stash\s+pop\b/i.test(cmd)) {
+      await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "stash pop blocked: use apply then drop" })
+      throw new Error("Guardrail policy blocked this action: stash pop blocked: use `git stash apply`, inspect conflicts, then `git stash drop` after verification")
+    }
+
     if (/\bgit\s+push\b/i.test(cmd)) {
       const explicitMatch = cmd.match(/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+(?:HEAD:)?(\S+)/i)
       if (explicitMatch && protectedBranch.test(explicitMatch[1])) {
@@ -161,6 +170,11 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
 
     if (/\bgit\s+(checkout\s+-b|switch\s+-c)\b/i.test(cmd)) {
       try {
+        const status = await git(ctx.input.worktree, ["status", "--porcelain"])
+        if (status.code === 0 && status.stdout.trim()) {
+          await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "branch creation with dirty worktree blocked" })
+          throw new Error("Guardrail policy blocked this action: branch creation blocked because the worktree has uncommitted changes. Commit or use `git stash push --include-untracked` before creating the branch.")
+        }
         const devCheck = await git(ctx.input.worktree, ["rev-parse", "--verify", "origin/develop"])
         if (devCheck.code === 0 && devCheck.stdout.trim()) {
           const branchCheck = await git(ctx.input.worktree, ["branch", "--show-current"])
@@ -176,6 +190,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     }
 
     if (/\bgit\s+(cherry-pick)\b/i.test(cmd) && !/--abort\b/i.test(cmd)) {
+      if (teamWorker()) return
       await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "cherry-pick blocked: delegate to Codex CLI" })
       throw new Error("Guardrail policy blocked this action: cherry-pick blocked: delegate to Codex CLI for context-heavy merge operations")
     }
@@ -433,4 +448,3 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
 
   return { bashBeforeGit, bashAfterGit }
 }
-

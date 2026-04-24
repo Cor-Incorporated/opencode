@@ -90,7 +90,10 @@ type Client = {
   }
   session: {
     get(input: { path: { id: string }; query: { directory: string } }): Promise<{ data?: { permission?: Rule[] } }>
-    create(input: { body: { parentID: string; title: string; permission?: Rule[] }; query: { directory: string } }): Promise<{ data: { id: string } }>
+    create(input: {
+      body: { parentID: string; title: string; permission?: Rule[] }
+      query: { directory: string }
+    }): Promise<{ data: { id: string } }>
     promptAsync(input: {
       path: { id: string }
       query: { directory: string }
@@ -209,9 +212,7 @@ function summary(parts: Note[]) {
   return parts
     .filter(
       (item): item is { type: "tool"; state: { status: string; output: string } } =>
-        item.type === "tool" &&
-        item.state?.status === "completed" &&
-        typeof item.state.output === "string",
+        item.type === "tool" && item.state?.status === "completed" && typeof item.state.output === "string",
     )
     .map((item) => item.state.output.trim())
     .filter(Boolean)
@@ -286,20 +287,22 @@ function redir(cmd: string) {
 
 function mut(cmd: string) {
   const data = scrub(cmd)
-  return [
-    /\brm\s+/i,
-    /\bmv\s+/i,
-    /\bcp\s+/i,
-    /\bchmod\b/i,
-    /\bchown\b/i,
-    /\btouch\b/i,
-    /\btruncate\b/i,
-    /\btee\b/i,
-    /\bsed\s+-i\b/i,
-    /\bperl\s+-pi\b/i,
-    /\bgit\s+(apply|am|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
-    /\bgit\s+merge(\s|$)/i,
-  ].some((item) => item.test(data)) || redir(data)
+  return (
+    [
+      /\brm\s+/i,
+      /\bmv\s+/i,
+      /\bcp\s+/i,
+      /\bchmod\b/i,
+      /\bchown\b/i,
+      /\btouch\b/i,
+      /\btruncate\b/i,
+      /\btee\b/i,
+      /\bsed\s+-i\b/i,
+      /\bperl\s+-pi\b/i,
+      /\bgit\s+(apply|am|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
+      /\bgit\s+merge(\s|$)/i,
+    ].some((item) => item.test(data)) || redir(data)
+  )
 }
 
 function big(text: string) {
@@ -307,13 +310,16 @@ function big(text: string) {
   if (!data) return false
   // Exempt read-only investigation requests that start with investigation verbs
   // and do NOT contain write-intent keywords
-  const readOnly = /^\s*(investigate|diagnose|explain|analyze|check|status|report|describe|show|list|review|audit|inspect|確認|調査|分析|説明|レビュー)/i.test(data)
-    && !/(implement|create|rewrite|patch|refactor|fix|add|edit|write|modify|実装|改修|修正|追加)/i.test(data)
+  const readOnly =
+    /^\s*(investigate|diagnose|explain|analyze|check|status|report|describe|show|list|review|audit|inspect|確認|調査|分析|説明|レビュー)/i.test(
+      data,
+    ) && !/(implement|create|rewrite|patch|refactor|fix|add|edit|write|modify|実装|改修|修正|追加)/i.test(data)
   if (readOnly) return false
   const plan = (data.match(/^\s*([-*]|\d+\.)\s+/gm) ?? []).length
-  const impl = /(implement|implementation|build|create|add|fix|refactor|rewrite|patch|parallel|subagent|team|background|worker|修正|実装|追加|改修|並列|サブエージェント|チーム)/i.test(
-    data,
-  )
+  const impl =
+    /(implement|implementation|build|create|add|fix|refactor|rewrite|patch|parallel|subagent|team|background|worker|修正|実装|追加|改修|並列|サブエージェント|チーム)/i.test(
+      data,
+    )
   const wide =
     data.length >= 500 ||
     plan >= 3 ||
@@ -328,15 +334,18 @@ function write(text: string, flag?: boolean) {
 
 function direct(text: string) {
   const next = /\bopencode\s+run\s+\/init\b/i.test(text)
-    ? text.replace(
-      /\bopencode\s+run\s+\/init\b/gi,
-      "perform the equivalent /init repository inspection and AGENTS.md bootstrap directly in this worktree",
-    ).trim()
+    ? text
+        .replace(
+          /\bopencode\s+run\s+\/init\b/gi,
+          "perform the equivalent /init repository inspection and AGENTS.md bootstrap directly in this worktree",
+        )
+        .trim()
     : text.trim()
   return `Worker execution rules:
 - Prefer file inspection tools such as Glob, Read, and Grep over bash for repository discovery whenever possible.
 - Use bash only when the non-shell tools cannot answer the question or complete the step.
 - Do not invoke nested OpenCode slash commands from inside this team worker.
+- Do not create git branches, clones, nested repositories, or nested worktrees. The team tool already created the isolated worktree; edit files in the current directory directly.
 - If you are running in an isolated worktree, operate only on files inside the current worktree directory. Do not read from or write to the parent repository path directly.
 
 ${next}`
@@ -362,6 +371,15 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "git show*", action: "allow" as const },
     { permission: "bash", pattern: "git ls-files*", action: "allow" as const },
     { permission: "bash", pattern: "git grep *", action: "allow" as const },
+    { permission: "bash", pattern: "git restore *", action: "allow" as const },
+    { permission: "bash", pattern: "git checkout -- *", action: "allow" as const },
+    { permission: "bash", pattern: "git rebase origin/develop", action: "allow" as const },
+    { permission: "bash", pattern: "git rebase develop", action: "allow" as const },
+    { permission: "bash", pattern: "git rebase origin/main", action: "allow" as const },
+    { permission: "bash", pattern: "git rebase main", action: "allow" as const },
+    { permission: "bash", pattern: "git rebase --continue", action: "allow" as const },
+    { permission: "bash", pattern: "git rebase --skip", action: "allow" as const },
+    { permission: "bash", pattern: "git cherry-pick *", action: "allow" as const },
     { permission: "bash", pattern: "opencode *", action: "deny" as const },
     { permission: "bash", pattern: "claude *", action: "deny" as const },
     { permission: "bash", pattern: "codex *", action: "deny" as const },
@@ -406,10 +424,6 @@ function yard(dir: string) {
   return path.join(dir, ".opencode", "team")
 }
 
-function projectRoot(directory: string, worktree: string) {
-  return worktree && worktree !== "/" ? worktree : directory
-}
-
 function within(root: string, file: string) {
   const rel = path.relative(root, file)
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
@@ -420,6 +434,27 @@ function rebase(text: string, root: string, box: string) {
   const dst = path.resolve(box)
   if (src === dst) return text
   return text.split(src).join(dst)
+}
+
+function cleanHint(text: string) {
+  return text.trim().replace(/^[`'"]+|[`'",.)\]]+$/g, "")
+}
+
+function worktreeHint(text: string) {
+  const direct = [
+    /(?:git\s+)?worktree[\s\S]{0,120}?(?:at|path|directory|dir|:|：)[\s\S]{0,40}?`([^`\n]+)`/i,
+    /(?:ワークツリー|作業ツリー)[\s\S]{0,120}?`([^`\n]+)`/i,
+    /`(\/[^`\n]*\/\.worktrees\/[^`\n]+)`/i,
+  ]
+  for (const rule of direct) {
+    const match = text.match(rule)
+    const hit = cleanHint(match?.[1] ?? "")
+    if (hit && path.isAbsolute(hit)) return hit
+  }
+}
+
+function projectRoot(directory: string, worktree: string) {
+  return worktree && worktree !== "/" ? worktree : directory
 }
 
 function rootkeep(dir: string) {
@@ -449,55 +484,32 @@ function rootkeep(dir: string) {
   }
 
   if (dir === ".claude") {
-    return [
-      "agents",
-      "commands",
-      "hooks",
-      "settings.json",
-      "settings.local.json",
-      "skills",
-    ]
+    return ["agents", "commands", "hooks", "settings.json", "settings.local.json", "skills"]
   }
 
   if (dir === ".agents") {
-    return [
-      "agents",
-      "commands",
-      "hooks",
-      "skills",
-    ]
+    return ["agents", "commands", "hooks", "skills"]
   }
 
   if (dir === ".cursor") {
-    return [
-      "rules",
-    ]
+    return ["rules"]
   }
 
   if (dir === ".github") {
-    return [
-      "copilot-instructions.md",
-    ]
+    return ["copilot-instructions.md"]
   }
 
   return []
 }
 
-const runtime = [
-  ".opencode/guardrails",
-  ".opencode/memory",
-]
+const runtime = [".opencode/guardrails", ".opencode/memory"]
 
 function runtimeSpec() {
   return runtime.map((item) => `:(exclude)${item}`)
 }
 
 async function ignoredCarrySpec(dir: string, kept: string[]) {
-  const roots = new Set(
-    kept
-      .map((item) => item.split(/[\\/]/)[0])
-      .filter((item): item is string => Boolean(item)),
-  )
+  const roots = new Set(kept.map((item) => item.split(/[\\/]/)[0]).filter((item): item is string => Boolean(item)))
   const spec: string[] = []
   for (const root of roots) {
     const ignored = await git(dir, ["check-ignore", "-q", "--", root, `${root}/`])
@@ -507,42 +519,37 @@ async function ignoredCarrySpec(dir: string, kept: string[]) {
 }
 
 async function workFiles(dir: string, spec: string[]) {
-  const out = await git(dir, ["ls-files", "-z", "--modified", "--deleted", "--others", "--exclude-standard", "--", ".", ...spec])
+  const out = await git(dir, [
+    "ls-files",
+    "-z",
+    "--modified",
+    "--deleted",
+    "--others",
+    "--exclude-standard",
+    "--",
+    ".",
+    ...spec,
+  ])
   if (out.code !== 0) throw new Error(out.err || out.out || "Failed to list worktree changes")
   return out.out.split("\0").filter(Boolean)
 }
 
 function docs() {
-  return [
-    "AGENTS.md",
-    "OPENCODE.md",
-    "CLAUDE.md",
-    "CONTEXT.md",
-  ]
+  return ["AGENTS.md", "OPENCODE.md", "CLAUDE.md", "CONTEXT.md"]
 }
 
 function roots() {
-  return [
-    ".opencode",
-    ".claude",
-    ".agents",
-    ".cursor",
-    ".github",
-  ]
+  return [".opencode", ".claude", ".agents", ".cursor", ".github"]
 }
 
 function workspaceRuntime() {
-  return [
-    "node_modules",
-    ".pnpm-store",
-    ".yarn",
-    ".pnp.cjs",
-    ".pnp.loader.mjs",
-  ]
+  return ["node_modules", ".pnpm-store", ".yarn", ".pnp.cjs", ".pnp.loader.mjs"]
 }
 
 async function has(file: string) {
-  return lstat(file).then(() => true).catch(() => false)
+  return lstat(file)
+    .then(() => true)
+    .catch(() => false)
 }
 
 async function graft(src: string, dst: string) {
@@ -551,7 +558,9 @@ async function graft(src: string, dst: string) {
 
   const kind = stat.isDirectory() ? (process.platform === "win32" ? "junction" : "dir") : "file"
   const link = stat.isSymbolicLink() ? await readlink(src) : src
-  const made = await symlink(link, dst, kind as Parameters<typeof symlink>[2]).then(() => true).catch(() => false)
+  const made = await symlink(link, dst, kind as Parameters<typeof symlink>[2])
+    .then(() => true)
+    .catch(() => false)
   if (made) return true
 
   return cp(src, dst, {
@@ -569,7 +578,7 @@ async function carry(root: string, dir: string, next: string) {
   if (!within(base, cwd)) throw new Error(`Cannot prepare team worktree: directory is outside worktree (${dir})`)
 
   const kept: string[] = []
-  for (let cur = dir;; cur = path.dirname(cur)) {
+  for (let cur = dir; ; cur = path.dirname(cur)) {
     const rel = path.relative(root, cur)
 
     for (const name of docs()) {
@@ -635,6 +644,46 @@ async function git(dir: string, args: string[]) {
   return { out, err, code }
 }
 
+async function gitTop(dir: string) {
+  const out = await git(dir, ["rev-parse", "--show-toplevel"])
+  if (out.code !== 0) return
+  const top = out.out.trim()
+  if (!top) return
+  return realpath(top).catch(() => path.resolve(top))
+}
+
+async function gitCommon(dir: string) {
+  const out = await git(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+  if (out.code !== 0) return
+  const common = out.out.trim()
+  if (!common) return
+  return realpath(common).catch(() => path.resolve(common))
+}
+
+async function hasPopulatedFiles(dir: string) {
+  const out = await git(dir, ["ls-files", "-z"])
+  if (out.code !== 0) throw new Error(out.err || out.out || "Failed to inspect worktree files")
+  const files = out.out.split("\0").filter(Boolean)
+  if (!files.length) return false
+  for (const file of files) {
+    if (await has(path.join(dir, file))) return true
+  }
+  return false
+}
+
+async function externalWorktree(root: string, prompt: string) {
+  const hint = worktreeHint(prompt)
+  if (!hint) return
+  const target = await gitTop(hint)
+  if (!target) return
+  const base = await gitTop(root)
+  if (!base) return
+  if (target === base) return
+  const [baseCommon, targetCommon] = await Promise.all([gitCommon(base), gitCommon(target)])
+  if (!baseCommon || !targetCommon || baseCommon !== targetCommon) return
+  return target
+}
+
 async function save(dir: string, run: Run) {
   live.set(run.id, run)
   await mkdir(root(dir), { recursive: true })
@@ -642,19 +691,24 @@ async function save(dir: string, run: Run) {
 }
 
 async function load(dir: string, id: string) {
-  const data = await Bun.file(file(dir, id)).json().catch(() => undefined)
+  const data = await Bun.file(file(dir, id))
+    .json()
+    .catch(() => undefined)
   return isRun(data) ? data : undefined
 }
 
 async function scan(dir: string) {
   await mkdir(root(dir), { recursive: true })
   const list = await readdir(root(dir)).catch(() => [])
-  return Promise.all(list.filter((item) => item.endsWith(".json")).map((item) => Bun.file(path.join(root(dir), item)).json().catch(() => undefined))).then(
-    (list) =>
-      list
-        .filter(isRun)
-        .toSorted((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))),
-  )
+  return Promise.all(
+    list
+      .filter((item) => item.endsWith(".json"))
+      .map((item) =>
+        Bun.file(path.join(root(dir), item))
+          .json()
+          .catch(() => undefined),
+      ),
+  ).then((list) => list.filter(isRun).toSorted((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))))
 }
 
 async function yardadd(dir: string, id: string) {
@@ -702,11 +756,19 @@ async function yardadd(dir: string, id: string) {
     throw new Error(`Worktree created but population failed: ${populated.err || populated.out}`)
   }
 
-  // Step 3: Verify files are actually present in the working directory
-  const check = await git(next, ["ls-files", "--cached"])
-  if (check.code !== 0 || !check.out.trim()) {
+  // Step 3: Verify files are actually present in the working directory.
+  // Some git/sandbox combinations can leave only metadata after add --no-checkout.
+  if (!(await hasPopulatedFiles(next))) {
+    const checkout = await git(next, ["checkout", "-f", "HEAD", "--", "."])
+    if (checkout.code !== 0) {
+      await drop()
+      throw new Error(`Worktree created but checkout failed: ${checkout.err || checkout.out}`)
+    }
+  }
+
+  if (!(await hasPopulatedFiles(next))) {
     await drop()
-    throw new Error("Worktree is empty after reset --hard — cannot proceed with delegation")
+    throw new Error("Worktree is empty after checkout — cannot proceed with delegation")
   }
 
   return next
@@ -716,26 +778,37 @@ async function yardrm(dir: string, item: string) {
   const base = path.resolve(yard(dir))
   const next = path.resolve(item)
   if (!within(base, next)) return
-  await git(dir, ["worktree", "remove", "--force", next]).catch(() => undefined)
-  await rm(next, { force: true, recursive: true }).catch(() => undefined)
+  await git(dir, ["worktree", "remove", "--force", next])
+  await rm(next, { force: true, recursive: true }).catch(() => {})
 }
 
 async function merge(dir: string, item: string, run: string, id: string, kept: string[] = []) {
+  let next = ""
   try {
-    await Promise.all(kept.map((file) => rm(path.join(item, file), { force: true, recursive: true }).catch(() => undefined)))
+    await Promise.all(
+      kept.map((file) => rm(path.join(item, file), { force: true, recursive: true }).catch(() => undefined)),
+    )
     const spec = [...runtimeSpec(), ...(await ignoredCarrySpec(item, kept))]
     // Stage all worker-owned files while excluding runtime state that is created locally during execution.
     const files = await workFiles(item, spec)
     if (!files.length) return { patch: "", merged: true }
     const add = await git(item, ["add", "-A", "--", ...files])
     if (add.code !== 0) throw new Error(add.err || add.out || "Failed to stage worktree changes")
-    const changed = await git(item, ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACDMRTUXB", "--", ...files])
+    const changed = await git(item, [
+      "diff",
+      "--cached",
+      "--name-only",
+      "-z",
+      "--diff-filter=ACDMRTUXB",
+      "--",
+      ...files,
+    ])
     if (changed.code !== 0) throw new Error(changed.err || changed.out || "Failed to list worktree changes")
     const staged = changed.out.split("\0").filter(Boolean)
     if (!staged.length) return { patch: "", merged: true }
     const diff = await git(item, ["diff", "--cached", "--binary", "--", ...staged])
     if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
-    const next = patch(dir, run, id)
+    next = patch(dir, run, id)
     await Bun.write(next, diff.out)
     const out = await git(dir, ["apply", "--3way", next])
     if (out.code !== 0) return { patch: next, merged: false, error: out.err || out.out || "Failed to apply patch" }
@@ -748,11 +821,16 @@ async function merge(dir: string, item: string, run: string, id: string, kept: s
         verification.issues.push("Patch was non-empty but no diff detected after apply")
       }
       const status = await git(dir, ["status", "--porcelain"])
-      const untracked = status.out.trim().split("\n").filter((l: string) => l.startsWith("??")).length
+      const untracked = status.out
+        .trim()
+        .split("\n")
+        .filter((l: string) => l.startsWith("??")).length
       if (untracked > 5) {
         verification.issues.push(`${untracked} untracked files after merge — check for stale artifacts`)
       }
-    } catch { /* verification is advisory */ }
+    } catch {
+      /* verification is advisory */
+    }
     // Auto-commit only the files produced by the worker patch so unrelated parent edits stay untouched.
     try {
       if (staged.length > 0) {
@@ -763,16 +841,21 @@ async function merge(dir: string, item: string, run: string, id: string, kept: s
           verification.issues.push(`Auto-commit failed: ${commit.err || commit.out}`)
         }
       }
-    } catch { /* auto-commit is best-effort; parent session can still commit manually */ }
+    } catch {
+      /* auto-commit is best-effort; parent session can still commit manually */
+    }
     return { patch: next, merged: true, verification }
   } finally {
-    await yardrm(dir, item).catch(() => undefined)
+    await yardrm(dir, item).catch(() => {})
   }
 }
 
 async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
   let seen = false
   const hit = mark(client)
+  if (process.env.DEBUG_TEAM) {
+    console.log("idle.begin", id, hit.idle.has(id), hit.per.size, hit.on)
+  }
   for (;;) {
     if (abort.aborted) throw new Error("Aborted")
     if (hit.idle.has(id)) return
@@ -788,7 +871,6 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
     const item = stat.data?.[id]
     if (!item) {
       if (hit.idle.has(id)) return
-      if (seen) return
       await Bun.sleep(gap)
       continue
     }
@@ -799,6 +881,9 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
 }
 
 async function snap(client: Client, id: string, dir: string, completedOnly = false) {
+  if (process.env.DEBUG_TEAM) {
+    console.log("snap.call", id, completedOnly, dir)
+  }
   const list = await client.session.messages({
     path: { id },
     query: { directory: dir },
@@ -811,17 +896,23 @@ async function snap(client: Client, id: string, dir: string, completedOnly = fal
 }
 
 function stage(err: string): Step["failure_stage"] {
-  return /blocked on (permission|question)/i.test(err) ? "blocked"
-    : /abort/i.test(err) ? "aborted"
-    : /timeout/i.test(err) ? "timeout"
-    : "execution"
+  return /blocked on (permission|question)/i.test(err)
+    ? "blocked"
+    : /abort/i.test(err)
+      ? "aborted"
+      : /timeout/i.test(err)
+        ? "timeout"
+        : "execution"
 }
 
 function why(item: Step | undefined, err: string): Step["failure_stage"] {
-  return !item?.dir ? "worktree_setup"
-    : !item?.session ? "session_create"
-    : /merge|patch|apply/.test(err) ? "merge_back"
-    : stage(err)
+  return !item?.dir
+    ? "worktree_setup"
+    : !item?.session
+      ? "session_create"
+      : /merge|patch|apply/.test(err)
+        ? "merge_back"
+        : stage(err)
 }
 
 function fail(run: Run, err: string, id?: string) {
@@ -929,6 +1020,9 @@ function defs(list: { id: string; depends?: string[] }[]) {
 
 function todo(run: Run, id: string, data: Partial<Step>) {
   const next = run.tasks.find((item) => item.id === id)
+  if (process.env.DEBUG_TEAM) {
+    console.log("todo", run.id, id, data.state, data.error || "", data.dir || "")
+  }
   if (!next) return
   Object.assign(next, data, { updated_at: now() })
   run.updated_at = now()
@@ -959,10 +1053,24 @@ function mark(client: Client) {
             const props = evt.properties ?? {}
             const session = typeof props.sessionID === "string" ? props.sessionID : ""
             if (!session) continue
-            const permission = typeof props.permission === "string" ? props.permission : typeof props.type === "string" ? props.type : "unknown"
+            const permission =
+              typeof props.permission === "string"
+                ? props.permission
+                : typeof props.type === "string"
+                  ? props.type
+                  : "unknown"
             const raw = props.patterns ?? props.pattern
-            const patterns = Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : typeof raw === "string" ? [raw] : []
-            const label = typeof props.title === "string" && props.title ? props.title : typeof props.description === "string" ? props.description : ""
+            const patterns = Array.isArray(raw)
+              ? raw.filter((item): item is string => typeof item === "string")
+              : typeof raw === "string"
+                ? [raw]
+                : []
+            const label =
+              typeof props.title === "string" && props.title
+                ? props.title
+                : typeof props.description === "string"
+                  ? props.description
+                  : ""
             const title = label ? ` (${label})` : ""
             next.per.set(session, { permission, patterns, hint: title })
           }
@@ -989,12 +1097,19 @@ function mark(client: Client) {
 
 async function wait(client: Client, id: string, dir: string) {
   const hit = mark(client)
-  const perm = await client.permission?.list?.({ directory: dir }).catch(() => ({ data: [] as { sessionID: string; permission: string; patterns: string[]; metadata?: Record<string, unknown> }[] }))
+  if (process.env.DEBUG_TEAM) {
+    console.log("wait.call", id, dir, "cached?", hit.per.has(id), "idle?", hit.idle.has(id))
+  }
+  const perm = await client.permission?.list?.({ directory: dir }).catch(() => ({
+    data: [] as { sessionID: string; permission: string; patterns: string[]; metadata?: Record<string, unknown> }[],
+  }))
   const blocked = perm?.data?.find((item) => item.sessionID === id)
   if (blocked) {
     const meta = blocked.metadata?.description
     const hint = typeof meta === "string" && meta ? ` (${meta})` : ""
-    return `Blocked on permission: ${blocked.permission}${hint} :: ${blocked.patterns.join(" | ")}`
+    const out = `Blocked on permission: ${blocked.permission}${hint} :: ${blocked.patterns.join(" | ")}`
+    if (process.env.DEBUG_TEAM) console.log("wait.blocked", out)
+    return out
   }
   const local = client.session.permission?.(id)?.[0]
   if (local?.permission) {
@@ -1006,16 +1121,18 @@ async function wait(client: Client, id: string, dir: string) {
   if (hold) {
     return `Blocked on permission: ${hold.permission}${hold.hint} :: ${hold.patterns.join(" | ")}`
   }
-  const localState = await Bun.file(path.join(dir, ".opencode", "guardrails", "state.json")).json().catch(() => undefined) as
-    | { last_event?: unknown; last_permission?: unknown; last_patterns?: unknown }
-    | undefined
+  const localState = (await Bun.file(path.join(dir, ".opencode", "guardrails", "state.json"))
+    .json()
+    .catch(() => undefined)) as { last_event?: unknown; last_permission?: unknown; last_patterns?: unknown } | undefined
   if (localState?.last_event === "permission.asked" && typeof localState.last_permission === "string") {
     const patterns = Array.isArray(localState.last_patterns)
       ? localState.last_patterns.filter((item): item is string => typeof item === "string")
       : []
     return `Blocked on permission: ${localState.last_permission} :: ${patterns.join(" | ")}`
   }
-  const ask = await client.question?.list?.({ directory: dir }).catch(() => ({ data: [] as { sessionID: string; questions: { question: string; header: string }[] }[] }))
+  const ask = await client.question
+    ?.list?.({ directory: dir })
+    .catch(() => ({ data: [] as { sessionID: string; questions: { question: string; header: string }[] }[] }))
   const asked = ask?.data?.find((item) => item.sessionID === id)
   if (asked) {
     const text = asked.questions.map((item) => `${item.header}: ${item.question}`).join(" | ")
@@ -1040,36 +1157,38 @@ async function stop(client: Client, run: Run) {
   ).catch(() => undefined)
 }
 
-export default async function team(input: {
-  client: Client
-  worktree: string
-  directory: string
-}) {
+export default async function team(input: { client: Client; worktree: string; directory: string }) {
   const inputRoot = projectRoot(input.directory, input.worktree)
   void sweep(input.client, inputRoot)
   const job = async (ctx: Ctx, run: Run, item: Step) => {
     const runRoot = projectRoot(ctx.directory, ctx.worktree)
     const repoRoot = ctx.worktree && ctx.worktree !== "/" ? ctx.worktree : undefined
     const push = write(item.prompt, item.write)
-    const useWorktree = push && item.worktree && !!repoRoot
+    const target = repoRoot && push ? await externalWorktree(repoRoot, item.prompt) : undefined
+    const useExistingWorktree = push && item.worktree && !!target
+    const useWorktree = push && item.worktree && !!repoRoot && !useExistingWorktree
     let box = ctx.directory
     let kept: string[] = []
     let child = ""
 
     try {
-      if (useWorktree && repoRoot) {
+      if (useExistingWorktree && target) {
+        box = target
+      } else if (useWorktree && repoRoot) {
         box = await yardadd(repoRoot, `${run.id}-${item.id}`)
         kept = await carry(repoRoot, ctx.directory, box)
       }
       const prompt = direct(useWorktree && repoRoot ? rebase(item.prompt, repoRoot, box) : item.prompt)
 
+      if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
         state: "running",
         dir: box,
       })
       await save(runRoot, run)
+      if (process.env.DEBUG_TEAM) console.log("job.saved.running", run.id, item.id)
 
-      const made = await input.client.session.create({
+      const next = await input.client.session.create({
         body: {
           parentID: ctx.sessionID,
           title: item.description,
@@ -1079,13 +1198,15 @@ export default async function team(input: {
           directory: box,
         },
       })
-      child = made.data.id
+      if (process.env.DEBUG_TEAM) console.log("job.created", run.id, item.id, next?.data?.id)
+      child = next.data.id
       kids.add(child)
 
       todo(run, item.id, {
         session: child,
       })
       await save(runRoot, run)
+      if (process.env.DEBUG_TEAM) console.log("job.saved.session", run.id, item.id, child)
 
       await input.client.session.promptAsync({
         path: { id: child },
@@ -1116,9 +1237,12 @@ export default async function team(input: {
           ],
         },
       })
+      if (process.env.DEBUG_TEAM) console.log("job.prompted", run.id, item.id)
 
       await idle(input.client, child, box, ctx.abort)
+      if (process.env.DEBUG_TEAM) console.log("job.idle-return", run.id, item.id)
       const out = await snap(input.client, child, box)
+      if (process.env.DEBUG_TEAM) console.log("job.snapped", run.id, item.id, out.completed)
 
       let patchfile = ""
       let err = out.error
@@ -1130,6 +1254,9 @@ export default async function team(input: {
         if (!merged.merged) {
           err = merged.error || "Failed to merge worktree patch"
           failure_stage = "merge_back"
+        } else if (item.write && patchfile === "") {
+          err = "Write task completed without producing a patch"
+          failure_stage = "execution"
         }
       }
       if (err && !failure_stage) failure_stage = stage(err)
@@ -1142,11 +1269,12 @@ export default async function team(input: {
         error: err,
         failure_stage: err ? failure_stage : undefined,
       })
+      if (process.env.DEBUG_TEAM) console.log("job.done", run.id, item.id, err ? "error" : "done")
       await save(runRoot, run)
       if (err) throw new Error(err)
       return out.text
     } finally {
-      if (repoRoot && box !== ctx.directory) {
+      if (useWorktree && repoRoot && box !== ctx.directory) {
         await yardrm(repoRoot, box).catch(() => {})
       }
     }
@@ -1242,7 +1370,9 @@ export default async function team(input: {
 
       try {
         for (;;) {
-          const ready = list.filter((item) => item.state === "pending" && item.depends.every((dep) => done.has(dep)) && !active.has(item.id))
+          const ready = list.filter(
+            (item) => item.state === "pending" && item.depends.every((dep) => done.has(dep)) && !active.has(item.id),
+          )
 
           if (args.strategy === "wave" && ready.length) {
             ready.forEach((item) => todo(run, item.id, { state: "queued" }))
@@ -1264,8 +1394,9 @@ export default async function team(input: {
           await save(runRoot, run)
         }
       } catch (err) {
-        const item = run.tasks.find((item) => item.state === "error")
-          ?? run.tasks.find((item) => item.state === "running" || item.state === "queued")
+        const item =
+          run.tasks.find((item) => item.state === "error") ??
+          run.tasks.find((item) => item.state === "running" || item.state === "queued")
         fail(run, err instanceof Error ? err.message : String(err), item?.id)
         await save(runRoot, run)
         await stop(input.client, run)
@@ -1369,7 +1500,9 @@ export default async function team(input: {
           })
         })
         .catch(async (err: Error) => {
-          const item = run.tasks.find((item) => item.state === "error" || item.state === "running" || item.state === "queued") || run.tasks[0]
+          const item =
+            run.tasks.find((item) => item.state === "error" || item.state === "running" || item.state === "queued") ||
+            run.tasks[0]
           fail(run, err.message || "Unknown error", item?.id)
           await save(runRoot, run)
           if (!args.notify) return
@@ -1404,7 +1537,9 @@ export default async function team(input: {
     async execute(args, ctx) {
       const runRoot = projectRoot(ctx.directory, ctx.worktree)
       await sweep(input.client, runRoot)
-      const list = args.run_id ? [live.get(args.run_id) ?? (await load(runRoot, args.run_id))].filter(isRun) : await scan(runRoot)
+      const list = args.run_id
+        ? [live.get(args.run_id) ?? (await load(runRoot, args.run_id))].filter(isRun)
+        : await scan(runRoot)
       const settled = await Promise.all(list.map((item) => reconcile(input.client, runRoot, item)))
       if (!settled.length) return "No team runs found."
       return settled.map((item) => note(item)).join("\n\n")
@@ -1459,8 +1594,7 @@ export default async function team(input: {
         sessionID: out.message.sessionID,
         messageID: out.message.id,
         type: "text",
-        text:
-          "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least one worker task. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
+        text: "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least one worker task. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
       })
     },
     "tool.execute.before": async (
