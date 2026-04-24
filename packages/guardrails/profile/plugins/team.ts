@@ -16,6 +16,7 @@ const sweeping = new Map<string, Promise<void>>()
 type Need = {
   done: boolean
   reason: string
+  fingerprint: string
   at: string
 }
 
@@ -149,6 +150,7 @@ type Step = {
   output: string
   error: string
   no_patch: boolean
+  allow_no_patch: boolean
   updated_at?: string
   failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout" | "blocked"
 }
@@ -308,6 +310,7 @@ function mut(cmd: string) {
 function big(text: string) {
   const data = text.trim()
   if (!data) return false
+  if (operationOnly(data)) return false
   // Exempt read-only investigation requests that start with investigation verbs
   // and do NOT contain write-intent keywords
   const readOnly =
@@ -325,6 +328,22 @@ function big(text: string) {
     plan >= 3 ||
     /(packages\/|apps\/|services\/|複数|multi[- ]file|cross[- ]cutting|large plan|大きな実装|大規模)/i.test(data)
   return impl && wide
+}
+
+function fingerprint(text: string) {
+  return text.trim().replace(/\s+/g, " ").slice(0, 500)
+}
+
+function operationOnly(text: string) {
+  const data = text.trim()
+  if (!data) return false
+  const tail = data.slice(-900)
+  const operation =
+    /\b(gh\s+pr|pull\s+request|pr\s+(?:create|merge|ready|close|view|check|checks)|commit|push|merge|rebase|cherry-pick)\b|プルリク|PR\s*(?:作成|マージ)|コミット|プッシュ|マージ/i
+  if (!operation.test(tail)) return false
+  const implementation =
+    /\b(implement|implementation|build|add|fix|refactor|rewrite|patch|edit|write|modify|code)\b|修正|実装|追加|改修|編集/i
+  return !implementation.test(tail)
 }
 
 function write(text: string, flag?: boolean) {
@@ -434,6 +453,13 @@ function rebase(text: string, root: string, box: string) {
   const dst = path.resolve(box)
   if (src === dst) return text
   return text.split(src).join(dst)
+}
+
+function rebaseForWorktree(text: string, root: string, box: string) {
+  let next = rebase(text, root, box)
+  const hint = worktreeHint(text)
+  if (hint) next = next.split(path.resolve(hint)).join(path.resolve(box))
+  return next
 }
 
 function cleanHint(text: string) {
@@ -1178,7 +1204,7 @@ export default async function team(input: { client: Client; worktree: string; di
         box = await yardadd(repoRoot, `${run.id}-${item.id}`)
         kept = await carry(repoRoot, ctx.directory, box)
       }
-      const prompt = direct(useWorktree && repoRoot ? rebase(item.prompt, repoRoot, box) : item.prompt)
+      const prompt = direct(useWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt)
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
@@ -1254,7 +1280,7 @@ export default async function team(input: { client: Client; worktree: string; di
         if (!merged.merged) {
           err = merged.error || "Failed to merge worktree patch"
           failure_stage = "merge_back"
-        } else if (item.write && patchfile === "") {
+        } else if (item.write && patchfile === "" && !item.allow_no_patch) {
           err = "Write task completed without producing a patch"
           failure_stage = "execution"
         }
@@ -1295,6 +1321,7 @@ export default async function team(input: { client: Client; worktree: string; di
           depends: z.array(z.string()).optional(),
           write: z.boolean().optional(),
           worktree: z.boolean().optional(),
+          no_patch: z.boolean().optional(),
         }),
       ),
     },
@@ -1348,6 +1375,7 @@ export default async function team(input: { client: Client; worktree: string; di
             session: "",
             patch: "",
             no_patch: false,
+            allow_no_patch: item.no_patch === true || operationOnly(item.prompt),
             output: "",
             error: "",
           }
@@ -1409,6 +1437,7 @@ export default async function team(input: { client: Client; worktree: string; di
       need.set(ctx.sessionID, {
         done: true,
         reason: "team",
+        fingerprint: need.get(ctx.sessionID)?.fingerprint ?? "",
         at: now(),
       })
       return note(run)
@@ -1456,6 +1485,7 @@ export default async function team(input: { client: Client; worktree: string; di
         session: "",
         patch: "",
         no_patch: false,
+        allow_no_patch: operationOnly(args.prompt),
         output: "",
         error: "",
       }
@@ -1573,6 +1603,9 @@ export default async function team(input: { client: Client; worktree: string; di
       const text = body(out.parts)
       if (text.includes("under the guardrail profile.")) return
       if (!big(text)) return
+      const id = fingerprint(text)
+      const current = need.get(item.sessionID)
+      if (current?.done && current.fingerprint === id) return
       const headCheck = await git(input.worktree, ["rev-parse", "--verify", "HEAD"])
       if (headCheck.code !== 0) {
         out.parts.push({
@@ -1587,6 +1620,7 @@ export default async function team(input: { client: Client; worktree: string; di
       need.set(item.sessionID, {
         done: false,
         reason: clip(text, 240),
+        fingerprint: id,
         at: now(),
       })
       out.parts.push({
@@ -1629,9 +1663,11 @@ export default async function team(input: { client: Client; worktree: string; di
     ) => {
       void sweep(input.client, inputRoot)
       if (item.tool !== "team" && item.tool !== "background") return
+      const gate = need.get(item.sessionID)
       need.set(item.sessionID, {
         done: true,
         reason: item.tool,
+        fingerprint: gate?.fingerprint ?? "",
         at: now(),
       })
     },
@@ -1649,6 +1685,7 @@ export default async function team(input: { client: Client; worktree: string; di
       need.set(item.sessionID, {
         done: true,
         reason: `${item.tool}-failed`,
+        fingerprint: need.get(item.sessionID)?.fingerprint ?? "",
         at: now(),
       })
     },

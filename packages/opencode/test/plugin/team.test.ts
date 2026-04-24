@@ -552,6 +552,110 @@ test("team fails isolated write tasks that produce no patch", async () => {
   ).rejects.toThrow("Write task completed without producing a patch")
 })
 
+test("team allows explicit no_patch write tasks for operation-only work", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_no_patch_ok",
+            },
+          }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_no_patch_ok: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  time: { completed: Date.now() },
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "created pull request",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "pr-only",
+          prompt: "Run gh pr create for the already committed branch, then report the PR URL.",
+          write: true,
+          no_patch: true,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(out).toContain("pr-only: done")
+  expect(out).toContain("no_patch=true")
+})
+
 test("team removes worktree when session create fails", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -2690,6 +2794,230 @@ test("chat.message hook also sweeps stale runs during normal lifecycle", async (
   throw new Error("chat.message sweep did not reconcile stale run")
 })
 
+test("parallel enforcement ignores operation-only commit push PR requests", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "unused" } }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return { data: {} }
+        },
+        async messages() {
+          return { data: [] }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const parts = [
+    {
+      type: "text",
+      text:
+        `${"Please review the completed local changes and summarize the current state. ".repeat(12)}\n` +
+        "Then commit the prepared changes, push the branch, and create the pull request with gh pr create.",
+    },
+  ]
+
+  await plugin["chat.message"]?.(
+    {
+      sessionID: "ses_operation_only",
+      agent: "implement",
+    },
+    {
+      message: {
+        id: "msg_operation_only",
+        sessionID: "ses_operation_only",
+        role: "user",
+      },
+      parts,
+    },
+  )
+
+  expect(parts.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(false)
+  await expect(
+    plugin["tool.execute.before"]?.(
+      {
+        tool: "write",
+        sessionID: "ses_operation_only",
+      },
+      {
+        args: {
+          filePath: "completion.md",
+        },
+      },
+    ),
+  ).resolves.toBeUndefined()
+})
+
+test("parallel enforcement does not re-arm after team failure for the same user message", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "unused" } }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return { data: {} }
+        },
+        async messages() {
+          return { data: [] }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const text =
+    `${"Implement coordinated fixes across packages/guardrails and packages/opencode with tests. ".repeat(10)}\n` +
+    "This is a multi-file implementation and should use the team tool."
+
+  const makeParts = () => [
+    {
+      type: "text",
+      text,
+    },
+  ]
+
+  const first = makeParts()
+  await plugin["chat.message"]?.(
+    {
+      sessionID: "ses_rearm",
+      agent: "implement",
+    },
+    {
+      message: {
+        id: "msg_rearm_1",
+        sessionID: "ses_rearm",
+        role: "user",
+      },
+      parts: first,
+    },
+  )
+
+  expect(first.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(true)
+  await expect(
+    plugin["tool.execute.before"]?.(
+      {
+        tool: "write",
+        sessionID: "ses_rearm",
+      },
+      {
+        args: {
+          filePath: "blocked.md",
+        },
+      },
+    ),
+  ).rejects.toThrow("Parallel implementation is enforced")
+
+  await plugin["tool.execute.error"]?.(
+    {
+      tool: "team",
+      sessionID: "ses_rearm",
+    },
+    {
+      error: new Error("team failed"),
+    },
+  )
+
+  const second = makeParts()
+  await plugin["chat.message"]?.(
+    {
+      sessionID: "ses_rearm",
+      agent: "implement",
+    },
+    {
+      message: {
+        id: "msg_rearm_2",
+        sessionID: "ses_rearm",
+        role: "user",
+      },
+      parts: second,
+    },
+  )
+
+  expect(second.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(false)
+  await expect(
+    plugin["tool.execute.before"]?.(
+      {
+        tool: "write",
+        sessionID: "ses_rearm",
+      },
+      {
+        args: {
+          filePath: "allowed.md",
+        },
+      },
+    ),
+  ).resolves.toBeUndefined()
+})
+
 test("team merge excludes runtime artifacts and leaves unrelated parent edits untouched", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -2943,6 +3271,127 @@ test("team uses an existing sibling git worktree mentioned in the task prompt", 
       .quiet()
       .catch(() => undefined)
     await fs.rm(target, { recursive: true, force: true })
+  }
+})
+
+test("team rewrites invalid external worktree hints to the isolated worker worktree", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const invalid = path.join(path.dirname(tmp.path), ".worktrees", `other-${crypto.randomUUID()}`)
+  await fs.mkdir(invalid, { recursive: true })
+
+  let box = ""
+  try {
+    const plugin = await team({
+      client: {
+        permission: {
+          async list() {
+            return { data: [] }
+          },
+        },
+        question: {
+          async list() {
+            return { data: [] }
+          },
+        },
+        session: {
+          async get() {
+            return { data: { permission: [] } }
+          },
+          async create(input) {
+            box = input.query.directory
+            return {
+              data: {
+                id: "ses_invalid_worktree_hint",
+              },
+            }
+          },
+          async promptAsync(input) {
+            const text = input.body.parts[0]?.text ?? ""
+            expect(input.query.directory).toContain(path.join(".opencode", "team"))
+            expect(text).toContain(input.query.directory)
+            expect(text).not.toContain(invalid)
+            await Bun.write(path.join(input.query.directory, "worker.txt"), "worker output\n")
+            return {}
+          },
+          async prompt() {
+            return {}
+          },
+          async status() {
+            return {
+              data: {
+                ses_invalid_worktree_hint: {
+                  type: "idle",
+                },
+              },
+            }
+          },
+          async messages() {
+            return {
+              data: [
+                {
+                  info: {
+                    role: "assistant",
+                    time: {
+                      completed: Date.now(),
+                    },
+                  },
+                  parts: [
+                    {
+                      type: "text",
+                      text: "worker finished",
+                    },
+                  ],
+                },
+              ],
+            }
+          },
+          async abort() {
+            return {}
+          },
+        },
+      },
+      worktree: tmp.path,
+      directory: tmp.path,
+    })
+
+    const out = await plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "invalid-hint",
+            prompt: `You are working in a **git worktree** at:\n\`${invalid}\`\n\nModify worker.txt.`,
+            write: true,
+            worktree: true,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: new AbortController().signal,
+        ask: async () => {},
+        metadata() {},
+      },
+    )
+
+    expect(box).toContain(path.join(".opencode", "team"))
+    expect(await Bun.file(path.join(tmp.path, "worker.txt")).text()).toBe("worker output\n")
+    expect(out).toContain("invalid-hint: done")
+  } finally {
+    await fs.rm(invalid, { recursive: true, force: true })
   }
 })
 
