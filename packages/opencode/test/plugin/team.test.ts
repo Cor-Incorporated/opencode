@@ -656,6 +656,101 @@ test("team allows explicit no_patch write tasks for operation-only work", async 
   expect(out).toContain("no_patch=true")
 })
 
+test("team reports worktree setup failures instead of dependency deadlocks", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+      await fs.mkdir(path.join(dir, ".opencode"), { recursive: true })
+      await Bun.write(path.join(dir, ".opencode", "team"), "not a directory\n")
+    },
+  })
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          throw new Error("session create should not run")
+        },
+        async promptAsync() {
+          throw new Error("prompt should not run")
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return { data: {} }
+        },
+        async messages() {
+          return { data: [] }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  let thrown = ""
+  try {
+    await plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "setup-fails",
+            prompt: "write a worker file",
+            write: true,
+            worktree: true,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: new AbortController().signal,
+        ask: async () => {},
+        metadata() {},
+      },
+    )
+  } catch (error) {
+    thrown = error instanceof Error ? error.message : String(error)
+  }
+
+  expect(thrown).not.toBe("")
+  expect(thrown).not.toContain("Dependency deadlock")
+
+  const runs = await fs.readdir(path.join(tmp.path, ".opencode", "guardrails", "team-runs"))
+  const saved = JSON.parse(await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "team-runs", runs[0]!)).text())
+  expect(saved.state).toBe("error")
+  expect(saved.tasks[0].state).toBe("error")
+  expect(saved.tasks[0].dir).toBe("")
+  expect(saved.tasks[0].session).toBe("")
+  expect(saved.tasks[0].failure_stage).toBe("worktree_setup")
+  expect(saved.tasks[0].error).not.toContain("Dependency deadlock")
+})
+
 test("team removes worktree when session create fails", async () => {
   await using tmp = await tmpdir({
     git: true,
