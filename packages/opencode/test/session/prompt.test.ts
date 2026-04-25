@@ -369,6 +369,36 @@ it.live("loop calls LLM and returns assistant message", () =>
   ),
 )
 
+it.live("prompt tools merge with existing session permissions", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "bash", pattern: "*", action: "allow" }],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        tools: {
+          task: false,
+          team: false,
+        },
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      const updated = yield* sessions.get(chat.id)
+      expect(Permission.evaluate("bash", "git worktree list", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("task", "build", updated.permission ?? []).action).toBe("deny")
+      expect(Permission.evaluate("team", "*", updated.permission ?? []).action).toBe("deny")
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
 it.live("static loop returns assistant text through local provider", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {

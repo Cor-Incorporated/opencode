@@ -36,6 +36,7 @@ type Note = {
 type Msg = {
   info: {
     role: string
+    finish?: string
     time?: {
       completed?: number
     }
@@ -239,7 +240,8 @@ function summary(parts: Note[]) {
 function pick(list: Msg[], completedOnly = false) {
   const items = [...list].reverse().filter((item) => item.info.role === "assistant")
   if (!items.length) return
-  return items.find((item) => typeof item.info.time?.completed === "number") ?? (completedOnly ? undefined : items[0])
+  const done = items.find((item) => typeof item.info.time?.completed === "number" && item.info.finish !== "tool-calls")
+  return done ?? (completedOnly ? undefined : items[0])
 }
 
 function scrub(cmd: string) {
@@ -411,6 +413,7 @@ function workerTools(push: boolean) {
 function permit(base: Rule[]) {
   return [
     ...base,
+    { permission: "bash", pattern: "*", action: "allow" as const },
     { permission: "bash", pattern: "pwd", action: "allow" as const },
     { permission: "bash", pattern: "ls", action: "allow" as const },
     { permission: "bash", pattern: "ls *", action: "allow" as const },
@@ -422,6 +425,7 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "tail *", action: "allow" as const },
     { permission: "bash", pattern: "git status*", action: "allow" as const },
     { permission: "bash", pattern: "git diff*", action: "allow" as const },
+    { permission: "bash", pattern: "git branch*", action: "allow" as const },
     { permission: "bash", pattern: "git log*", action: "allow" as const },
     { permission: "bash", pattern: "git rev-parse*", action: "allow" as const },
     { permission: "bash", pattern: "git ls-tree*", action: "allow" as const },
@@ -429,7 +433,10 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "git ls-files*", action: "allow" as const },
     { permission: "bash", pattern: "git grep *", action: "allow" as const },
     { permission: "bash", pattern: "git restore *", action: "allow" as const },
+    { permission: "bash", pattern: "git worktree list*", action: "allow" as const },
+    { permission: "bash", pattern: "git checkout *", action: "allow" as const },
     { permission: "bash", pattern: "git checkout -- *", action: "allow" as const },
+    { permission: "bash", pattern: "git switch *", action: "allow" as const },
     { permission: "bash", pattern: "git rebase origin/develop", action: "allow" as const },
     { permission: "bash", pattern: "git rebase develop", action: "allow" as const },
     { permission: "bash", pattern: "git rebase origin/main", action: "allow" as const },
@@ -437,6 +444,12 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "git rebase --continue", action: "allow" as const },
     { permission: "bash", pattern: "git rebase --skip", action: "allow" as const },
     { permission: "bash", pattern: "git cherry-pick *", action: "allow" as const },
+    { permission: "bash", pattern: "rm -rf *", action: "deny" as const },
+    { permission: "bash", pattern: "sudo *", action: "deny" as const },
+    { permission: "bash", pattern: "git reset --hard*", action: "deny" as const },
+    { permission: "bash", pattern: "git merge *", action: "deny" as const },
+    { permission: "bash", pattern: "curl * | sh*", action: "deny" as const },
+    { permission: "bash", pattern: "curl * | bash*", action: "deny" as const },
     { permission: "bash", pattern: "opencode *", action: "deny" as const },
     { permission: "bash", pattern: "claude *", action: "deny" as const },
     { permission: "bash", pattern: "codex *", action: "deny" as const },
@@ -514,6 +527,7 @@ function worktreeHint(text: string) {
     /(?:git\s+)?worktree[\s\S]{0,120}?(?:at|path|directory|dir|:|：)[\s\S]{0,40}?`([^`\n]+)`/i,
     /(?:ワークツリー|作業ツリー)[\s\S]{0,120}?`([^`\n]+)`/i,
     /`(\/[^`\n]*\/\.worktrees\/[^`\n]+)`/i,
+    /`(\/[^`\n]*\/\.opencode\/worktrees\/[^`\n]+)`/i,
   ]
   for (const rule of direct) {
     const match = text.match(rule)
@@ -1246,6 +1260,7 @@ export default async function team(input: { client: Client; worktree: string; di
       const target = repoRoot && push ? await externalWorktree(repoRoot, item.prompt) : undefined
       const useExistingWorktree = push && item.worktree && !!target
       useWorktree = push && item.worktree && !!repoRoot && !useExistingWorktree
+      const mergeWorktree = push && item.worktree && !!repoRoot
 
       if (useExistingWorktree && target) {
         box = target
@@ -1253,7 +1268,7 @@ export default async function team(input: { client: Client; worktree: string; di
         box = await yardadd(repoRoot, `${run.id}-${item.id}`)
         kept = await carry(repoRoot, ctx.directory, box)
       }
-      const prompt = direct(useWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt, push)
+      const prompt = direct(mergeWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt, push)
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
@@ -1315,7 +1330,7 @@ export default async function team(input: { client: Client; worktree: string; di
       let err = out.error
       // [Phase6] Classify failure stage for abort reason tracking
       let failure_stage: Step["failure_stage"] = undefined
-      if (!err && useWorktree && repoRoot && box !== ctx.directory) {
+      if (!err && mergeWorktree && repoRoot && box !== ctx.directory) {
         const merged = await merge(repoRoot, box, run.id, item.id, kept)
         patchfile = merged.patch
         if (!merged.merged) {
@@ -1331,7 +1346,7 @@ export default async function team(input: { client: Client; worktree: string; di
       todo(run, item.id, {
         state: err ? "error" : "done",
         patch: patchfile,
-        no_patch: !err && item.write && useWorktree && patchfile === "",
+        no_patch: !err && item.write && mergeWorktree && patchfile === "",
         output: out.text,
         error: err,
         failure_stage: err ? failure_stage : undefined,

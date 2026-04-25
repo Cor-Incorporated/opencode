@@ -1322,8 +1322,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
         }
         if (permissions.length > 0) {
-          session.permission = permissions
-          yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+          const next = Permission.merge(session.permission ?? [], permissions)
+          session.permission = next
+          yield* sessions.setPermission({ sessionID: session.id, permission: next })
         }
 
         if (input.noReply === true) return message
