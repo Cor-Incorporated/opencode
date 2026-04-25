@@ -57,12 +57,16 @@ function lines(prs: PR[]) {
   return prs.map((x) => `- #${x.number}: ${x.title}`).join("\n") || "(none)"
 }
 
+function workflowCommandText(text: string) {
+  return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")
+}
+
 function group(title: string) {
   if (process.env.GITHUB_ACTIONS !== "true") {
     console.log(title)
     return { [Symbol.dispose]() {} }
   }
-  console.log(`::group::${title}`)
+  console.log(`::group::${workflowCommandText(title)}`)
   return {
     [Symbol.dispose]() {
       console.log("::endgroup::")
