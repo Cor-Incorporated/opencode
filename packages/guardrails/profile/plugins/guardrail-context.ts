@@ -313,7 +313,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     log,
     state,
     allow,
-    hasCodexMcp: false,
+    hasCodexMcp: false as boolean,
     maxParallelTasks,
     maxSessionCost,
     agentModelTier,
@@ -336,4 +336,3 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     gate,
   } satisfies GuardrailContext
 }
-

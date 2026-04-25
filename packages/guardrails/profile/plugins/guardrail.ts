@@ -336,6 +336,36 @@ export default async function guardrail(
 
       await review.handleCodexDetection(item, out)
       await review.handleExternalReviewDetection(item, out)
+
+      if (item.tool === "bash") {
+        const secretPatterns: [RegExp, string][] = [
+          [/AIzaSy[A-Za-z0-9_-]{33}/g, "google-api-key"],
+          [/AKIA[A-Z0-9]{16}/g, "aws-access-key"],
+          [/sk-[a-zA-Z0-9]{20,}/g, "openai-key"],
+          [/ghp_[a-zA-Z0-9]{36}/g, "github-token"],
+          [/gho_[a-zA-Z0-9]{36}/g, "github-oauth"],
+          [/ghs_[a-zA-Z0-9]{36}/g, "github-app"],
+          [/glpat-[a-zA-Z0-9-]{20,}/g, "gitlab-token"],
+          [/xox[bprs]-[a-zA-Z0-9-]+/g, "slack-token"],
+          [/npm_[a-zA-Z0-9]{36}/g, "npm-token"],
+          [/-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, "private-key"],
+          [/\b[A-Z_]*(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE)[A-Z_]*\s*=\s*["']?[A-Za-z0-9_\-+/=]{10,}["']?/gi, "env-secret"],
+        ]
+        let output = str(out.output)
+        let maskedCount = 0
+        for (const [pattern, label] of secretPatterns) {
+          const matches = output.match(pattern)
+          if (matches && matches.length > 0) {
+            output = output.replace(pattern, `[REDACTED:${label}]`)
+            maskedCount += matches.length
+          }
+        }
+        if (maskedCount > 0) {
+          out.output = output
+          await ctx.seen("secret_masked", { count: maskedCount })
+        }
+      }
+
       await gitHandlers.bashAfterGit(item, out, data)
 
       if (item.tool === "bash") {
