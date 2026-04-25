@@ -101,6 +101,150 @@ test("team uses default limit when caller omits limit", async () => {
   expect(out).toContain("default-limit: done")
 })
 
+test("team creates run before stale sweep can block launch", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await fs.mkdir(path.join(dir, ".opencode", "guardrails", "team-runs"), { recursive: true })
+      await Bun.write(
+        path.join(dir, ".opencode", "guardrails", "team-runs", "stale-run.json"),
+        JSON.stringify(
+          {
+            id: "stale-run",
+            kind: "team",
+            state: "running",
+            session: "ses_parent",
+            directory: dir,
+            created_at: new Date(0).toISOString(),
+            updated_at: new Date(0).toISOString(),
+            tasks: [
+              {
+                id: "stale",
+                description: "stale",
+                prompt: "old work",
+                depends: [],
+                agent: "general",
+                write: false,
+                worktree: false,
+                provider: "openai",
+                model: "gpt-5.5",
+                variant: "high",
+                state: "running",
+                dir,
+                session: "ses_child_stale_blocked",
+                patch: "",
+                output: "",
+                error: "",
+              },
+            ],
+          },
+          null,
+          2,
+        ) + "\n",
+      )
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const metadata: Record<string, unknown>[] = []
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "ses_child_fresh_after_blocked_sweep" } }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_stale_blocked: { type: "busy" },
+              ses_child_fresh_after_blocked_sweep: { type: "idle" },
+            },
+          }
+        },
+        async messages(input) {
+          if (input.path.id === "ses_child_stale_blocked") await new Promise(() => {})
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  time: { completed: Date.now() },
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "fresh work completed",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "fresh",
+          prompt: "inspect current work",
+          write: false,
+          worktree: false,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata(input) {
+        metadata.push(input.metadata ?? {})
+      },
+    },
+  )
+
+  expect(out).toContain("run_id:")
+  expect(out).toContain("- fresh: done")
+  expect(metadata.some((item) => typeof item.run_id === "string")).toBe(true)
+
+  const runs = await fs.readdir(path.join(tmp.path, ".opencode", "guardrails", "team-runs"))
+  expect(runs.length).toBeGreaterThanOrEqual(2)
+})
+
 test("team worker model inherits the parent session model", async () => {
   await using tmp = await tmpdir({
     git: true,

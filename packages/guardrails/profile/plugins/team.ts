@@ -13,6 +13,8 @@ const live = new Map<string, Run>()
 const seen = new WeakMap<object, Seen>()
 const sweeping = new Map<string, Promise<void>>()
 const models = new Map<string, Lane>()
+const sweepWait = 1000
+const rulesWait = 2000
 
 type Need = {
   done: boolean
@@ -1068,6 +1070,18 @@ async function sweep(client: Client, dir: string) {
   return task
 }
 
+async function bounded<T>(task: Promise<T>, millis: number) {
+  return Promise.race([task, Bun.sleep(millis).then(() => undefined)])
+}
+
+async function presweep(client: Client, dir: string) {
+  await bounded(sweep(client, dir), sweepWait)
+}
+
+async function parentRules(client: Client, ctx: Pick<Ctx, "sessionID" | "directory">) {
+  return (await bounded(rules(client, ctx), rulesWait)) ?? []
+}
+
 function note(run: Run) {
   const head = [`run_id: ${run.id}`, `type: ${run.kind}`, `state: ${run.state}`]
   const list = run.tasks.map((item) =>
@@ -1398,21 +1412,8 @@ export default async function team(input: { client: Client; worktree: string; di
       const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
       const strategy = args.strategy ?? "parallel"
       const limit = args.limit ?? cap
-      await sweep(input.client, runRoot)
       defs(args.tasks)
       if (args.tasks.length < 1) throw new Error("team requires at least one task")
-      const req = {
-        ...ctx,
-        permission: await rules(input.client, ctx),
-      }
-      req.metadata({
-        title: "team run",
-        metadata: {
-          tasks: args.tasks.length,
-          strategy,
-        },
-      })
-
       const run: Run = {
         id: crypto.randomUUID(),
         kind: "team",
@@ -1455,6 +1456,19 @@ export default async function team(input: { client: Client; worktree: string; di
         }),
       }
       await save(runRoot, run)
+      ctx.metadata({
+        title: "team run",
+        metadata: {
+          run_id: run.id,
+          tasks: args.tasks.length,
+          strategy,
+        },
+      })
+      await presweep(input.client, runRoot)
+      const req = {
+        ...ctx,
+        permission: await parentRules(input.client, ctx),
+      }
 
       const done = new Set<string>()
       const list = run.tasks
@@ -1535,12 +1549,6 @@ export default async function team(input: { client: Client; worktree: string; di
       const runRoot = projectRoot(ctx.directory, ctx.worktree)
       const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
       const detachedAbort = new AbortController()
-      await sweep(input.client, runRoot)
-      const req = {
-        ...ctx,
-        abort: detachedAbort.signal,
-        permission: await rules(input.client, ctx),
-      }
       const step: Step = {
         id: slug(args.description || args.agent || "worker") || "worker",
         description: args.description || "background worker",
@@ -1579,12 +1587,18 @@ export default async function team(input: { client: Client; worktree: string; di
         tasks: [step],
       }
       await save(runRoot, run)
-      req.metadata({
+      ctx.metadata({
         title: args.description || "background run",
         metadata: {
           run_id: run.id,
         },
       })
+      await presweep(input.client, runRoot)
+      const req = {
+        ...ctx,
+        abort: detachedAbort.signal,
+        permission: await parentRules(input.client, ctx),
+      }
 
       const task = job(req, run, step)
         .then(async () => {
@@ -1645,7 +1659,7 @@ export default async function team(input: { client: Client; worktree: string; di
     },
     async execute(args, ctx) {
       const runRoot = projectRoot(ctx.directory, ctx.worktree)
-      await sweep(input.client, runRoot)
+      await presweep(input.client, runRoot)
       const list = args.run_id
         ? [live.get(args.run_id) ?? (await load(runRoot, args.run_id))].filter(isRun)
         : await scan(runRoot)
