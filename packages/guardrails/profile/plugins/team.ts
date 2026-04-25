@@ -351,7 +351,7 @@ function write(text: string, flag?: boolean) {
   return /(implement|implementation|write|edit|patch|code|fix|refactor|modify|修正|実装|編集|追加|改修)/i.test(text)
 }
 
-function direct(text: string) {
+function direct(text: string, push = false) {
   const next = /\bopencode\s+run\s+\/init\b/i.test(text)
     ? text
         .replace(
@@ -360,14 +360,37 @@ function direct(text: string) {
         )
         .trim()
     : text.trim()
+  const writeRule = push
+    ? "- This is a write task. Do not stop after only a progress update or plan; inspect the files, make the requested edits, run the requested verification when possible, and then report the concrete result."
+    : ""
   return `Worker execution rules:
+- This worker is already running under the guardrail profile.
 - Prefer file inspection tools such as Glob, Read, and Grep over bash for repository discovery whenever possible.
 - Use bash only when the non-shell tools cannot answer the question or complete the step.
+- Do not call the team, background, or task tools from inside this worker.
 - Do not invoke nested OpenCode slash commands from inside this team worker.
 - Do not create git branches, clones, nested repositories, or nested worktrees. The team tool already created the isolated worktree; edit files in the current directory directly.
 - If you are running in an isolated worktree, operate only on files inside the current worktree directory. Do not read from or write to the parent repository path directly.
+${writeRule}
 
 ${next}`
+}
+
+function workerTools(push: boolean) {
+  const recursive = {
+    task: false,
+    team: false,
+    background: false,
+    team_status: false,
+  }
+  if (push) return recursive
+  return {
+    edit: false,
+    write: false,
+    apply_patch: false,
+    todowrite: false,
+    ...recursive,
+  }
 }
 
 function permit(base: Rule[]) {
@@ -1206,7 +1229,7 @@ export default async function team(input: { client: Client; worktree: string; di
         box = await yardadd(repoRoot, `${run.id}-${item.id}`)
         kept = await carry(repoRoot, ctx.directory, box)
       }
-      const prompt = direct(useWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt)
+      const prompt = direct(useWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt, push)
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
@@ -1247,15 +1270,7 @@ export default async function team(input: { client: Client; worktree: string; di
             providerID: item.provider,
             modelID: item.model,
           },
-          tools: push
-            ? undefined
-            : {
-                edit: false,
-                write: false,
-                apply_patch: false,
-                task: false,
-                todowrite: false,
-              },
+          tools: workerTools(push),
           variant: item.variant || undefined,
           parts: [
             {
@@ -1342,6 +1357,8 @@ export default async function team(input: { client: Client; worktree: string; di
     async execute(args, ctx) {
       const runRoot = projectRoot(ctx.directory, ctx.worktree)
       const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
+      const strategy = args.strategy ?? "parallel"
+      const limit = args.limit ?? cap
       await sweep(input.client, runRoot)
       defs(args.tasks)
       if (args.tasks.length < 1) throw new Error("team requires at least one task")
@@ -1353,7 +1370,7 @@ export default async function team(input: { client: Client; worktree: string; di
         title: "team run",
         metadata: {
           tasks: args.tasks.length,
-          strategy: args.strategy,
+          strategy,
         },
       })
 
@@ -1419,12 +1436,12 @@ export default async function team(input: { client: Client; worktree: string; di
             (item) => item.state === "pending" && item.depends.every((dep) => done.has(dep)) && !active.has(item.id),
           )
 
-          if (args.strategy === "wave" && ready.length) {
+          if (strategy === "wave" && ready.length) {
             ready.forEach((item) => todo(run, item.id, { state: "queued" }))
             await save(runRoot, run)
             await Promise.all(ready.map((item) => launch(item)))
           } else {
-            ready.slice(0, Math.max(args.limit - active.size, 0)).forEach((item) => {
+            ready.slice(0, Math.max(limit - active.size, 0)).forEach((item) => {
               todo(run, item.id, { state: "queued" })
               void launch(item)
             })
