@@ -9,6 +9,97 @@ afterEach(async () => {
   await Instance.disposeAll()
 })
 
+test("team uses default limit when caller omits limit", async () => {
+  await using tmp = await tmpdir({ git: true })
+  let prompted = false
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "ses_child" } }
+        },
+        async promptAsync() {
+          prompted = true
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      tasks: [
+        {
+          id: "default-limit",
+          prompt: "inspect scheduler defaults",
+          write: false,
+        },
+      ],
+    } as unknown as Parameters<typeof plugin.tool.team.execute>[0],
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(prompted).toBe(true)
+  expect(out).toContain("default-limit: done")
+})
+
 test("team carries local .opencode files into worker worktrees and inherits parent permission", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -1453,7 +1544,119 @@ test("team keeps bash enabled for read-only workers and disables recursive deleg
     write: false,
     apply_patch: false,
     task: false,
+    team: false,
+    background: false,
+    team_status: false,
     todowrite: false,
+  })
+})
+
+test("team disables recursive orchestration tools for write workers", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let tools: Record<string, boolean> | undefined
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_write_tools",
+            },
+          }
+        },
+        async promptAsync(input) {
+          tools = input.body.tools
+          await Bun.write(path.join(input.query.directory, "worker.txt"), "worker output\n")
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_write_tools: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "write-tools",
+          prompt: "write a file",
+          write: true,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(tools).toEqual({
+    task: false,
+    team: false,
+    background: false,
+    team_status: false,
   })
 })
 
