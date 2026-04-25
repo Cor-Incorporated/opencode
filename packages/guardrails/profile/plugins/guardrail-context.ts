@@ -134,7 +134,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     "e2e-runner": "standard",
   }
   const tierModels: Record<string, string[]> = {
-    high: ["glm-5.1", "glm-5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
+    high: ["glm-5.1", "glm-5", "gpt-5.5", "gpt-5.3-codex", "gpt-5.2-codex"],
     standard: ["glm-4.7", "glm-4.6", "gpt-5.2", "gpt-5.1-codex", "gpt-5.1-codex-mini"],
     low: ["glm-4.5-flash", "glm-4.5-air", "gpt-5-mini", "gpt-5-nano"],
   }
@@ -236,6 +236,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   function deny(file: string, kind: "read" | "edit") {
     const item = rel(input.worktree, file)
     if (kind === "read" && has(item, sec)) return "secret material is outside the allowed read surface"
+    if (kind === "read" && /^\.opencode\/guardrails\/team-runs\/[^/]+\.json$/i.test(item)) return
     if (hidden(file)) return "guardrail runtime state is plugin-owned"
     if (kind === "edit" && has(item, cfg)) return "linter or formatter configuration is policy-protected"
   }

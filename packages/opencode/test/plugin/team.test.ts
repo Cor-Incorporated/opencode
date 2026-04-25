@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import team from "../../../../packages/guardrails/profile/plugins/team"
+import { evaluate } from "../../src/permission/evaluate"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 
@@ -100,6 +101,138 @@ test("team uses default limit when caller omits limit", async () => {
   expect(out).toContain("default-limit: done")
 })
 
+test("team worker model inherits the parent session model", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let model:
+    | {
+        providerID: string
+        modelID: string
+      }
+    | undefined
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "ses_child_inherit_model" } }
+        },
+        async promptAsync(input) {
+          model = input.body.model
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_inherit_model: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  time: { completed: Date.now() },
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  await plugin["chat.message"]?.(
+    {
+      sessionID: "ses_parent_model",
+      agent: "implement",
+      model: {
+        providerID: "zai-coding-plan",
+        modelID: "glm-5.1",
+      },
+    },
+    {
+      message: {
+        id: "msg_parent_model",
+        sessionID: "ses_parent_model",
+        role: "user",
+      },
+      parts: [
+        {
+          type: "text",
+          text: "Inspect the repository model routing before the team worker runs.",
+        },
+      ],
+    },
+  )
+
+  const out = await plugin.tool.team.execute(
+    {
+      tasks: [
+        {
+          id: "inherit-model",
+          prompt: `${"Implement coordinated fixes across packages/guardrails with tests. ".repeat(12)}Check routing only.`,
+          write: false,
+        },
+      ],
+    } as unknown as Parameters<typeof plugin.tool.team.execute>[0],
+    {
+      sessionID: "ses_parent_model",
+      messageID: "msg_parent_model",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(out).toContain("model=zai-coding-plan/glm-5.1")
+  expect(model).toEqual({
+    providerID: "zai-coding-plan",
+    modelID: "glm-5.1",
+  })
+})
+
 test("team carries local .opencode files into worker worktrees and inherits parent permission", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -187,7 +320,7 @@ alwaysApply: true
         permission?: {
           permission: string
           pattern: string
-          action: string
+          action: "allow" | "ask" | "deny"
         }[]
       }
     | undefined
@@ -304,9 +437,15 @@ alwaysApply: true
   expect(body?.permission?.slice(0, perm.length)).toEqual(perm)
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "rg *", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git ls-tree*", action: "allow" })
+  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git worktree list*", action: "allow" })
+  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git checkout *", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git rebase origin/develop", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git checkout -- *", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git cherry-pick *", action: "allow" })
+  expect(evaluate("bash", "git worktree list", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("bash", "git checkout feat/alpha-quality-gates", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("bash", "opencode run /init", body?.permission ?? []).action).toBe("deny")
+  expect(evaluate("bash", "rm -rf .opencode", body?.permission ?? []).action).toBe("deny")
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "opencode *", action: "deny" })
   expect(box).toContain(path.join(".opencode", "team"))
 })
@@ -641,6 +780,91 @@ test("team fails isolated write tasks that produce no patch", async () => {
       },
     ),
   ).rejects.toThrow("Write task completed without producing a patch")
+})
+
+test("team classifies model routing failures as llm_unavailable", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_model_missing",
+            },
+          }
+        },
+        async promptAsync() {
+          throw new Error("Model not found: openai/gpt-5.5")
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return { data: {} }
+        },
+        async messages() {
+          return { data: [] }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  await expect(
+    plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "model-missing",
+            prompt: "write a note file",
+            write: true,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: new AbortController().signal,
+        ask: async () => {},
+        metadata() {},
+      },
+    ),
+  ).rejects.toThrow("Model not found: openai/gpt-5.5")
+
+  const runs = await fs.readdir(path.join(tmp.path, ".opencode", "guardrails", "team-runs"))
+  const saved = JSON.parse(await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "team-runs", runs[0]!)).text())
+  expect(saved.tasks[0].failure_stage).toBe("llm_unavailable")
 })
 
 test("team allows explicit no_patch write tasks for operation-only work", async () => {
@@ -2421,6 +2645,134 @@ test("team treats completed assistant messages as completion even when status st
   expect(out).toContain("output=finished from completed message")
 })
 
+test("team waits past completed tool-call assistant messages", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let messages = 0
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_tool_calls_then_done",
+            },
+          }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_tool_calls_then_done: {
+                type: "busy",
+              },
+            },
+          }
+        },
+        async messages() {
+          messages += 1
+          return {
+            data: [
+              messages < 2
+                ? {
+                    info: {
+                      role: "assistant",
+                      finish: "tool-calls",
+                      time: {
+                        completed: Date.now(),
+                      },
+                    },
+                    parts: [
+                      {
+                        type: "tool",
+                        state: {
+                          status: "completed",
+                          output: "git worktree list output",
+                        },
+                      },
+                    ],
+                  }
+                : {
+                    info: {
+                      role: "assistant",
+                      time: {
+                        completed: Date.now(),
+                      },
+                    },
+                    parts: [
+                      {
+                        type: "text",
+                        text: "finished after tool call",
+                      },
+                    ],
+                  },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "verify",
+          prompt: "check repo facts",
+          write: false,
+          worktree: false,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(messages).toBeGreaterThanOrEqual(2)
+  expect(out).toContain("- verify: done")
+  expect(out).toContain("output=finished after tool call")
+})
+
 test("team retries event subscriptions before consuming session.idle", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -2551,7 +2903,7 @@ test("team_status reconciles stale running runs from completed child messages", 
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -2686,7 +3038,7 @@ test("team execute sweeps stale running runs before launching new work", async (
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -2853,7 +3205,7 @@ test("team startup sweep reconciles stale runs without explicit tool use", async
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -2976,7 +3328,7 @@ test("chat.message hook also sweeps stale runs during normal lifecycle", async (
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -3569,6 +3921,123 @@ test("team uses an existing sibling git worktree mentioned in the task prompt", 
       .quiet()
       .catch(() => undefined)
     await fs.rm(target, { recursive: true, force: true })
+  }
+})
+
+test("team merges changes from an existing .opencode worktree mentioned in the task prompt", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const target = path.join(path.dirname(tmp.path), ".opencode", "worktrees", `team-shared-${crypto.randomUUID()}`)
+  await fs.mkdir(path.dirname(target), { recursive: true })
+  await Bun.$`git worktree add --detach ${target} HEAD`.cwd(tmp.path).quiet()
+
+  let box = ""
+  try {
+    const plugin = await team({
+      client: {
+        permission: {
+          async list() {
+            return { data: [] }
+          },
+        },
+        question: {
+          async list() {
+            return { data: [] }
+          },
+        },
+        session: {
+          async get() {
+            return { data: { permission: [] } }
+          },
+          async create() {
+            return {
+              data: {
+                id: "ses_existing_opencode_worktree",
+              },
+            }
+          },
+          async promptAsync(input) {
+            box = input.query.directory
+            expect(box).toBe(target)
+            await Bun.write(path.join(target, "shared-worker.txt"), "shared worker output\n")
+          },
+          async prompt() {
+            return {}
+          },
+          async status() {
+            return {
+              data: {
+                ses_existing_opencode_worktree: {
+                  type: "idle",
+                },
+              },
+            }
+          },
+          async messages() {
+            return {
+              data: [
+                {
+                  info: {
+                    role: "assistant",
+                    time: { completed: Date.now() },
+                  },
+                  parts: [
+                    {
+                      type: "text",
+                      text: "done",
+                    },
+                  ],
+                },
+              ],
+            }
+          },
+          async abort() {
+            return {}
+          },
+        },
+      },
+      worktree: tmp.path,
+      directory: tmp.path,
+    })
+
+    const out = await plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "shared-worktree",
+            prompt: `You are working in a **git worktree** at:\n\`${target}\`\n\nModify shared-worker.txt.`,
+            write: true,
+            worktree: true,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: new AbortController().signal,
+        ask: async () => {},
+        metadata() {},
+      },
+    )
+
+    expect(out).toContain("shared-worktree: done")
+    expect(out).toContain("patch=")
+    expect(await Bun.file(path.join(tmp.path, "shared-worker.txt")).text()).toBe("shared worker output\n")
+  } finally {
+    await Bun.$`git worktree remove --force ${target}`.cwd(tmp.path).quiet().catch(() => {})
+    await fs.rm(path.dirname(target), { recursive: true, force: true }).catch(() => {})
   }
 })
 

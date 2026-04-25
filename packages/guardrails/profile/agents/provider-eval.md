@@ -1,7 +1,7 @@
 ---
 description: Evaluate admitted OpenRouter-backed candidates without widening the default confidential-code lane.
 mode: subagent
-model: openrouter/openai/gpt-5.4-mini
+model: openrouter/openai/gpt-5.5-mini
 permission:
   "*": deny
   read: allow

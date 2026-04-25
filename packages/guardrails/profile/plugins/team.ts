@@ -12,6 +12,7 @@ const need = new Map<string, Need>()
 const live = new Map<string, Run>()
 const seen = new WeakMap<object, Seen>()
 const sweeping = new Map<string, Promise<void>>()
+const models = new Map<string, Lane>()
 
 type Need = {
   done: boolean
@@ -35,6 +36,7 @@ type Note = {
 type Msg = {
   info: {
     role: string
+    finish?: string
     time?: {
       completed?: number
     }
@@ -55,6 +57,12 @@ type Rule = {
   permission: string
   pattern: string
   action: "allow" | "deny" | "ask"
+}
+
+type Lane = {
+  provider: string
+  model: string
+  variant: string
 }
 
 type Client = {
@@ -152,7 +160,15 @@ type Step = {
   no_patch: boolean
   allow_no_patch: boolean
   updated_at?: string
-  failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout" | "blocked"
+  failure_stage?:
+    | "worktree_setup"
+    | "session_create"
+    | "llm_unavailable"
+    | "execution"
+    | "merge_back"
+    | "aborted"
+    | "timeout"
+    | "blocked"
 }
 
 type Run = {
@@ -224,7 +240,8 @@ function summary(parts: Note[]) {
 function pick(list: Msg[], completedOnly = false) {
   const items = [...list].reverse().filter((item) => item.info.role === "assistant")
   if (!items.length) return
-  return items.find((item) => typeof item.info.time?.completed === "number") ?? (completedOnly ? undefined : items[0])
+  const done = items.find((item) => typeof item.info.time?.completed === "number" && item.info.finish !== "tool-calls")
+  return done ?? (completedOnly ? undefined : items[0])
 }
 
 function scrub(cmd: string) {
@@ -396,6 +413,7 @@ function workerTools(push: boolean) {
 function permit(base: Rule[]) {
   return [
     ...base,
+    { permission: "bash", pattern: "*", action: "allow" as const },
     { permission: "bash", pattern: "pwd", action: "allow" as const },
     { permission: "bash", pattern: "ls", action: "allow" as const },
     { permission: "bash", pattern: "ls *", action: "allow" as const },
@@ -407,6 +425,7 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "tail *", action: "allow" as const },
     { permission: "bash", pattern: "git status*", action: "allow" as const },
     { permission: "bash", pattern: "git diff*", action: "allow" as const },
+    { permission: "bash", pattern: "git branch*", action: "allow" as const },
     { permission: "bash", pattern: "git log*", action: "allow" as const },
     { permission: "bash", pattern: "git rev-parse*", action: "allow" as const },
     { permission: "bash", pattern: "git ls-tree*", action: "allow" as const },
@@ -414,7 +433,10 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "git ls-files*", action: "allow" as const },
     { permission: "bash", pattern: "git grep *", action: "allow" as const },
     { permission: "bash", pattern: "git restore *", action: "allow" as const },
+    { permission: "bash", pattern: "git worktree list*", action: "allow" as const },
+    { permission: "bash", pattern: "git checkout *", action: "allow" as const },
     { permission: "bash", pattern: "git checkout -- *", action: "allow" as const },
+    { permission: "bash", pattern: "git switch *", action: "allow" as const },
     { permission: "bash", pattern: "git rebase origin/develop", action: "allow" as const },
     { permission: "bash", pattern: "git rebase develop", action: "allow" as const },
     { permission: "bash", pattern: "git rebase origin/main", action: "allow" as const },
@@ -422,31 +444,42 @@ function permit(base: Rule[]) {
     { permission: "bash", pattern: "git rebase --continue", action: "allow" as const },
     { permission: "bash", pattern: "git rebase --skip", action: "allow" as const },
     { permission: "bash", pattern: "git cherry-pick *", action: "allow" as const },
+    { permission: "bash", pattern: "rm -rf *", action: "deny" as const },
+    { permission: "bash", pattern: "sudo *", action: "deny" as const },
+    { permission: "bash", pattern: "git reset --hard*", action: "deny" as const },
+    { permission: "bash", pattern: "git merge *", action: "deny" as const },
+    { permission: "bash", pattern: "curl * | sh*", action: "deny" as const },
+    { permission: "bash", pattern: "curl * | bash*", action: "deny" as const },
     { permission: "bash", pattern: "opencode *", action: "deny" as const },
     { permission: "bash", pattern: "claude *", action: "deny" as const },
     { permission: "bash", pattern: "codex *", action: "deny" as const },
   ]
 }
 
-function lane(item: Pick<Step, "id" | "description" | "agent" | "prompt" | "depends">) {
-  const text = [item.id, item.description, item.agent, item.prompt, ...item.depends].join("\n")
-  const large =
-    big(text) ||
-    item.depends.length > 1 ||
-    /(leader|integrat|review|coord|arch|design|migration|cross|wide|large|broad|major|critical|fan-?in|全体|統合|横断|設計|移行|大規模)/i.test(
-      text,
-    )
-  if (large) {
-    return {
-      provider: "openai",
-      model: "gpt-5.4",
-      variant: "high",
-    }
-  }
+function recordModel(
+  sessionID: string,
+  model?: { providerID?: unknown; modelID?: unknown; id?: unknown },
+  variant?: unknown,
+) {
+  const provider = typeof model?.providerID === "string" ? model.providerID : ""
+  const id = typeof model?.modelID === "string" ? model.modelID : typeof model?.id === "string" ? model.id : ""
+  if (!sessionID || !provider || !id) return
+  models.set(sessionID, {
+    provider,
+    model: id,
+    variant: typeof variant === "string" ? variant : "",
+  })
+}
+
+function currentLane(sessionID: string) {
+  return models.get(sessionID) ?? { provider: "zai-coding-plan", model: "glm-5.1", variant: "" }
+}
+
+function lane(_item: Pick<Step, "id" | "description" | "agent" | "prompt" | "depends">, current: Lane) {
   return {
-    provider: "zai-coding-plan",
-    model: "glm-5.1",
-    variant: "",
+    provider: current.provider,
+    model: current.model,
+    variant: current.variant,
   }
 }
 
@@ -494,6 +527,7 @@ function worktreeHint(text: string) {
     /(?:git\s+)?worktree[\s\S]{0,120}?(?:at|path|directory|dir|:|：)[\s\S]{0,40}?`([^`\n]+)`/i,
     /(?:ワークツリー|作業ツリー)[\s\S]{0,120}?`([^`\n]+)`/i,
     /`(\/[^`\n]*\/\.worktrees\/[^`\n]+)`/i,
+    /`(\/[^`\n]*\/\.opencode\/worktrees\/[^`\n]+)`/i,
   ]
   for (const rule of direct) {
     const match = text.match(rule)
@@ -945,13 +979,17 @@ async function snap(client: Client, id: string, dir: string, completedOnly = fal
 }
 
 function stage(err: string): Step["failure_stage"] {
-  return /blocked on (permission|question)/i.test(err)
-    ? "blocked"
-    : /abort/i.test(err)
-      ? "aborted"
-      : /timeout/i.test(err)
-        ? "timeout"
-        : "execution"
+  return /(model not found|api key|apikey|auth|unauthorized|forbidden|provider|llm|language model|no such model|invalid model|quota|rate limit)/i.test(
+    err,
+  )
+    ? "llm_unavailable"
+    : /blocked on (permission|question)/i.test(err)
+      ? "blocked"
+      : /abort/i.test(err)
+        ? "aborted"
+        : /timeout/i.test(err)
+          ? "timeout"
+          : "execution"
 }
 
 function why(item: Step | undefined, err: string): Step["failure_stage"] {
@@ -1222,6 +1260,7 @@ export default async function team(input: { client: Client; worktree: string; di
       const target = repoRoot && push ? await externalWorktree(repoRoot, item.prompt) : undefined
       const useExistingWorktree = push && item.worktree && !!target
       useWorktree = push && item.worktree && !!repoRoot && !useExistingWorktree
+      const mergeWorktree = push && item.worktree && !!repoRoot
 
       if (useExistingWorktree && target) {
         box = target
@@ -1229,7 +1268,7 @@ export default async function team(input: { client: Client; worktree: string; di
         box = await yardadd(repoRoot, `${run.id}-${item.id}`)
         kept = await carry(repoRoot, ctx.directory, box)
       }
-      const prompt = direct(useWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt, push)
+      const prompt = direct(mergeWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt, push)
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
@@ -1291,7 +1330,7 @@ export default async function team(input: { client: Client; worktree: string; di
       let err = out.error
       // [Phase6] Classify failure stage for abort reason tracking
       let failure_stage: Step["failure_stage"] = undefined
-      if (!err && useWorktree && repoRoot && box !== ctx.directory) {
+      if (!err && mergeWorktree && repoRoot && box !== ctx.directory) {
         const merged = await merge(repoRoot, box, run.id, item.id, kept)
         patchfile = merged.patch
         if (!merged.merged) {
@@ -1307,7 +1346,7 @@ export default async function team(input: { client: Client; worktree: string; di
       todo(run, item.id, {
         state: err ? "error" : "done",
         patch: patchfile,
-        no_patch: !err && item.write && useWorktree && patchfile === "",
+        no_patch: !err && item.write && mergeWorktree && patchfile === "",
         output: out.text,
         error: err,
         failure_stage: err ? failure_stage : undefined,
@@ -1383,13 +1422,16 @@ export default async function team(input: { client: Client; worktree: string; di
         created_at: now(),
         updated_at: now(),
         tasks: args.tasks.map((item) => {
-          const pick = lane({
-            id: item.id,
-            description: item.description || item.id,
-            prompt: item.prompt,
-            depends: item.depends ?? [],
-            agent: item.agent || "",
-          })
+          const pick = lane(
+            {
+              id: item.id,
+              description: item.description || item.id,
+              prompt: item.prompt,
+              depends: item.depends ?? [],
+              agent: item.agent || "",
+            },
+            currentLane(ctx.sessionID),
+          )
           return {
             id: item.id,
             description: item.description || item.id,
@@ -1507,13 +1549,6 @@ export default async function team(input: { client: Client; worktree: string; di
         agent: args.agent || "",
         write: write(args.prompt, args.write),
         worktree: canIsolate && args.worktree !== false,
-        ...lane({
-          id: slug(args.description || args.agent || "worker") || "worker",
-          description: args.description || "background worker",
-          prompt: args.prompt,
-          depends: [],
-          agent: args.agent || "",
-        }),
         state: "pending",
         dir: "",
         session: "",
@@ -1522,6 +1557,16 @@ export default async function team(input: { client: Client; worktree: string; di
         allow_no_patch: operationOnly(args.prompt),
         output: "",
         error: "",
+        ...lane(
+          {
+            id: slug(args.description || args.agent || "worker") || "worker",
+            description: args.description || "background worker",
+            prompt: args.prompt,
+            depends: [],
+            agent: args.agent || "",
+          },
+          currentLane(ctx.sessionID),
+        ),
       }
       const run: Run = {
         id: crypto.randomUUID(),
@@ -1620,6 +1665,11 @@ export default async function team(input: { client: Client; worktree: string; di
       item: {
         sessionID: string
         agent?: string
+        model?: {
+          providerID: string
+          modelID: string
+        }
+        variant?: string
       },
       out: {
         message: {
@@ -1631,6 +1681,7 @@ export default async function team(input: { client: Client; worktree: string; di
       },
     ) => {
       void sweep(input.client, inputRoot)
+      recordModel(item.sessionID, item.model, item.variant)
       if (out.message.role !== "user") return
       if (kids.has(item.sessionID)) return
       if (item.agent && /(review|technical-writer|doc-updater)/i.test(item.agent)) return
@@ -1664,6 +1715,13 @@ export default async function team(input: { client: Client; worktree: string; di
         type: "text",
         text: "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least one worker task. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
       })
+    },
+    "chat.params": async (item: {
+      sessionID: string
+      model: { providerID?: unknown; modelID?: unknown; id?: unknown }
+      message: { model?: { variant?: unknown } }
+    }) => {
+      recordModel(item.sessionID, item.model, item.message.model?.variant)
     },
     "tool.execute.before": async (
       item: {
