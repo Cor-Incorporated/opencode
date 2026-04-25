@@ -181,6 +181,43 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     await ctx.seen("codex_review.completed", { critical: findings.critical, high: findings.high })
   }
 
+  async function handleExternalReviewDetection(
+    item: { tool: string; args?: Record<string, unknown> },
+    out: { output: string; metadata?: Record<string, unknown> },
+  ) {
+    if (item.tool !== "bash") return
+    const cmd = str(item.args?.command)
+    const isOpenCodeReview = /\bopencode\s+run\b[\s\S]*\b(\/review|review|code-review|code-reviewer)\b/i.test(cmd)
+    const isClaudeReviewer = /\bclaude\b[\s\S]*(--agent(?:=|\s+)code-reviewer|--agent(?:=|\s+)review)\b/i.test(cmd)
+    if (!isOpenCodeReview && !isClaudeReviewer) return
+    if (typeof out.metadata?.exitCode === "number" && out.metadata.exitCode !== 0) {
+      await ctx.seen("external_review.failed", { command: cmd, exit_code: out.metadata.exitCode })
+      return
+    }
+    const output = str(out.output).trim()
+    if (!output || output.length < 20 || /Tool execution aborted/i.test(output)) {
+      await ctx.seen("external_review.empty_or_aborted", { command: cmd, length: output.length })
+      return
+    }
+    const findings = parseFindings(output)
+    await ctx.mark({
+      reviewed: true,
+      review_at: new Date().toISOString(),
+      review_agent: isClaudeReviewer ? "claude:code-reviewer" : "opencode:review",
+      review_glm_state: "done",
+      review_glm_at: new Date().toISOString(),
+      edits_since_review: 0,
+      review_critical_count: findings.critical,
+      review_high_count: findings.high,
+    })
+    await syncReviewState()
+    await ctx.seen("external_review.completed", {
+      agent: isClaudeReviewer ? "claude:code-reviewer" : "opencode:review",
+      critical: findings.critical,
+      high: findings.high,
+    })
+  }
+
   return {
     autoReview,
     checklist,
@@ -189,6 +226,6 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     syncReviewState,
     handleAutoReviewTrigger,
     handleCodexDetection,
+    handleExternalReviewDetection,
   }
 }
-
