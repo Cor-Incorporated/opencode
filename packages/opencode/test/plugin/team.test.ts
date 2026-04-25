@@ -809,7 +809,7 @@ test("team classifies model routing failures as llm_unavailable", async () => {
           }
         },
         async promptAsync() {
-          throw new Error("Model not found: openai/gpt-5.4")
+          throw new Error("Model not found: openai/gpt-5.5")
         },
         async prompt() {
           return {}
@@ -853,7 +853,7 @@ test("team classifies model routing failures as llm_unavailable", async () => {
         metadata() {},
       },
     ),
-  ).rejects.toThrow("Model not found: openai/gpt-5.4")
+  ).rejects.toThrow("Model not found: openai/gpt-5.5")
 
   const runs = await fs.readdir(path.join(tmp.path, ".opencode", "guardrails", "team-runs"))
   const saved = JSON.parse(await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "team-runs", runs[0]!)).text())
@@ -2768,7 +2768,7 @@ test("team_status reconciles stale running runs from completed child messages", 
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -2903,7 +2903,7 @@ test("team execute sweeps stale running runs before launching new work", async (
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -3070,7 +3070,7 @@ test("team startup sweep reconciles stale runs without explicit tool use", async
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,
@@ -3193,7 +3193,7 @@ test("chat.message hook also sweeps stale runs during normal lifecycle", async (
                 write: false,
                 worktree: false,
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.5",
                 variant: "high",
                 state: "running",
                 dir,

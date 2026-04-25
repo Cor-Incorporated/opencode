@@ -134,7 +134,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     "e2e-runner": "standard",
   }
   const tierModels: Record<string, string[]> = {
-    high: ["glm-5.1", "glm-5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"],
+    high: ["glm-5.1", "glm-5", "gpt-5.5", "gpt-5.3-codex", "gpt-5.2-codex"],
     standard: ["glm-4.7", "glm-4.6", "gpt-5.2", "gpt-5.1-codex", "gpt-5.1-codex-mini"],
     low: ["glm-4.5-flash", "glm-4.5-air", "gpt-5-mini", "gpt-5-nano"],
   }
