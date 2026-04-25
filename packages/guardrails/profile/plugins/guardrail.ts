@@ -335,6 +335,7 @@ export default async function guardrail(
       }
 
       await review.handleCodexDetection(item, out)
+      await review.handleExternalReviewDetection(item, out)
       await gitHandlers.bashAfterGit(item, out, data)
 
       if (item.tool === "bash") {
