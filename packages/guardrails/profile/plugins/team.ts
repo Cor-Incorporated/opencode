@@ -1412,6 +1412,7 @@ export default async function team(input: { client: Client; worktree: string; di
       const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
       const strategy = args.strategy ?? "parallel"
       const limit = args.limit ?? cap
+      const runAbort = new AbortController()
       defs(args.tasks)
       if (args.tasks.length < 1) throw new Error("team requires at least one task")
       const run: Run = {
@@ -1467,6 +1468,7 @@ export default async function team(input: { client: Client; worktree: string; di
       await presweep(input.client, runRoot)
       const req = {
         ...ctx,
+        abort: runAbort.signal,
         permission: await parentRules(input.client, ctx),
       }
 

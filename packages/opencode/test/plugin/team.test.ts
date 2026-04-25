@@ -2458,7 +2458,7 @@ test("team waits when child status is temporarily missing before idle", async ()
   expect(out).toContain("output=finished")
 })
 
-test("team does not finish on non-completed progress when child status disappears", async () => {
+test("team ignores parent abort while waiting for child completion", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -2511,7 +2511,13 @@ test("team does not finish on non-completed progress when child status disappear
               },
             }
           }
-          return { data: {} as Record<string, { type: string }> }
+          return {
+            data: {
+              ses_child_gone_idle: {
+                type: "idle",
+              },
+            },
+          }
         },
         async messages() {
           return {
@@ -2519,11 +2525,12 @@ test("team does not finish on non-completed progress when child status disappear
               {
                 info: {
                   role: "assistant",
+                  time: turn > 1 ? { completed: Date.now() } : undefined,
                 },
                 parts: [
                   {
                     type: "text",
-                    text: "Inspecting the repository before editing.",
+                    text: turn > 1 ? "finished after parent abort" : "Inspecting the repository before editing.",
                   },
                 ],
               },
@@ -2541,34 +2548,34 @@ test("team does not finish on non-completed progress when child status disappear
 
   setTimeout(() => abort.abort(), 1100)
 
-  await expect(
-    plugin.tool.team.execute(
-      {
-        strategy: "parallel",
-        limit: 1,
-        tasks: [
-          {
-            id: "verify",
-            prompt: "check repo facts",
-            write: false,
-            worktree: false,
-          },
-        ],
-      },
-      {
-        sessionID: "ses_parent",
-        messageID: "msg_parent",
-        agent: "implement",
-        directory: tmp.path,
-        worktree: tmp.path,
-        abort: abort.signal,
-        ask: async () => {},
-        metadata() {},
-      },
-    ),
-  ).rejects.toThrow("Aborted")
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "verify",
+          prompt: "check repo facts",
+          write: false,
+          worktree: false,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: abort.signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
 
   expect(turn).toBeGreaterThanOrEqual(2)
+  expect(out).toContain("- verify: done")
+  expect(out).toContain("output=finished after parent abort")
 })
 
 test("team treats session.idle event as completion even when status never appears", async () => {
