@@ -236,6 +236,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   function deny(file: string, kind: "read" | "edit") {
     const item = rel(input.worktree, file)
     if (kind === "read" && has(item, sec)) return "secret material is outside the allowed read surface"
+    if (kind === "read" && /^\.opencode\/guardrails\/team-runs\/[^/]+\.json$/i.test(item)) return
     if (hidden(file)) return "guardrail runtime state is plugin-owned"
     if (kind === "edit" && has(item, cfg)) return "linter or formatter configuration is policy-protected"
   }

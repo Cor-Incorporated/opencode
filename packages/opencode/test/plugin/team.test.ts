@@ -100,6 +100,138 @@ test("team uses default limit when caller omits limit", async () => {
   expect(out).toContain("default-limit: done")
 })
 
+test("team worker model inherits the parent session model", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let model:
+    | {
+        providerID: string
+        modelID: string
+      }
+    | undefined
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return { data: { id: "ses_child_inherit_model" } }
+        },
+        async promptAsync(input) {
+          model = input.body.model
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_inherit_model: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  time: { completed: Date.now() },
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  await plugin["chat.message"]?.(
+    {
+      sessionID: "ses_parent_model",
+      agent: "implement",
+      model: {
+        providerID: "zai-coding-plan",
+        modelID: "glm-5.1",
+      },
+    },
+    {
+      message: {
+        id: "msg_parent_model",
+        sessionID: "ses_parent_model",
+        role: "user",
+      },
+      parts: [
+        {
+          type: "text",
+          text: "Inspect the repository model routing before the team worker runs.",
+        },
+      ],
+    },
+  )
+
+  const out = await plugin.tool.team.execute(
+    {
+      tasks: [
+        {
+          id: "inherit-model",
+          prompt: `${"Implement coordinated fixes across packages/guardrails with tests. ".repeat(12)}Check routing only.`,
+          write: false,
+        },
+      ],
+    } as unknown as Parameters<typeof plugin.tool.team.execute>[0],
+    {
+      sessionID: "ses_parent_model",
+      messageID: "msg_parent_model",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(out).toContain("model=zai-coding-plan/glm-5.1")
+  expect(model).toEqual({
+    providerID: "zai-coding-plan",
+    modelID: "glm-5.1",
+  })
+})
+
 test("team carries local .opencode files into worker worktrees and inherits parent permission", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -641,6 +773,91 @@ test("team fails isolated write tasks that produce no patch", async () => {
       },
     ),
   ).rejects.toThrow("Write task completed without producing a patch")
+})
+
+test("team classifies model routing failures as llm_unavailable", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_model_missing",
+            },
+          }
+        },
+        async promptAsync() {
+          throw new Error("Model not found: openai/gpt-5.4")
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return { data: {} }
+        },
+        async messages() {
+          return { data: [] }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  await expect(
+    plugin.tool.team.execute(
+      {
+        strategy: "parallel",
+        limit: 1,
+        tasks: [
+          {
+            id: "model-missing",
+            prompt: "write a note file",
+            write: true,
+          },
+        ],
+      },
+      {
+        sessionID: "ses_parent",
+        messageID: "msg_parent",
+        agent: "implement",
+        directory: tmp.path,
+        worktree: tmp.path,
+        abort: new AbortController().signal,
+        ask: async () => {},
+        metadata() {},
+      },
+    ),
+  ).rejects.toThrow("Model not found: openai/gpt-5.4")
+
+  const runs = await fs.readdir(path.join(tmp.path, ".opencode", "guardrails", "team-runs"))
+  const saved = JSON.parse(await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "team-runs", runs[0]!)).text())
+  expect(saved.tasks[0].failure_stage).toBe("llm_unavailable")
 })
 
 test("team allows explicit no_patch write tasks for operation-only work", async () => {

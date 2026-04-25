@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createAccessHandlers } from "../../../../packages/guardrails/profile/plugins/guardrail-access"
 import type { GuardrailContext } from "../../../../packages/guardrails/profile/plugins/guardrail-context"
 
-function context() {
+function context(deny?: GuardrailContext["deny"]) {
   const marks: Record<string, unknown>[] = []
   const ctx: GuardrailContext = {
     input: {
@@ -49,9 +49,7 @@ function context() {
     compact() {
       return ""
     },
-    deny() {
-      return undefined
-    },
+    deny: deny ?? (() => undefined),
     baseline() {
       return undefined
     },
@@ -69,6 +67,43 @@ function context() {
 }
 
 describe("guardrail-access", () => {
+  test("allows read tool access to team run metadata json", async () => {
+    const { ctx, marks } = context((file, kind) => {
+      const rel = file.replace("/tmp/project/", "")
+      if (kind === "read" && /^\.opencode\/guardrails\/team-runs\/[^/]+\.json$/i.test(rel)) return
+      if (rel.startsWith(".opencode/guardrails/")) return "guardrail runtime state is plugin-owned"
+    })
+    const access = createAccessHandlers(ctx)
+
+    await expect(
+      access.toolBeforeAccess(
+        { tool: "read", args: { filePath: "/tmp/project/.opencode/guardrails/team-runs/run-1.json" } },
+        { args: { filePath: "/tmp/project/.opencode/guardrails/team-runs/run-1.json" } },
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(marks).toHaveLength(0)
+  })
+
+  test("blocks read tool access to other guardrail runtime state", async () => {
+    const { ctx, marks } = context((file) => {
+      if (file.replace("/tmp/project/", "").startsWith(".opencode/guardrails/")) {
+        return "guardrail runtime state is plugin-owned"
+      }
+    })
+    const access = createAccessHandlers(ctx)
+
+    await expect(
+      access.toolBeforeAccess(
+        { tool: "read", args: { filePath: "/tmp/project/.opencode/guardrails/state.json" } },
+        { args: { filePath: "/tmp/project/.opencode/guardrails/state.json" } },
+      ),
+    ).rejects.toThrow("guardrail runtime state is plugin-owned")
+
+    expect(marks).toHaveLength(1)
+    expect(marks[0]?.last_reason).toBe("guardrail runtime state is plugin-owned")
+  })
+
   test("allows read-only shell access to .opencode/guardrails", async () => {
     const { ctx, marks } = context()
     const access = createAccessHandlers(ctx)

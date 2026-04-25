@@ -12,6 +12,7 @@ const need = new Map<string, Need>()
 const live = new Map<string, Run>()
 const seen = new WeakMap<object, Seen>()
 const sweeping = new Map<string, Promise<void>>()
+const models = new Map<string, Lane>()
 
 type Need = {
   done: boolean
@@ -55,6 +56,12 @@ type Rule = {
   permission: string
   pattern: string
   action: "allow" | "deny" | "ask"
+}
+
+type Lane = {
+  provider: string
+  model: string
+  variant: string
 }
 
 type Client = {
@@ -152,7 +159,15 @@ type Step = {
   no_patch: boolean
   allow_no_patch: boolean
   updated_at?: string
-  failure_stage?: "worktree_setup" | "session_create" | "execution" | "merge_back" | "aborted" | "timeout" | "blocked"
+  failure_stage?:
+    | "worktree_setup"
+    | "session_create"
+    | "llm_unavailable"
+    | "execution"
+    | "merge_back"
+    | "aborted"
+    | "timeout"
+    | "blocked"
 }
 
 type Run = {
@@ -428,25 +443,30 @@ function permit(base: Rule[]) {
   ]
 }
 
-function lane(item: Pick<Step, "id" | "description" | "agent" | "prompt" | "depends">) {
-  const text = [item.id, item.description, item.agent, item.prompt, ...item.depends].join("\n")
-  const large =
-    big(text) ||
-    item.depends.length > 1 ||
-    /(leader|integrat|review|coord|arch|design|migration|cross|wide|large|broad|major|critical|fan-?in|全体|統合|横断|設計|移行|大規模)/i.test(
-      text,
-    )
-  if (large) {
-    return {
-      provider: "openai",
-      model: "gpt-5.4",
-      variant: "high",
-    }
-  }
+function recordModel(
+  sessionID: string,
+  model?: { providerID?: unknown; modelID?: unknown; id?: unknown },
+  variant?: unknown,
+) {
+  const provider = typeof model?.providerID === "string" ? model.providerID : ""
+  const id = typeof model?.modelID === "string" ? model.modelID : typeof model?.id === "string" ? model.id : ""
+  if (!sessionID || !provider || !id) return
+  models.set(sessionID, {
+    provider,
+    model: id,
+    variant: typeof variant === "string" ? variant : "",
+  })
+}
+
+function currentLane(sessionID: string) {
+  return models.get(sessionID) ?? { provider: "zai-coding-plan", model: "glm-5.1", variant: "" }
+}
+
+function lane(_item: Pick<Step, "id" | "description" | "agent" | "prompt" | "depends">, current: Lane) {
   return {
-    provider: "zai-coding-plan",
-    model: "glm-5.1",
-    variant: "",
+    provider: current.provider,
+    model: current.model,
+    variant: current.variant,
   }
 }
 
@@ -945,13 +965,17 @@ async function snap(client: Client, id: string, dir: string, completedOnly = fal
 }
 
 function stage(err: string): Step["failure_stage"] {
-  return /blocked on (permission|question)/i.test(err)
-    ? "blocked"
-    : /abort/i.test(err)
-      ? "aborted"
-      : /timeout/i.test(err)
-        ? "timeout"
-        : "execution"
+  return /(model not found|api key|apikey|auth|unauthorized|forbidden|provider|llm|language model|no such model|invalid model|quota|rate limit)/i.test(
+    err,
+  )
+    ? "llm_unavailable"
+    : /blocked on (permission|question)/i.test(err)
+      ? "blocked"
+      : /abort/i.test(err)
+        ? "aborted"
+        : /timeout/i.test(err)
+          ? "timeout"
+          : "execution"
 }
 
 function why(item: Step | undefined, err: string): Step["failure_stage"] {
@@ -1383,13 +1407,16 @@ export default async function team(input: { client: Client; worktree: string; di
         created_at: now(),
         updated_at: now(),
         tasks: args.tasks.map((item) => {
-          const pick = lane({
-            id: item.id,
-            description: item.description || item.id,
-            prompt: item.prompt,
-            depends: item.depends ?? [],
-            agent: item.agent || "",
-          })
+          const pick = lane(
+            {
+              id: item.id,
+              description: item.description || item.id,
+              prompt: item.prompt,
+              depends: item.depends ?? [],
+              agent: item.agent || "",
+            },
+            currentLane(ctx.sessionID),
+          )
           return {
             id: item.id,
             description: item.description || item.id,
@@ -1507,13 +1534,6 @@ export default async function team(input: { client: Client; worktree: string; di
         agent: args.agent || "",
         write: write(args.prompt, args.write),
         worktree: canIsolate && args.worktree !== false,
-        ...lane({
-          id: slug(args.description || args.agent || "worker") || "worker",
-          description: args.description || "background worker",
-          prompt: args.prompt,
-          depends: [],
-          agent: args.agent || "",
-        }),
         state: "pending",
         dir: "",
         session: "",
@@ -1522,6 +1542,16 @@ export default async function team(input: { client: Client; worktree: string; di
         allow_no_patch: operationOnly(args.prompt),
         output: "",
         error: "",
+        ...lane(
+          {
+            id: slug(args.description || args.agent || "worker") || "worker",
+            description: args.description || "background worker",
+            prompt: args.prompt,
+            depends: [],
+            agent: args.agent || "",
+          },
+          currentLane(ctx.sessionID),
+        ),
       }
       const run: Run = {
         id: crypto.randomUUID(),
@@ -1620,6 +1650,11 @@ export default async function team(input: { client: Client; worktree: string; di
       item: {
         sessionID: string
         agent?: string
+        model?: {
+          providerID: string
+          modelID: string
+        }
+        variant?: string
       },
       out: {
         message: {
@@ -1631,6 +1666,7 @@ export default async function team(input: { client: Client; worktree: string; di
       },
     ) => {
       void sweep(input.client, inputRoot)
+      recordModel(item.sessionID, item.model, item.variant)
       if (out.message.role !== "user") return
       if (kids.has(item.sessionID)) return
       if (item.agent && /(review|technical-writer|doc-updater)/i.test(item.agent)) return
@@ -1664,6 +1700,13 @@ export default async function team(input: { client: Client; worktree: string; di
         type: "text",
         text: "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least one worker task. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
       })
+    },
+    "chat.params": async (item: {
+      sessionID: string
+      model: { providerID?: unknown; modelID?: unknown; id?: unknown }
+      message: { model?: { variant?: unknown } }
+    }) => {
+      recordModel(item.sessionID, item.model, item.message.model?.variant)
     },
     "tool.execute.before": async (
       item: {
