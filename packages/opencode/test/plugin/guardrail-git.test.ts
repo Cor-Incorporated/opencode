@@ -119,6 +119,16 @@ describe("guardrail-git", () => {
     expect(fixture.marks.at(-1)?.last_reason).toBe("branch reset sync blocked")
   })
 
+  test("does not treat dev as a hard-coded protected branch", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(git.bashBeforeGit("git push origin dev", {}, {})).resolves.toBeUndefined()
+    await expect(git.bashBeforeGit("git push origin main", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+  })
+
   test("requires explicit worktree for codex exec reviews", async () => {
     await using fixture = await context()
     const git = createGitHandlers(fixture.ctx, review())

@@ -232,7 +232,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       } catch {}
     }
 
-    const protectedBranch = /^(main|master|develop|dev)$/
+    const protectedBranch = /^(main|master|develop)$/
     if (/\bgit\s+stash\s+pop\b/i.test(cmd)) {
       await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "stash pop blocked: use apply then drop" })
       throw new Error(
@@ -247,7 +247,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
           "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
         )
       }
-      const refspecMatch = cmd.match(/HEAD:(main|master|develop|dev)(?:\s|$)/i)
+      const refspecMatch = cmd.match(/HEAD:(main|master|develop)(?:\s|$)/i)
       if (refspecMatch) {
         throw new Error(
           "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",

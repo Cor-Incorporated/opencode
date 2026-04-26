@@ -25,7 +25,19 @@ async function context(state: string) {
     tierModels: {},
     domainDirs: {},
     async mark(data) {
-      await Bun.write(state, JSON.stringify({ ...await Bun.file(state).json().catch(() => ({})), ...data }, null, 2))
+      await Bun.write(
+        state,
+        JSON.stringify(
+          {
+            ...(await Bun.file(state)
+              .json()
+              .catch(() => ({}))),
+            ...data,
+          },
+          null,
+          2,
+        ),
+      )
     },
     async seen(type, data) {
       events.push({ type, ...data })
@@ -107,6 +119,65 @@ test("external claude code-reviewer marks GLM review done", async () => {
   const data = await Bun.file(state).json()
   expect(data.review_glm_state).toBe("done")
   expect(data.review_agent).toBe("claude:code-reviewer")
+})
+
+test("gstack review log marks matching review gates done", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({}))
+  const { ctx, events } = await context(state)
+  const review = createReviewPipeline(ctx)
+
+  await review.handleExternalReviewDetection(
+    {
+      tool: "bash",
+      args: {
+        command:
+          '~/.claude/skills/gstack/bin/gstack-review-log \'{"skill":"code-reviewer","timestamp":"2026-04-26T00:00:00Z","status":"pass"}\'',
+      },
+    },
+    { output: "", metadata: { exitCode: 0 } },
+  )
+  await review.handleExternalReviewDetection(
+    {
+      tool: "bash",
+      args: {
+        command:
+          '~/.claude/skills/gstack/bin/gstack-review-log \'{"skill":"codex-review","timestamp":"2026-04-26T00:00:00Z","status":"pass"}\'',
+      },
+    },
+    { output: "", metadata: { exitCode: 0 } },
+  )
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBe("done")
+  expect(data.review_codex_state).toBe("done")
+  expect(data.review_state).toBe("done")
+  expect(events.filter((item) => item.type === "gstack_review.completed")).toHaveLength(2)
+})
+
+test("failed gstack review log does not mark review done", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({}))
+  const { ctx, events } = await context(state)
+
+  await createReviewPipeline(ctx).handleExternalReviewDetection(
+    {
+      tool: "bash",
+      args: {
+        command:
+          '~/.claude/skills/gstack/bin/gstack-review-log \'{"skill":"code-reviewer","timestamp":"2026-04-26T00:00:00Z","status":"failed"}\'',
+      },
+    },
+    { output: "", metadata: { exitCode: 0 } },
+  )
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBeUndefined()
+  expect(events.some((item) => item.type === "gstack_review.not_passed")).toBe(true)
 })
 
 test("external review abort output does not mark review done", async () => {
