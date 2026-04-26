@@ -895,6 +895,16 @@ async function merge(dir: string, item: string, run: string, id: string, kept: s
     if (diff.code !== 0) throw new Error(diff.err || diff.out || "Failed to read worktree diff")
     next = patch(dir, run, id)
     await Bun.write(next, diff.out)
+    const overlap = await dirtyOverlap(dir, staged)
+    if (overlap.length) {
+      return {
+        patch: next,
+        merged: false,
+        error:
+          `Parent worktree has uncommitted changes in worker-touched file(s): ${overlap.join(", ")}. ` +
+          `Worker patch was saved at ${next}; commit or stash the parent edits, then apply the patch manually or rerun the task.`,
+      }
+    }
     const out = await git(dir, ["apply", "--3way", next])
     if (out.code !== 0) return { patch: next, merged: false, error: out.err || out.out || "Failed to apply patch" }
     // [Phase6] Post-merge verification: confirm patch applied cleanly
@@ -933,6 +943,21 @@ async function merge(dir: string, item: string, run: string, id: string, kept: s
   } finally {
     await yardrm(dir, item).catch(() => {})
   }
+}
+
+async function dirtyOverlap(dir: string, files: string[]) {
+  if (!files.length) return []
+  const checks = await Promise.all([
+    git(dir, ["diff", "--name-only", "-z", "--", ...files]),
+    git(dir, ["diff", "--cached", "--name-only", "-z", "--", ...files]),
+    git(dir, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...files]),
+  ])
+  const dirty = new Set<string>()
+  for (const item of checks) {
+    if (item.code !== 0) continue
+    for (const file of item.out.split("\0").filter(Boolean)) dirty.add(file)
+  }
+  return files.filter((file) => dirty.has(file))
 }
 
 async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
@@ -1282,7 +1307,10 @@ export default async function team(input: { client: Client; worktree: string; di
         box = await yardadd(repoRoot, `${run.id}-${item.id}`)
         kept = await carry(repoRoot, ctx.directory, box)
       }
-      const prompt = direct(mergeWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt, push)
+      const prompt = direct(
+        mergeWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt,
+        push,
+      )
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {

@@ -47,14 +47,20 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     })
     const msg = [...(msgs.data ?? [])].reverse().find((item) => item.info.role === "assistant")
     if (!msg) return { text: "", error: "" }
-    const text = msg.parts.filter((item) => item.type === "text").map((item) => item.text ?? "").join("\n")
+    const text = msg.parts
+      .filter((item) => item.type === "text")
+      .map((item) => item.text ?? "")
+      .join("\n")
     const error = msg.info.error?.data?.message ?? ""
     return { text: text.slice(0, 4000), error }
   }
 
   function parseFindings(raw: string) {
     const lines = raw.split("\n")
-    let critical = 0, high = 0, medium = 0, low = 0
+    let critical = 0,
+      high = 0,
+      medium = 0,
+      low = 0
     for (const line of lines) {
       const item = line.trim()
       if (/\b(no|zero|0|none|without|aren't|isn't|not)\b/i.test(item)) continue
@@ -78,10 +84,12 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       body: {
         agent: "code-reviewer",
         tools: { edit: false, write: false, apply_patch: false, multiedit: false },
-        parts: [{
-          type: "text",
-          text: `Review the current working directory changes for quality, correctness, and security.\nEdited files: ${list(data.edited_files).join(", ") || "unknown"}\nEdit count: ${num(data.edit_count)}\nReport findings as CRITICAL, HIGH, MEDIUM, or LOW.`,
-        }],
+        parts: [
+          {
+            type: "text",
+            text: `Review the current working directory changes for quality, correctness, and security.\nEdited files: ${list(data.edited_files).join(", ") || "unknown"}\nEdit count: ${num(data.edit_count)}\nReport findings as CRITICAL, HIGH, MEDIUM, or LOW.`,
+          },
+        ],
       },
     })
     await pollIdle(made.data.id)
@@ -111,17 +119,23 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       review_high_count: findings.high,
     })
     await syncReviewState()
-    await ctx.seen("auto_review.completed", { findings: findings.total, critical: findings.critical, high: findings.high })
+    await ctx.seen("auto_review.completed", {
+      findings: findings.total,
+      critical: findings.critical,
+      high: findings.high,
+    })
     if (findings.critical > 0 || findings.high > 0) {
       await ctx.input.client.session.prompt({
         path: { id: parentSession },
         query: { directory: ctx.input.directory },
         body: {
           noReply: true,
-          parts: [{
-            type: "text",
-            text: `[Auto-review] CRITICAL=${findings.critical} HIGH=${findings.high}. Fix findings before merging.\n\n${result.text.slice(0, 2000)}`,
-          }],
+          parts: [
+            {
+              type: "text",
+              text: `[Auto-review] CRITICAL=${findings.critical} HIGH=${findings.high}. Fix findings before merging.\n\n${result.text.slice(0, 2000)}`,
+            },
+          ],
         },
       })
       await ctx.mark({ workflow_phase: "fixing" })
@@ -133,7 +147,12 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       { name: "tests_pass", pass: flag(data.tests_executed) },
       { name: "review_glm", pass: str(data.review_glm_state) === "done" },
       { name: "review_codex", pass: str(data.review_codex_state) === "done" },
-      { name: "review_fresh", pass: (str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done") && num(data.edits_since_review) === 0 },
+      {
+        name: "review_fresh",
+        pass:
+          (str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done") &&
+          num(data.edits_since_review) === 0,
+      },
       { name: "ci_green", pass: flag(data.ci_green) },
       { name: "no_critical", pass: num(data.review_critical_count) === 0 && num(data.review_high_count) === 0 },
     ]
@@ -159,10 +178,7 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     })
   }
 
-  async function handleCodexDetection(
-    item: { tool: string; args?: Record<string, unknown> },
-    out: { output: string },
-  ) {
+  async function handleCodexDetection(item: { tool: string; args?: Record<string, unknown> }, out: { output: string }) {
     if (item.tool !== "mcp__codex__codex") return
     const prompt = str(item.args?.prompt || item.args?.command || "")
     if (!/\b(review|code[\.\-_]review|diff[\.\-_]review)\b/i.test(prompt)) return
@@ -187,6 +203,41 @@ export function createReviewPipeline(ctx: GuardrailContext) {
   ) {
     if (item.tool !== "bash") return
     const cmd = str(item.args?.command)
+    const gstack = parseGstackReviewLog(cmd)
+    if (gstack) {
+      if (typeof out.metadata?.exitCode === "number" && out.metadata.exitCode !== 0) {
+        await ctx.seen("gstack_review.failed", { command: cmd, exit_code: out.metadata.exitCode })
+        return
+      }
+      if (gstack.failed) {
+        await ctx.seen("gstack_review.not_passed", { skill: gstack.skill, status: gstack.status })
+        return
+      }
+      const findings = parseFindings([cmd, str(out.output)].join("\n"))
+      const now = new Date().toISOString()
+      await ctx.mark({
+        reviewed: true,
+        review_at: now,
+        review_agent: `gstack:${gstack.skill}`,
+        ...(gstack.kind === "codex"
+          ? { review_codex_state: "done", review_codex_at: now }
+          : {
+              review_glm_state: "done",
+              review_glm_at: now,
+              edits_since_review: 0,
+              review_critical_count: findings.critical,
+              review_high_count: findings.high,
+            }),
+      })
+      await syncReviewState()
+      await ctx.seen("gstack_review.completed", {
+        skill: gstack.skill,
+        kind: gstack.kind,
+        critical: findings.critical,
+        high: findings.high,
+      })
+      return
+    }
     const isOpenCodeReview = /\bopencode\s+run\b[\s\S]*\b(\/review|review|code-review|code-reviewer)\b/i.test(cmd)
     const isClaudeReviewer = /\bclaude\b[\s\S]*(--agent(?:=|\s+)code-reviewer|--agent(?:=|\s+)review)\b/i.test(cmd)
     if (!isOpenCodeReview && !isClaudeReviewer) return
@@ -216,6 +267,17 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       critical: findings.critical,
       high: findings.high,
     })
+  }
+
+  function parseGstackReviewLog(cmd: string) {
+    if (!/\bgstack-review-log\b/.test(cmd)) return
+    const skill = cmd.match(/["']skill["']\s*:\s*["']([^"']+)["']/i)?.[1] ?? ""
+    if (!skill) return
+    const status = cmd.match(/["']status["']\s*:\s*["']([^"']+)["']/i)?.[1] ?? ""
+    const failed = /^(fail|failed|error|blocked|changes_requested|rejected)$/i.test(status)
+    if (/^codex-review$/i.test(skill)) return { skill, kind: "codex" as const, status, failed }
+    if (/^(code-reviewer|glm-review|review)$/i.test(skill)) return { skill, kind: "glm" as const, status, failed }
+    return
   }
 
   return {

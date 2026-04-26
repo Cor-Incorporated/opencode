@@ -1,4 +1,4 @@
-import { AppFileSystem } from "@opencode-ai/shared/filesystem"
+import { AppFileSystem } from "@opencode-ai/core/filesystem"
 
 export function canonicalizeWorkingDirectory(dir?: string) {
   if (dir) {
