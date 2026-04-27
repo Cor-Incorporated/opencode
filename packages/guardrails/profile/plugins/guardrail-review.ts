@@ -240,7 +240,8 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     }
     const isOpenCodeReview = /\bopencode\s+run\b[\s\S]*\b(\/review|review|code-review|code-reviewer)\b/i.test(cmd)
     const isClaudeReviewer = /\bclaude\b[\s\S]*(--agent(?:=|\s+)code-reviewer|--agent(?:=|\s+)review)\b/i.test(cmd)
-    if (!isOpenCodeReview && !isClaudeReviewer) return
+    const isSkillScriptReviewer = /\b(pr_analyzer|code_quality_checker)\.py\b/i.test(cmd)
+    if (!isOpenCodeReview && !isClaudeReviewer && !isSkillScriptReviewer) return
     if (typeof out.metadata?.exitCode === "number" && out.metadata.exitCode !== 0) {
       await ctx.seen("external_review.failed", { command: cmd, exit_code: out.metadata.exitCode })
       return
@@ -254,7 +255,11 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     await ctx.mark({
       reviewed: true,
       review_at: new Date().toISOString(),
-      review_agent: isClaudeReviewer ? "claude:code-reviewer" : "opencode:review",
+      review_agent: isClaudeReviewer
+        ? "claude:code-reviewer"
+        : isSkillScriptReviewer
+          ? "code-reviewer:scripts"
+          : "opencode:review",
       review_glm_state: "done",
       review_glm_at: new Date().toISOString(),
       edits_since_review: 0,
@@ -263,7 +268,11 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     })
     await syncReviewState()
     await ctx.seen("external_review.completed", {
-      agent: isClaudeReviewer ? "claude:code-reviewer" : "opencode:review",
+      agent: isClaudeReviewer
+        ? "claude:code-reviewer"
+        : isSkillScriptReviewer
+          ? "code-reviewer:scripts"
+          : "opencode:review",
       critical: findings.critical,
       high: findings.high,
     })

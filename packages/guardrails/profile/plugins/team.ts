@@ -15,6 +15,7 @@ const sweeping = new Map<string, Promise<void>>()
 const models = new Map<string, Lane>()
 const sweepWait = 1000
 const rulesWait = 2000
+const defaultIdleTimeout = 10 * 60 * 1000
 
 type Need = {
   done: boolean
@@ -961,7 +962,9 @@ async function dirtyOverlap(dir: string, files: string[]) {
 }
 
 async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
-  let seen = false
+  const started = Date.now()
+  const timeout = millis("OPENCODE_TEAM_IDLE_TIMEOUT_MS", defaultIdleTimeout)
+  let last = "starting"
   const hit = mark(client)
   if (process.env.DEBUG_TEAM) {
     console.log("idle.begin", id, hit.idle.has(id), hit.per.size, hit.on)
@@ -973,6 +976,9 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
     if (blocked) throw new Error(blocked)
     const done = await snap(client, id, dir, true)
     if (done.completed) return
+    if (Date.now() - started > timeout) {
+      throw new Error(`Timed out waiting for worker session ${id} after ${Math.round(timeout / 1000)}s (${last})`)
+    }
     const stat = await client.session.status({
       query: {
         directory: dir,
@@ -980,14 +986,20 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
     })
     const item = stat.data?.[id]
     if (!item) {
+      last = "status missing"
       if (hit.idle.has(id)) return
       await Bun.sleep(gap)
       continue
     }
-    seen = true
+    last = `status ${item.type}`
     if (item.type === "idle") return
     await Bun.sleep(gap)
   }
+}
+
+function millis(name: string, fallback: number) {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
 async function snap(client: Client, id: string, dir: string, completedOnly = false) {
@@ -1014,7 +1026,7 @@ function stage(err: string): Step["failure_stage"] {
       ? "blocked"
       : /abort/i.test(err)
         ? "aborted"
-        : /timeout/i.test(err)
+        : /timeout|timed out/i.test(err)
           ? "timeout"
           : "execution"
 }
