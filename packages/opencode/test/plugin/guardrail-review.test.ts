@@ -121,6 +121,25 @@ test("external claude code-reviewer marks GLM review done", async () => {
   expect(data.review_agent).toBe("claude:code-reviewer")
 })
 
+test("external code-reviewer scripts mark GLM review done", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({ review_codex_state: "done" }))
+  const { ctx, events } = await context(state)
+
+  await createReviewPipeline(ctx).handleExternalReviewDetection(
+    { tool: "bash", args: { command: "python ~/.claude/skills/code-reviewer/scripts/pr_analyzer.py --pr 65" } },
+    { output: "Review completed. No CRITICAL or HIGH findings were identified.", metadata: { exitCode: 0 } },
+  )
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBe("done")
+  expect(data.review_state).toBe("done")
+  expect(data.review_agent).toBe("code-reviewer:scripts")
+  expect(events.some((item) => item.type === "external_review.completed")).toBe(true)
+})
+
 test("gstack review log marks matching review gates done", async () => {
   await using tmp = await tmpdir()
   const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
