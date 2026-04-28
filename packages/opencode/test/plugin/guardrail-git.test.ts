@@ -77,6 +77,14 @@ async function context() {
   }
 }
 
+async function runGit(dir: string, args: string[]) {
+  const proc = Bun.spawn(["git", "-C", dir, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  await proc.exited
+}
+
 function review() {
   return {
     checklist() {
@@ -86,6 +94,9 @@ function review() {
       return { done: false, pending: ["GLM code-reviewer"], message: "pending: GLM code-reviewer" }
     },
     async syncReviewState() {},
+    async syncExternalReviewState(data: Record<string, unknown>) {
+      return data
+    },
   }
 }
 
@@ -144,5 +155,14 @@ describe("guardrail-git", () => {
     await expect(
       git.bashBeforeGit(`codex exec -C ${fixture.ctx.input.worktree} 'review PR #43'`, {}, {}),
     ).resolves.toBeUndefined()
+  })
+
+  test("exempts release branches from full review merge gate", async () => {
+    await using fixture = await context()
+    await runGit(fixture.ctx.input.worktree, ["init"])
+    await runGit(fixture.ctx.input.worktree, ["checkout", "-b", "release/main-sync"])
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(git.bashBeforeGit("git merge dev", {}, {})).resolves.toBeUndefined()
   })
 })

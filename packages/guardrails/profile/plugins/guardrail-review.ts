@@ -1,10 +1,40 @@
-import { flag, list, num, stash, str } from "./guardrail-patterns"
+import path from "path"
+import { flag, git, list, num, stash, str } from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
 
 const REVIEW_POLL_GAP = 750
 const REVIEW_TIMEOUT_MS = 120_000
 
 export function createReviewPipeline(ctx: GuardrailContext) {
+  function obj(data: unknown) {
+    return data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {}
+  }
+
+  function truthy(data: Record<string, unknown>, key: string) {
+    return data[key] === true
+  }
+
+  async function readClaudeStates(name: string) {
+    return Promise.all(
+      [
+        path.join(ctx.input.worktree, ".claude", "state", name),
+        path.join(process.env.HOME || "", ".claude", "state", name),
+      ]
+        .filter((item, index, items) => item && items.indexOf(item) === index)
+        .map((item) =>
+          Bun.file(item)
+            .json()
+            .catch(() => ({})),
+        ),
+    )
+  }
+
+  async function currentBranch() {
+    const result = await git(ctx.input.worktree, ["branch", "--show-current"])
+    if (result.code !== 0) return ""
+    return result.stdout.trim()
+  }
+
   function reviewGate(data: Record<string, unknown>) {
     const glm = str(data.review_glm_state) === "done"
     const codex = str(data.review_codex_state) === "done"
@@ -25,6 +55,55 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       review_state: gate.done ? "done" : "",
       ...(gate.done ? { edits_since_review: 0 } : {}),
     })
+  }
+
+  async function syncExternalReviewState(data: Record<string, unknown>, input: { branch?: string; pr?: string } = {}) {
+    const branch = input.branch || (await currentBranch())
+    const [reviews, locks] = await Promise.all([
+      readClaudeStates("review-status.json"),
+      readClaudeStates("pr-review-lock.json"),
+    ])
+    const branchReviews = branch ? reviews.map((item) => obj(obj(item)[branch])) : []
+    const prLocks = input.pr ? locks.map((item) => obj(obj(item)[input.pr!])) : []
+    const codeReviewDone =
+      branchReviews.some((item) => truthy(item, "code_review")) ||
+      prLocks.some((item) => truthy(item, "verified") && truthy(item, "review_lgtm"))
+    const codexReviewDone = branchReviews.some(
+      (item) =>
+        truthy(item, "codex_review") ||
+        (truthy(item, "codex_review_ran") && num(item.codex_critical) === 0 && num(item.codex_high) === 0),
+    )
+    const now = new Date().toISOString()
+    const next = {
+      ...(codeReviewDone && str(data.review_glm_state) !== "done"
+        ? {
+            reviewed: true,
+            review_at: now,
+            review_agent: "claude-hooks",
+            review_glm_state: "done",
+            review_glm_at: now,
+            edits_since_review: 0,
+          }
+        : {}),
+      ...(codexReviewDone && str(data.review_codex_state) !== "done"
+        ? {
+            reviewed: true,
+            review_at: now,
+            review_codex_state: "done",
+            review_codex_at: now,
+          }
+        : {}),
+    }
+    if (Object.keys(next).length === 0) return data
+    await ctx.mark(next)
+    await syncReviewState()
+    await ctx.seen("claude_review_state.synced", {
+      branch,
+      pr: input.pr || "",
+      code_review: codeReviewDone,
+      codex_review: codexReviewDone,
+    })
+    return stash(ctx.state)
   }
 
   async function pollIdle(sessionID: string) {
@@ -295,6 +374,7 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     parseFindings,
     reviewGate,
     syncReviewState,
+    syncExternalReviewState,
     handleAutoReviewTrigger,
     handleCodexDetection,
     handleExternalReviewDetection,

@@ -15,6 +15,10 @@ type Review = {
     message: string
   }
   syncReviewState(): Promise<void>
+  syncExternalReviewState(
+    data: Record<string, unknown>,
+    input?: { branch?: string; pr?: string },
+  ): Promise<Record<string, unknown>>
 }
 
 export function createGitHandlers(ctx: GuardrailContext, review: Review) {
@@ -74,10 +78,11 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     }
 
     if (isMerge) {
-      const criticalCount = num(data.review_critical_count)
-      const highCount = num(data.review_high_count)
+      const mergeData = await review.syncExternalReviewState(data, { pr: prMergeNumber })
+      const criticalCount = num(mergeData.review_critical_count)
+      const highCount = num(mergeData.review_high_count)
       if (criticalCount > 0 || highCount > 0) {
-        const prNum = str(data.review_pr_number)
+        const prNum = str(mergeData.review_pr_number)
         await ctx.mark({
           last_block: "bash",
           last_command: cmd,
@@ -91,12 +96,13 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
         const branchResult = await git(ctx.input.worktree, ["branch", "--show-current"])
         if (branchResult.code !== 0) throw new Error("git branch failed")
         const branch = branchResult.stdout.trim()
-        const tier = /^(ci|chore|docs)\//.test(branch) ? "EXEMPT" : /^fix\//.test(branch) ? "LIGHT" : "FULL"
+        const tier = /^(ci|chore|docs|release)\//.test(branch) ? "EXEMPT" : /^fix\//.test(branch) ? "LIGHT" : "FULL"
         if (tier === "EXEMPT") {
           await ctx.seen("pre_merge.tier", { branch, tier, result: "pass" })
         } else if (tier === "LIGHT") {
-          const anyReviewDone = str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done"
-          const checksRan = Boolean(str(data.review_checks_at))
+          const anyReviewDone =
+            str(mergeData.review_glm_state) === "done" || str(mergeData.review_codex_state) === "done"
+          const checksRan = Boolean(str(mergeData.review_checks_at))
           const noSevere = checksRan && criticalCount === 0 && highCount === 0
           if (!anyReviewDone && !noSevere) {
             await ctx.mark({
@@ -109,7 +115,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
             )
           }
         } else {
-          const gate = review.reviewGate(data)
+          const gate = review.reviewGate(mergeData)
           if (!gate.done) {
             await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `FULL tier: ${gate.message}` })
             throw new Error(
@@ -119,7 +125,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
         }
       } catch (err) {
         if (String(err).includes("blocked")) throw err
-        const gate = review.reviewGate(data)
+        const gate = review.reviewGate(await review.syncExternalReviewState(data, { pr: prMergeNumber }))
         if (!gate.done) {
           await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `merge blocked: ${gate.message}` })
           throw new Error(

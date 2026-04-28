@@ -10,8 +10,8 @@ async function context(state: string) {
   const ctx: GuardrailContext = {
     input: {
       client: {} as GuardrailContext["input"]["client"],
-      directory: path.dirname(path.dirname(state)),
-      worktree: path.dirname(path.dirname(state)),
+      directory: path.dirname(path.dirname(path.dirname(state))),
+      worktree: path.dirname(path.dirname(path.dirname(state))),
     },
     mode: "enforced",
     root: path.dirname(state),
@@ -174,6 +174,53 @@ test("gstack review log marks matching review gates done", async () => {
   expect(data.review_codex_state).toBe("done")
   expect(data.review_state).toBe("done")
   expect(events.filter((item) => item.type === "gstack_review.completed")).toHaveLength(2)
+})
+
+test("syncs verified Claude hook lock into OpenCode GLM review state", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await fs.mkdir(path.join(tmp.path, ".claude", "state"), { recursive: true })
+  await Bun.write(state, JSON.stringify({ review_codex_state: "done" }))
+  await Bun.write(
+    path.join(tmp.path, ".claude", "state", "pr-review-lock.json"),
+    JSON.stringify({ "76": { verified: true, review_lgtm: true } }),
+  )
+  const { ctx, events } = await context(state)
+
+  await createReviewPipeline(ctx).syncExternalReviewState(await Bun.file(state).json(), {
+    branch: "develop",
+    pr: "76",
+  })
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBe("done")
+  expect(data.review_codex_state).toBe("done")
+  expect(data.review_state).toBe("done")
+  expect(data.review_agent).toBe("claude-hooks")
+  expect(events.some((item) => item.type === "claude_review_state.synced")).toBe(true)
+})
+
+test("syncs Claude review-status branch records into both review gates", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await fs.mkdir(path.join(tmp.path, ".claude", "state"), { recursive: true })
+  await Bun.write(state, JSON.stringify({}))
+  await Bun.write(
+    path.join(tmp.path, ".claude", "state", "review-status.json"),
+    JSON.stringify({ "feature/sync": { code_review: true, codex_review: true } }),
+  )
+  const { ctx } = await context(state)
+
+  await createReviewPipeline(ctx).syncExternalReviewState(await Bun.file(state).json(), {
+    branch: "feature/sync",
+  })
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBe("done")
+  expect(data.review_codex_state).toBe("done")
+  expect(data.review_state).toBe("done")
 })
 
 test("failed gstack review log does not mark review done", async () => {
