@@ -4,6 +4,7 @@ import path from "path"
 import team from "../../../../packages/guardrails/profile/plugins/team"
 import { evaluate } from "../../src/permission/evaluate"
 import { Instance } from "../../src/project/instance"
+import { Background } from "../../src/util/background"
 import { tmpdir } from "../fixture/fixture"
 
 afterEach(async () => {
@@ -1699,6 +1700,269 @@ test("background surfaces blocked child permissions before returning", async () 
 
   expect(out).toContain("state: error")
   expect(out).toContain("failure_stage=blocked")
+})
+
+test("background continues after returning, notifies parent, and team_status reconciles completion", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let complete = false
+  let statusCalls = 0
+  const notifications: string[] = []
+  const metadata: Record<string, unknown>[] = []
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_background_continue",
+            },
+          }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt(input) {
+          notifications.push(input.body.parts.map((part) => part.text).join("\n"))
+          return {}
+        },
+        async status() {
+          statusCalls += 1
+          return {
+            data: {
+              ses_child_background_continue: {
+                type: complete ? "idle" : "busy",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: complete
+              ? [
+                  {
+                    info: {
+                      role: "assistant",
+                      time: { completed: Date.now() },
+                    },
+                    parts: [
+                      {
+                        type: "text",
+                        text: "background finished after parent returned",
+                      },
+                    ],
+                  },
+                ]
+              : [],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.background.execute(
+    {
+      description: "async-background",
+      prompt: "Inspect the repository in the background and report completion.",
+      write: false,
+      worktree: false,
+      notify: true,
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata(input) {
+        metadata.push(input.metadata ?? {})
+      },
+    },
+  )
+
+  expect(out).toContain("type: background")
+  expect(out).toContain("state: running")
+  expect(out).toContain("- async-background: running")
+  expect(notifications).toEqual([])
+  expect(statusCalls).toBeGreaterThan(0)
+
+  complete = true
+  await Background.wait(tmp.path)
+
+  const runID = metadata.find((item): item is { run_id: string } => typeof item.run_id === "string")?.run_id
+  expect(runID).toBeTruthy()
+  expect(notifications).toHaveLength(1)
+  expect(notifications[0]).toContain(`Background run ${runID} completed.`)
+  expect(notifications[0]).toContain("output=background finished after parent returned")
+
+  const status = await plugin.tool.team_status.execute(
+    { run_id: runID },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(status).toContain(`run_id: ${runID}`)
+  expect(status).toContain("state: done")
+  expect(status).toContain("output=background finished after parent returned")
+})
+
+test("background failure with notify false is persisted without sending parent prompt", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  const notifications: string[] = []
+  const metadata: Record<string, unknown>[] = []
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return {
+            data: [
+              {
+                id: "per_bg_notify_false",
+                sessionID: "ses_child_background_no_notify",
+                permission: "bash",
+                patterns: ["deploy production"],
+                metadata: {
+                  description: "background deployment",
+                },
+              },
+            ],
+          }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create() {
+          return {
+            data: {
+              id: "ses_child_background_no_notify",
+            },
+          }
+        },
+        async promptAsync() {
+          return {}
+        },
+        async prompt(input) {
+          notifications.push(input.body.parts.map((part) => part.text).join("\n"))
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_background_no_notify: {
+                type: "busy",
+              },
+            },
+          }
+        },
+        async messages() {
+          return { data: [] }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.background.execute(
+    {
+      description: "no-notify-failure",
+      prompt: "deploy production",
+      write: false,
+      worktree: false,
+      notify: false,
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata(input) {
+        metadata.push(input.metadata ?? {})
+      },
+    },
+  )
+
+  const runID = metadata.find((item): item is { run_id: string } => typeof item.run_id === "string")?.run_id
+  expect(runID).toBeTruthy()
+  expect(out).toContain("state: error")
+  expect(out).toContain("failure_stage=blocked")
+  expect(notifications).toEqual([])
+
+  const status = await plugin.tool.team_status.execute(
+    { run_id: runID },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => {},
+      metadata() {},
+    },
+  )
+
+  expect(status).toContain("state: error")
+  expect(status).toContain("failure_stage=blocked")
+  expect(status).toContain("Blocked on permission: bash (background deployment) :: deploy production")
 })
 
 test("team falls back to tool output when child returns no text", async () => {
