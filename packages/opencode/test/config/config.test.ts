@@ -1023,6 +1023,47 @@ test("installs dependencies in writable OPENCODE_CONFIG_DIR", async () => {
   }
 })
 
+test("creates missing OPENCODE_CONFIG_DIR before writing gitignore", async () => {
+  await using tmp = await tmpdir<string>({
+    init: async (dir) => path.join(dir, "missing-configdir"),
+  })
+
+  const prev = process.env.OPENCODE_CONFIG_DIR
+  process.env.OPENCODE_CONFIG_DIR = tmp.extra
+
+  const noopNpm = Layer.mock(Npm.Service)({
+    install: () => Effect.void,
+    add: () => Effect.die("not implemented"),
+    which: () => Effect.succeed(Option.none()),
+  })
+  const testLayer = Config.layer.pipe(
+    Layer.provide(testFlock),
+    Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(emptyAuth),
+    Layer.provide(emptyAccount),
+    Layer.provideMerge(infra),
+    Layer.provide(noopNpm),
+  )
+
+  try {
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await Effect.runPromise(Config.Service.use((svc) => svc.get()).pipe(Effect.scoped, Effect.provide(testLayer)))
+        await Effect.runPromise(
+          Config.Service.use((svc) => svc.waitForDependencies()).pipe(Effect.scoped, Effect.provide(testLayer)),
+        )
+      },
+    })
+
+    expect(await Filesystem.exists(path.join(tmp.extra, ".gitignore"))).toBe(true)
+  } finally {
+    if (prev === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = prev
+  }
+})
+
 // Note: deduplication and serialization of npm installs is now handled by the
 // core Npm.Service (via EffectFlock). Those behaviors are tested in the core
 // package's npm tests, not here.
