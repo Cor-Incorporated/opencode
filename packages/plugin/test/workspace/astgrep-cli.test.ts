@@ -284,6 +284,83 @@ describe("AstGrepCli.replace (mocked)", () => {
     expect(out.total).toBe(0)
     expect(out.results).toHaveLength(0)
   })
+
+  it("surfaces ERROR-tagged stderr as failure even when exit code is 0 (re-review NH2)", async () => {
+    // PR-B re-review (round 2, NH2): real `sg` sometimes prints
+    //   ERROR: file not found: <path>
+    // to stderr and STILL exits 0. Treating that as "no matches" lets
+    // genuinely broken inputs masquerade as successful empty searches.
+    // The wrapper must escalate any ERROR-prefixed stderr to a thrown
+    // `AstGrepCliError`, regardless of exit code.
+    const spawn: SpawnFn = () => ({
+      stdout: Readable.from([]),
+      stderr: Readable.from([Buffer.from("ERROR: file not found: /nope.ts\n")]),
+      exited: Promise.resolve(0),
+    })
+    const cli = new AstGrepCli({ binary: "/fake/sg", spawn })
+    await expect(cli.search({ pattern: "x", lang: "ts", paths: ["/nope.ts"] })).rejects.toThrow(/exited with code 0/)
+  })
+
+  it("does not pass paths[0] as cwd to the spawned process (re-review NH3)", async () => {
+    // PR-B re-review (round 2, NH3): previously the CLI wrapper passed
+    // opts.paths?.[0] as the spawn's `cwd`. `paths` is the search target
+    // (positional CLI args), not a directory hint. Misusing it caused
+    // hangs (non-existent path) and ENOTDIR (file path). The fix relies
+    // on process.cwd() instead — assert by inspecting what the spawn
+    // function actually receives.
+    const seenCwds: Array<string | undefined> = []
+    const spawn: SpawnFn = (_cmd, opts) => {
+      seenCwds.push(opts.cwd)
+      return { stdout: Readable.from([]), stderr: null, exited: Promise.resolve(1) }
+    }
+    const cli = new AstGrepCli({ binary: "/fake/sg", spawn })
+    // Pass a *file* path as `paths[0]` — the previous implementation
+    // would use it as cwd and the spawn would crash with ENOTDIR. The
+    // fixed implementation should ignore it for cwd purposes.
+    await cli.search({ pattern: "x", lang: "ts", paths: ["/abs/path/to/file.ts"] })
+    expect(seenCwds.length).toBeGreaterThan(0)
+    for (const cwd of seenCwds) {
+      // Accept either undefined or process.cwd(); explicitly REJECT the
+      // bad value (the file path that was previously misused as cwd).
+      expect(cwd).not.toBe("/abs/path/to/file.ts")
+    }
+  })
+})
+
+describe("AstGrepCli.ensureBinary (re-review NH4)", () => {
+  it(
+    "resolves the sg binary via the @ast-grep/cli package's bin field in a Bun workspace",
+    async () => {
+      // PR-B re-review (round 2, NH4): in a Bun workspace, the bin shim
+      // `node_modules/.bin/sg` only exists at the *package* level
+      // (e.g. packages/plugin/node_modules/.bin/sg), not at the workspace
+      // root. The previous implementation only probed `process.cwd() +
+      // node_modules/.bin/sg` and PATH, so when run from the workspace
+      // root it returned "ast-grep CLI not found". The fix resolves the
+      // binary by reading `@ast-grep/cli`'s `package.json#bin`.
+      //
+      // The repository ships `@ast-grep/cli` as a real dependency, so
+      // ensureBinary() with no overrides must succeed in this test
+      // environment without relying on PATH.
+      const cli = new AstGrepCli()
+      const resolved = await cli.ensureBinary()
+      expect(resolved).toBeTruthy()
+      // Resolved path should either be an absolute path that ends with
+      // `sg` / `ast-grep`, OR one of the bare names if PATH lookup wins.
+      // Either way, it must NOT be the empty string and the file must
+      // actually exist when it's an absolute path.
+      const isAbsolute = path.isAbsolute(resolved)
+      if (isAbsolute) {
+        const fs = await import("node:fs/promises")
+        // Asserts the file is reachable; access() rejects on missing/unreadable.
+        await fs.access(resolved)
+      }
+      // Sanity: the resolved value should reference the ast-grep binary
+      // by name.
+      expect(/sg$|ast-grep$/.test(resolved)).toBe(true)
+    },
+    10_000,
+  )
 })
 
 describe("AstGrepCli.ensureBinary", () => {

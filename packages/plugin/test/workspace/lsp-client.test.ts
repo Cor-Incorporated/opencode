@@ -14,8 +14,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
-import { LspClient, findRoot, type RpcConnection } from "../../src/tools/workspace/lsp/client.js"
+import {
+  LspClient,
+  defaultConnectionFactory,
+  findRoot,
+  type RpcConnection,
+} from "../../src/tools/workspace/lsp/client.js"
+import { runDiagnostics } from "../../src/tools/workspace/lsp/diagnostics.js"
 import { applyEdits } from "../../src/tools/workspace/lsp/rename.js"
+import type { LspServerSpec } from "../../src/tools/workspace/lsp/server-registry.js"
 import { specForFile } from "../../src/tools/workspace/lsp/server-registry.js"
 
 interface RecordedCall {
@@ -236,22 +243,18 @@ describe("LSP connection factory (Bun-spawn regression)", () => {
   })
 
   it(
-    "completes the initialize handshake against a real spawned process under Bun",
+    "completes the initialize handshake via the real defaultConnectionFactory",
     async () => {
-      // PR-B regression: previously the default factory branched on
-      // globalThis.Bun and called Bun.spawn. Bun.spawn returns Web
-      // ReadableStream objects, but vscode-jsonrpc/node's
-      // StreamMessageReader / StreamMessageWriter call stdout.on("data")
-      // and stdin.write(...) — Node-stream APIs that Web streams don't
-      // implement. The handshake therefore never completed at runtime.
-      //
-      // This test stands in for a real LSP server: we spawn a Node script
-      // that speaks the Content-Length-framed JSON-RPC protocol (echoing
-      // initialize -> { capabilities: {} }). It exercises the exact
-      // code path used by defaultConnectionFactory in client.ts —
-      // node:child_process.spawn + vscode-jsonrpc/node — so any
-      // regression to Web-stream-based spawning would surface as a
-      // hung test that the timeout wrapper turns into a failure.
+      // PR-B regression (round 2, NM1): previously the test maintained an
+      // inline factory clone that mirrored defaultConnectionFactory. That
+      // protected against a Bun.spawn re-introduction in the *clone* but
+      // not in production code — if `client.ts` regressed independently,
+      // this test wouldn't catch it. We now build a stub LSP server,
+      // expose it through a one-off `LspServerSpec` whose `command` is
+      // the current Node executable, and drive the **production**
+      // `defaultConnectionFactory` directly. Any regression that breaks
+      // the real factory's stream wiring will hang here and the test
+      // timeout converts it to a clean failure.
       const dir = await mkdtemp(path.join(tmpdir(), "lsp-spawn-"))
       const stub = path.join(dir, "stub-lsp-server.mjs")
       // Minimal LSP-compatible stub. Reads framed JSON-RPC from stdin
@@ -291,74 +294,80 @@ describe("LSP connection factory (Bun-spawn regression)", () => {
       ].join("\n")
       await writeFile(stub, stubSource)
 
-      // Build a connection factory that mirrors defaultConnectionFactory
-      // exactly, but points at our stub binary. If anyone re-introduces
-      // Bun.spawn here, the stream-API mismatch will hang and the
-      // timeout will fire — turning the regression into a clean failure.
-      const cp = await import("node:child_process")
-      const rpc = (await import("vscode-jsonrpc/node")) as unknown as {
-        StreamMessageReader: new (s: NodeJS.ReadableStream) => unknown
-        StreamMessageWriter: new (s: NodeJS.WritableStream) => unknown
-        createMessageConnection: (
-          r: unknown,
-          w: unknown,
-        ) => {
-          sendRequest: <T>(m: string, p: unknown) => Promise<T>
-          sendNotification: (m: string, p: unknown) => unknown
-          onNotification: (m: string, h: (p: unknown) => void) => unknown
-          onClose: (h: () => void) => unknown
-          listen: () => void
-          dispose: () => void
-        }
+      // Hand the production factory a spec that points at our stub. Any
+      // regression that re-introduces Web-stream-based spawning here will
+      // hang — the test timeout converts that into a clean failure.
+      const stubSpec: LspServerSpec = {
+        language: "stub",
+        languageId: "stub",
+        extensions: [],
+        rootPatterns: [],
+        command: process.execPath,
+        args: [stub],
+        installHint: "(test stub)",
       }
-
-      const factory = async (): Promise<RpcConnection> => {
-        const proc = cp.spawn(process.execPath, [stub], { stdio: ["pipe", "pipe", "pipe"] })
-        // Sanity: these are Node streams. The whole point of the
-        // regression test — assert the stream type the production
-        // factory actually depends on.
-        expect(typeof (proc.stdout as NodeJS.ReadableStream).on).toBe("function")
-        expect(typeof (proc.stdin as NodeJS.WritableStream).write).toBe("function")
-        proc.stderr?.resume()
-
-        const reader = new rpc.StreamMessageReader(proc.stdout)
-        const writer = new rpc.StreamMessageWriter(proc.stdin)
-        const conn = rpc.createMessageConnection(reader, writer)
-        return {
-          sendRequest: <T>(m: string, p: unknown) => conn.sendRequest<T>(m, p),
-          sendNotification: (m, p) => {
-            void conn.sendNotification(m, p)
-          },
-          onNotification: (m, h) => {
-            conn.onNotification(m, h)
-          },
-          onClose: (h) => {
-            conn.onClose(h)
-          },
-          listen: () => conn.listen(),
-          dispose: () => {
-            try {
-              conn.dispose()
-            } finally {
-              try {
-                proc.kill()
-              } catch {
-                // already exited
-              }
-            }
-          },
-        }
-      }
-
-      // Drive a full handshake through the public LspClient API.
-      const fakeFile = path.join(dir, "x.ts")
-      await writeFile(fakeFile, "export const x = 1\n")
-      const client = await LspClient.forFile(fakeFile, { factory, timeoutMs: 5_000 })
+      const conn = await defaultConnectionFactory(stubSpec, dir)
+      const client = new LspClient(conn, stubSpec, dir, { timeoutMs: 5_000 })
+      await client.initialize("file://" + dir)
       expect(client.isClosed).toBe(false)
       await client.shutdown()
       await rm(dir, { recursive: true, force: true })
     },
     15_000,
+  )
+
+  it(
+    "surfaces ENOENT when the LSP binary is missing instead of crashing the process",
+    async () => {
+      // PR-B regression (round 2, NH1): previously `defaultConnectionFactory`
+      // never registered an `error` listener on the spawned ChildProcess.
+      // Node emits `error` synchronously enough that, without a listener,
+      // it can escalate to `uncaughtException` — and even when it doesn't,
+      // the JSON-RPC connection sits forever waiting for an `initialize`
+      // response, so the friendly install hint never reaches the user.
+      //
+      // We verify the new behaviour end-to-end via `runDiagnostics` (the
+      // shipping public surface): given a spec whose `command` is a
+      // guaranteed-missing binary, the call returns ok=false with an error
+      // string that includes the install hint, and the test process is
+      // still alive afterwards.
+      const dir = await mkdtemp(path.join(tmpdir(), "lsp-enoent-"))
+      const file = path.join(dir, "x.ts")
+      await writeFile(file, "export const x = 1\n")
+
+      const fakeBinary = path.join(dir, "definitely-not-installed-binary-xyz")
+      const missingSpec: LspServerSpec = {
+        language: "stub-missing",
+        languageId: "stub",
+        rootPatterns: [],
+        command: fakeBinary,
+        args: [],
+        installHint: "(test stub install hint)",
+      }
+
+      // Drive the production `defaultConnectionFactory` against a missing
+      // binary. We override the spec inside our test factory rather than
+      // mutating the shared registry. Whatever resulting error reaches
+      // `friendlyError` is then mapped to the **registered** spec's
+      // `installHint` ("TypeScript LSP not found...") because that's
+      // what `runDiagnostics` looks up via `specForFile(filePath)`.
+      const result = await runDiagnostics(file, {
+        factory: async (_spec, rootPath) => defaultConnectionFactory(missingSpec, rootPath),
+        timeoutMs: 1_500,
+      })
+
+      expect(result.ok).toBe(false)
+      // friendlyError() upgrades ENOENT to the registered install hint
+      // (TypeScript here, since we passed an `x.ts` file). The exact
+      // string is the registry default, but we assert on the
+      // distinctive prefix to keep the test resilient.
+      expect(result.error ?? "").toMatch(/TypeScript LSP not found/i)
+      // Process is still alive — if the test reaches this assertion, no
+      // uncaughtException was thrown.
+      expect(typeof process.pid).toBe("number")
+      await rm(dir, { recursive: true, force: true })
+    },
+    10_000,
   )
 })
 

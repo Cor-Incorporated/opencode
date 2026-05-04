@@ -31,6 +31,14 @@ dsuite("integration", () => {
 
   it("lsp_diagnostics returns at least one error for an obvious type bug", async () => {
     const result = await runDiagnostics(path.join(workdir, "bug.ts"))
+    // PR-B re-review (round 2, NM2): when this assertion fires in CI it
+    // is invariably because `typescript-language-server` is not
+    // installed. Surface result.error so the failure log is actionable
+    // instead of just "expected true to be false".
+    if (!result.ok) {
+      // eslint-disable-next-line no-console
+      console.error("[integration] runDiagnostics failed:", result.error)
+    }
     expect(result.ok).toBe(true)
     expect((result.diagnostics ?? []).some((d) => d.severity === "error")).toBe(true)
     await rm(workdir, { recursive: true, force: true })
@@ -44,6 +52,13 @@ dsuite("integration", () => {
       lang: "ts",
       paths: [dir],
     })
+    // PR-B re-review (round 2, NM2): same diagnostic enhancement for the
+    // ast-grep path. CI failures here are usually `sg` not on PATH or a
+    // pattern compile error — print the message so reviewers can act.
+    if (!result.ok) {
+      // eslint-disable-next-line no-console
+      console.error("[integration] runAstGrepSearch failed:", result.error)
+    }
     expect(result.ok).toBe(true)
     expect(result.total).toBeGreaterThanOrEqual(2)
     await rm(dir, { recursive: true, force: true })

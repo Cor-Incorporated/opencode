@@ -20,6 +20,15 @@ import type {
   SearchResult,
 } from "./types.js"
 
+/**
+ * `createRequire` lets us load `node:child_process` and resolve packages
+ * synchronously from an ESM module without a top-level `await`. This is the
+ * canonical Node.js escape hatch and avoids the bare `require(...)` call
+ * that fails under strict ESM resolution. Both Node and Bun support it.
+ */
+const moduleRequire = createRequire(import.meta.url)
+const nodeChildProcess = moduleRequire("node:child_process") as typeof import("node:child_process")
+
 export interface SpawnedProcess {
   stdout: ReadableStream<Uint8Array> | NodeJS.ReadableStream
   stderr: ReadableStream<Uint8Array> | NodeJS.ReadableStream | null
@@ -120,7 +129,12 @@ export class AstGrepCli {
   async search(opts: SearchOpts): Promise<{ results: SearchResult[]; total: number; truncated: boolean }> {
     const binary = await this.ensureBinary()
     const args = this.buildSearchArgs(opts)
-    const proc = this.spawnFn([binary, ...args], { cwd: opts.paths?.[0] })
+    // NOTE: do NOT pass opts.paths?.[0] as cwd. `paths` is the CLI search
+    // target (positional args after the pattern). Misusing it as cwd makes
+    // a non-existent path hang the spawn and a file path crash with
+    // ENOTDIR. The CLI receives paths through `args` already; rely on the
+    // current working directory of this process for cwd.
+    const proc = this.spawnFn([binary, ...args], { cwd: defaultSpawnCwd() })
     const matches = await collectMatches(proc)
     const truncated = matches.length > SEARCH_RESULT_CAP
     const trimmed = truncated ? matches.slice(0, SEARCH_RESULT_CAP) : matches
@@ -139,7 +153,7 @@ export class AstGrepCli {
       // and ast-grep reports the proposed `replacement` per match without touching disk.
       const proc = this.spawnFn(
         [binary, ...this.buildSearchArgs(opts, opts.rewrite, true)],
-        { cwd: opts.paths?.[0] },
+        { cwd: defaultSpawnCwd() },
       )
       const matches = await collectMatches(proc)
       return summarizeMatches(matches)
@@ -148,7 +162,7 @@ export class AstGrepCli {
     // then apply edits atomically by writing the new content per file ourselves.
     const previewProc = this.spawnFn(
       [binary, ...this.buildSearchArgs(opts, opts.rewrite, true)],
-      { cwd: opts.paths?.[0] },
+      { cwd: defaultSpawnCwd() },
     )
     const matches = await collectMatches(previewProc)
     if (matches.length === 0) return { filesChanged: 0, totalEdits: 0, sample: [] }
@@ -157,16 +171,151 @@ export class AstGrepCli {
   }
 }
 
+function defaultSpawnCwd(): string | undefined {
+  return typeof process !== "undefined" ? process.cwd() : undefined
+}
+
 function candidateBinaries(): string[] {
   const list: string[] = []
+
+  // 1. Resolve through the installed `@ast-grep/cli` package's `package.json`
+  //    `bin` field. This is the most reliable strategy across managers
+  //    (npm/pnpm/Bun workspace) because it follows whatever symlinks the
+  //    package manager set up, regardless of where `node_modules/.bin/sg`
+  //    happens to live for that workspace layout.
+  const fromPkg = resolveBinaryFromPackage()
+  if (fromPkg) list.push(...fromPkg)
+
+  // 2. Fallback: walk up from cwd looking for a `node_modules/.bin/sg` we
+  //    can probe. Bun workspaces sometimes only place the bin shim at the
+  //    package level (`packages/<x>/node_modules/.bin/sg`), not the
+  //    workspace root, so we ascend a bounded number of directories.
   const cwd = typeof process !== "undefined" ? process.cwd() : ""
   if (cwd) {
-    list.push(path.join(cwd, "node_modules", ".bin", "sg"))
-    list.push(path.join(cwd, "node_modules", ".bin", "ast-grep"))
+    let dir = cwd
+    const root = path.parse(dir).root
+    for (let depth = 0; depth < 8; depth++) {
+      list.push(path.join(dir, "node_modules", ".bin", "sg"))
+      list.push(path.join(dir, "node_modules", ".bin", "ast-grep"))
+      if (dir === root) break
+      const parent = path.dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
   }
+
+  // 3. PATH lookup as last resort.
   list.push("sg")
   list.push("ast-grep")
   return list
+}
+
+/**
+ * Resolve the `sg` / `ast-grep` binaries shipped by `@ast-grep/cli` by
+ * reading its `package.json#bin`. Returns absolute paths to whichever
+ * entries are present (both `sg` and `ast-grep` if declared).
+ *
+ * This is the primary resolution strategy because Bun's `node_modules/.bin`
+ * shims live next to the symlinked package directory, not at the workspace
+ * root — so cwd-based probing alone misses the install in monorepos.
+ *
+ * Implementation detail: `@ast-grep/cli` is itself a stub package whose
+ * own `bin` files are placeholders. The real platform binary lives in a
+ * sibling optional-dep package — `@ast-grep/cli-${platform}-${arch}[-libc]`
+ * — which a `postinstall` script normally hard-links into the stub. When
+ * postinstall did not run (common under `bun install --no-postinstall`,
+ * Bun's caching layer, or sandboxed CI), the stub `sg` is plain text and
+ * the real binary is only reachable through the platform package.
+ *
+ * We therefore probe both entries, in order:
+ *   1. The platform-specific package (`@ast-grep/cli-darwin-arm64/sg` etc.)
+ *   2. The `@ast-grep/cli` stub (works once postinstall has run)
+ *
+ * `binaryWorks` (`--version` probe) filters out the placeholder text file
+ * automatically, so probing the stub when the platform binary is already
+ * linked is harmless.
+ */
+function resolveBinaryFromPackage(): string[] | null {
+  const out: string[] = []
+
+  // First, locate the `@ast-grep/cli` stub package. We need this for two
+  // reasons: (a) so we can read its `bin` field, and (b) so we can
+  // resolve its sibling optional-deps (the platform packages) using the
+  // CLI's package context — they're not visible from the plugin's
+  // resolution root because they're declared as `optionalDependencies`
+  // of `@ast-grep/cli`, not of the plugin.
+  let cliPkgJsonPath: string | null = null
+  try {
+    cliPkgJsonPath = moduleRequire.resolve("@ast-grep/cli/package.json")
+  } catch {
+    // Package not installed at all — fall through and return null.
+    return null
+  }
+
+  // 1. Prefer the platform-specific package, which always ships the real
+  //    binary regardless of whether `@ast-grep/cli`'s postinstall ran.
+  const platformPkg = platformPackageName()
+  if (platformPkg && cliPkgJsonPath) {
+    try {
+      const cliRequire = createRequire(cliPkgJsonPath)
+      const platformJson = cliRequire.resolve(`${platformPkg}/package.json`)
+      const platformDir = path.dirname(platformJson)
+      const exe = process.platform === "win32" ? "sg.exe" : "sg"
+      out.push(path.resolve(platformDir, exe))
+    } catch {
+      // Optional dep missing for this platform — fall through.
+    }
+  }
+
+  // 2. Also try the `@ast-grep/cli` stub. Its `bin` field points at a
+  //    placeholder file that postinstall replaces with a hard-link to the
+  //    platform binary. If postinstall succeeded, this works; if not,
+  //    `binaryWorks` rejects the placeholder text.
+  try {
+    const pkg = moduleRequire(cliPkgJsonPath) as {
+      bin?: string | Record<string, string>
+    }
+    const pkgDir = path.dirname(cliPkgJsonPath)
+    const binField = pkg.bin
+    if (binField) {
+      if (typeof binField === "string") {
+        out.push(path.resolve(pkgDir, binField))
+      } else {
+        // Prefer `sg`, fall back to `ast-grep`.
+        if (binField["sg"]) out.push(path.resolve(pkgDir, binField["sg"]))
+        if (binField["ast-grep"]) out.push(path.resolve(pkgDir, binField["ast-grep"]))
+      }
+    }
+  } catch {
+    // Could not read the stub package — already handled above.
+  }
+
+  return out.length > 0 ? out : null
+}
+
+/**
+ * Compute the optional-dep package name that `@ast-grep/cli` declares for
+ * the current platform — e.g. `@ast-grep/cli-darwin-arm64` on Apple Silicon
+ * or `@ast-grep/cli-linux-x64-gnu` on glibc x64 Linux. Mirrors the
+ * detection logic in `@ast-grep/cli`'s postinstall script.
+ */
+function platformPackageName(): string | null {
+  if (typeof process === "undefined") return null
+  const platform = process.platform
+  const arch = process.arch
+  let suffix: string
+  if (platform === "win32") {
+    suffix = `${platform}-${arch}-msvc`
+  } else if (platform === "linux") {
+    // `detect-libc` is the upstream's choice; we use a conservative default
+    // (gnu) because reading detect-libc here would be a heavy dependency
+    // for what is purely a fallback path. Musl users will simply fall
+    // through to PATH lookup.
+    suffix = `${platform}-${arch}-gnu`
+  } else {
+    suffix = `${platform}-${arch}`
+  }
+  return `@ast-grep/cli-${suffix}`
 }
 
 async function binaryWorks(binary: string, spawnFn: SpawnFn): Promise<boolean> {
@@ -325,7 +474,13 @@ async function collectMatches(proc: SpawnedProcess): Promise<AstGrepRawMatch[]> 
   // returns exit 1 when there are no matches but the run was successful;
   // anything else is a hard failure we must surface so callers don't
   // silently treat broken patterns as "no results".
-  if (!ASTGREP_NO_MATCH_EXIT_CODES.has(code)) {
+  //
+  // Real `sg` also emits `ERROR: ...` lines to stderr and STILL exits 0
+  // for some failure classes (e.g. "No such file or directory") — so the
+  // exit-code check alone is not sufficient. Treat any ERROR-prefixed
+  // stderr line as a hard failure regardless of exit code.
+  const stderrSignalsError = /^ERROR\b/im.test(stderr)
+  if (!ASTGREP_NO_MATCH_EXIT_CODES.has(code) || stderrSignalsError) {
     throw new AstGrepCliError(
       `ast-grep CLI exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
       code,
@@ -383,15 +538,6 @@ function isWebStream(stream: unknown): stream is ReadableStream<Uint8Array> {
     typeof (stream as { getReader?: unknown }).getReader === "function"
   )
 }
-
-/**
- * `createRequire` lets us load `node:child_process` synchronously from an
- * ESM module without a top-level `await`. This is the canonical Node.js
- * escape hatch and avoids the bare `require(...)` call that fails under
- * strict ESM resolution. Both Node and Bun support it.
- */
-const moduleRequire = createRequire(import.meta.url)
-const nodeChildProcess = moduleRequire("node:child_process") as typeof import("node:child_process")
 
 const defaultSpawn: SpawnFn = (cmd, opts) => {
   // We deliberately use node:child_process even under Bun. The rest of

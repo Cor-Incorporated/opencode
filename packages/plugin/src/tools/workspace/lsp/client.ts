@@ -368,14 +368,37 @@ async function loadJsonRpcNode(): Promise<JsonRpcNodeModule> {
  *
  * `node:child_process` is fully supported under Bun and returns Node-style
  * streams that plug straight into the JSON-RPC reader/writer.
+ *
+ * Exported (in addition to being the default) so the regression test suite
+ * can exercise the production factory directly against a stub LSP server,
+ * rather than maintaining a hand-rolled clone that can drift from the real
+ * implementation.
  */
-const defaultConnectionFactory: ConnectionFactory = async (spec, rootPath) => {
+export const defaultConnectionFactory: ConnectionFactory = async (spec, rootPath) => {
   const rpc = await loadJsonRpcNode()
   const cp = await import("node:child_process")
   const proc = cp.spawn(spec.command, spec.args, {
     cwd: rootPath,
     stdio: ["pipe", "pipe", "pipe"],
   })
+
+  // CRITICAL: attach an `error` listener IMMEDIATELY (synchronously, before
+  // any `await` microtask). Both Node.js and Bun emit the spawn ENOENT
+  // failure as an asynchronous `error` event on the ChildProcess; if no
+  // listener is attached by the time the event fires, Node escalates it
+  // to `uncaughtException` and Bun reports it as an unhandled exception
+  // — either way crashing the host or polluting the user's terminal
+  // before our error plumbing can substitute the install hint.
+  //
+  // We capture the first such error in `spawnError` so that:
+  //   (a) the awaiting `sendRequest` promise can re-throw the original
+  //       ENOENT-shaped error (which `friendlyError()` recognises), and
+  //   (b) any synchronous stream-write attempt can be short-circuited.
+  let spawnError: Error | null = null
+  proc.on("error", (err: Error) => {
+    if (!spawnError) spawnError = err
+  })
+
   if (!proc.stdout || !proc.stdin) {
     throw new Error(`Failed to open stdio for LSP server '${spec.command}'`)
   }
@@ -391,14 +414,78 @@ const defaultConnectionFactory: ConnectionFactory = async (spec, rootPath) => {
     }
   }
 
+  // Bun-specific: when the spawned binary is missing, Bun synchronously
+  // destroys the stdio streams instead of (only) emitting an async `error`
+  // event. A subsequent `messageWriter.write` then throws ERR_STREAM_DESTROYED
+  // from inside an `async` Promise executor in vscode-jsonrpc — which
+  // silently turns into an *unhandled* rejection that crashes the test
+  // runner (and pollutes the user's terminal with a stack trace) before
+  // any of our error plumbing fires.
+  //
+  // Detect the destroyed-stream signal synchronously: if either stdio
+  // stream is already destroyed at this point, the spawn failed and we
+  // should reject the connection up-front with an ENOENT-shaped error so
+  // `friendlyError()` upstream can map it to the install hint.
+  const stdinDestroyed = (stdin as { destroyed?: boolean }).destroyed === true
+  const stdoutDestroyed = (stdout as { destroyed?: boolean }).destroyed === true
+  if (stdinDestroyed || stdoutDestroyed) {
+    dispose()
+    const err = new Error(`spawn ${spec.command} ENOENT`) as Error & { code?: string }
+    err.code = "ENOENT"
+    throw err
+  }
+
   const reader = new rpc.StreamMessageReader(stdout)
   const writer = new rpc.StreamMessageWriter(stdin)
   const conn = rpc.createMessageConnection(reader, writer)
 
+  // After the streams are wrapped, escalate any spawn error into a
+  // connection close so pending requests reject promptly.
+  proc.on("error", () => {
+    try {
+      conn.dispose()
+    } catch {
+      // best effort
+    }
+    dispose()
+  })
+  // Mirror to stdio streams. Listening here also has the side-effect of
+  // suppressing Node's "unhandled stream error" termination behaviour.
+  const onStreamError = (err: Error): void => {
+    if (!spawnError) spawnError = err
+    try {
+      conn.dispose()
+    } catch {
+      // best effort
+    }
+    dispose()
+  }
+  stdin.on("error", onStreamError)
+  stdout.on("error", onStreamError)
+
   const wrapper: RpcConnection = {
-    sendRequest: <T>(method: string, params: unknown) => conn.sendRequest<T>(method, params),
+    sendRequest: <T>(method: string, params: unknown) => {
+      // Wrap the underlying sendRequest in a Promise-returning closure so
+      // synchronous throws (e.g. ERR_STREAM_DESTROYED under Bun when the
+      // binary is missing) become rejections rather than thrown errors
+      // that can blow past the caller's await boundary.
+      try {
+        return conn.sendRequest<T>(method, params).catch((err: unknown) => {
+          if (spawnError) throw spawnError
+          throw err
+        })
+      } catch (err) {
+        if (spawnError) return Promise.reject(spawnError)
+        return Promise.reject(err)
+      }
+    },
     sendNotification: (method: string, params: unknown) => {
-      void conn.sendNotification(method, params)
+      try {
+        void conn.sendNotification(method, params)
+      } catch {
+        // sendNotification is fire-and-forget; spawn failures are
+        // surfaced via sendRequest / onClose instead.
+      }
     },
     onNotification: (method: string, handler: (params: unknown) => void) => {
       conn.onNotification(method, handler)
