@@ -125,4 +125,21 @@ describe("dedupe()", () => {
     expect(childOut).not.toContain("Run `bun test`.")
     expect(result.removed.find((r) => r.child === "pkg/AGENTS.md" && r.heading === "Build & Test")).toBeDefined()
   })
+
+  // Regression for round 3 HIGH (Codex): normalize() used to strip inline code,
+  // making distinct auto sections compare equal. e.g. `Source module \`src\`.`
+  // and `Source module \`src/api\`.` would both normalize to "source module ."
+  // and the child Overview would be silently removed.
+  test("auto sections with distinct inline-code content are not deduped", () => {
+    const root = ["# Root", "", "## Overview", "", "Source module `src`.", ""].join("\n")
+    const child = ["# API", "", "## Overview", "", "Source module `src/api`.", ""].join("\n")
+    const input = new Map<string, string>([
+      ["AGENTS.md", root],
+      ["src/api/AGENTS.md", child],
+    ])
+    const result = dedupe({ files: input })
+    const childOut = result.files.get("src/api/AGENTS.md")!
+    expect(childOut).toContain("Source module `src/api`.")
+    expect(result.removed.find((r) => r.child === "src/api/AGENTS.md" && r.heading === "Overview")).toBeUndefined()
+  })
 })

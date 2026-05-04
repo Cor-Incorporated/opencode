@@ -113,11 +113,7 @@ function sectionsEquivalent(a: Section, b: Section): boolean {
 }
 
 function normalize(body: string): string {
-  return body
-    .toLowerCase()
-    .replace(/`[^`]*`/g, "") // strip inline code
-    .replace(/\s+/g, " ")
-    .trim()
+  return body.toLowerCase().replace(/\s+/g, " ").trim()
 }
 
 /** Drop lines containing any blacklisted generic AI-flavored phrase. */
