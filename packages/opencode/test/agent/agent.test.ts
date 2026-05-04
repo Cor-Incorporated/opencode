@@ -2,7 +2,7 @@ import { afterEach, test, expect } from "bun:test"
 import fs from "fs/promises"
 import { Effect } from "effect"
 import path from "path"
-import { disposeAllInstances, provideInstance, tmpdir } from "../fixture/fixture"
+import { disposeAllInstances, provideInstance, provideTestInstance, tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { Agent } from "../../src/agent/agent"
@@ -283,7 +283,7 @@ You are a planning agent.
       await fs.writeFile(path.join(dir, ".opencode", "agent", "planner.md"), plannerAgent)
     },
   })
-  await Instance.provide({
+  await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
       const planner = await load(tmp.path, (svc) => svc.get("planner"))
@@ -342,7 +342,7 @@ test("write-capable team subagents use minimal-deny bash baseline", async () => 
       )
     },
   })
-  await Instance.provide({
+  await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
       for (const name of targetAgents) {
@@ -388,7 +388,7 @@ test("implement agent uses minimal-deny bash baseline for team and background de
     },
   })
 
-  await Instance.provide({
+  await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
       const agent = await load(tmp.path, (svc) => svc.get("implement"))

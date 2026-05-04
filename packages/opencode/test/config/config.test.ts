@@ -1059,7 +1059,7 @@ test("creates missing OPENCODE_CONFIG_DIR before writing gitignore", async () =>
   )
 
   try {
-    await Instance.provide({
+    await provideTestInstance({
       directory: tmp.path,
       fn: async () => {
         await Effect.runPromise(Config.Service.use((svc) => svc.get()).pipe(Effect.scoped, Effect.provide(testLayer)))
