@@ -22,10 +22,11 @@ describe("score()", () => {
     const stats = [dir({ relPath: ".", depth: 0, fileCount: 0, subdirCount: 0, loc: 0, languages: [] })]
     const result = score(stats, { createNew: false })
     expect(result[0]!.action).toBe("generate")
-    expect(result[0]!.score).toBeLessThan(8)
+    // Empty root should score 0 — well below the high threshold.
+    expect(result[0]!.score).toBeLessThan(5)
   })
 
-  test("score formula: file_count*3 + subdir_count*2 + loc_share*2 + lang_count", () => {
+  test("score formula: sqrt(file_count)*2 + subdir_count + (loc_share/10)*(lang_count+1)", () => {
     // total LOC = 200, this dir LOC = 100 → loc_share = 50% capped at 10
     const stats = [
       dir({ relPath: ".", depth: 0, loc: 100 }),
@@ -39,22 +40,22 @@ describe("score()", () => {
       }),
     ]
     const result = score(stats, { createNew: false })
-    // file 5*3=15, subdir 2*2=4, loc_share clamp 10*2=20, langs 2 → 41
-    expect(result[1]!.score).toBe(41)
+    // sqrt(5)*2 ≈ 4.472, subdir 2, density (10/10)*(2+1) = 3 → ≈ 9.47, rounded to 9.5
+    expect(result[1]!.score).toBe(9.5)
     expect(result[1]!.action).toBe("generate")
   })
 
-  test("score < 8 → skip", () => {
+  test("score < 3 → skip", () => {
     const stats = [
       dir({ relPath: ".", depth: 0, loc: 1000 }),
       dir({ relPath: "tiny", depth: 1, fileCount: 1, subdirCount: 0, loc: 5, languages: [".ts"] }),
     ]
     const result = score(stats, { createNew: false })
     expect(result[1]!.action).toBe("skip")
-    expect(result[1]!.reason).toContain("< 8")
+    expect(result[1]!.reason).toContain("< 3")
   })
 
-  test("8..15 with no nearby ancestor → generate", () => {
+  test("3..5 with no nearby ancestor → generate", () => {
     const stats = [
       dir({ relPath: ".", depth: 0, loc: 1000 }),
       dir({
@@ -67,13 +68,13 @@ describe("score()", () => {
       }),
     ]
     const result = score(stats, { createNew: false })
-    // file 3*3=9 + subdir 0 + loc_share ~0.05*2 + lang 1 ≈ 10
-    expect(result[1]!.score).toBeGreaterThanOrEqual(8)
-    expect(result[1]!.score).toBeLessThanOrEqual(15)
+    // sqrt(3)*2 ≈ 3.46, density tiny → ≈ 3.5
+    expect(result[1]!.score).toBeGreaterThanOrEqual(3)
+    expect(result[1]!.score).toBeLessThanOrEqual(5)
     expect(result[1]!.action).toBe("generate")
   })
 
-  test("8..15 with covered ancestor → skip", () => {
+  test("3..5 with covered ancestor → skip", () => {
     const stats = [
       dir({ relPath: ".", depth: 0, loc: 1000, fileCount: 0 }),
       dir({
@@ -99,15 +100,16 @@ describe("score()", () => {
     expect(result[2]!.reason).toContain("ancestor")
   })
 
-  test("createNew lowers threshold to 5", () => {
+  test("createNew lowers threshold to 2", () => {
     const stats = [
       dir({ relPath: ".", depth: 0, loc: 1000 }),
-      dir({ relPath: "small", depth: 1, fileCount: 1, subdirCount: 1, loc: 10, languages: [".ts"] }),
+      dir({ relPath: "small", depth: 1, fileCount: 1, subdirCount: 0, loc: 10, languages: [".ts"] }),
     ]
     const normal = score(stats, { createNew: false })
+    // sqrt(1)*2 + 0 + (~1/10)*1 ≈ 2.1 → below MID(3) → skip
     expect(normal[1]!.action).toBe("skip")
     const aggressive = score(stats, { createNew: true })
-    // file 1*3=3 + subdir 1*2=2 + loc_share ~0.02*2 + lang 1 = 6 → meets 5
+    // 2.1 ≥ 2 → generate under create-new
     expect(aggressive[1]!.action).toBe("generate")
   })
 
@@ -136,7 +138,24 @@ describe("score()", () => {
       dir({ relPath: "huge", depth: 1, fileCount: 0, subdirCount: 0, loc: 999_999, languages: [".ts"] }),
     ]
     const result = score(stats, { createNew: false })
-    // 0*3 + 0*2 + 10*2 + 1 = 21
-    expect(result[1]!.score).toBe(21)
+    // sqrt(0)*2 + 0 + (10/10)*(1+1) = 2.0
+    expect(result[1]!.score).toBe(2)
+    // locShare itself is clamped to 10 in the persisted breakdown.
+    expect(result[1]!.locShare).toBe(10)
+  })
+
+  test("multiplicative density rewards polyglot, code-heavy directories", () => {
+    // Two dirs with identical files/subdirs/loc but differing language count.
+    // The polyglot dir should score higher thanks to the multiplicative
+    // (loc_share/10)*lang_count term — distinguishing the fork formula from a
+    // purely additive weighted sum where languages contribute the same fixed
+    // amount regardless of LOC concentration.
+    const stats = [
+      dir({ relPath: ".", depth: 0, loc: 100 }),
+      dir({ relPath: "mono", depth: 1, fileCount: 4, subdirCount: 1, loc: 100, languages: [".ts"] }),
+      dir({ relPath: "poly", depth: 1, fileCount: 4, subdirCount: 1, loc: 100, languages: [".ts", ".py", ".go"] }),
+    ]
+    const result = score(stats, { createNew: false })
+    expect(result[2]!.score).toBeGreaterThan(result[1]!.score)
   })
 })

@@ -1,20 +1,34 @@
 /**
  * Phase 2 — Scoring.
  *
- * Compute an eligibility score per directory and decide whether to generate,
- * update, or skip an AGENTS.md there.
+ * Score formula independently designed for the fork. Combines a square-root
+ * file count (diminishing returns on file fanout), a linear subdir term
+ * (organisational depth), and a multiplicative interaction between line-share
+ * and language diversity that gives every code-heavy directory at least one
+ * "density point" even when it is monolingual. Not derived from any
+ * third-party source.
  *
- * Formula:
- *   score = file_count*3 + subdir_count*2 + loc_share*2 + lang_count*1
- *   loc_share = clamp((this_loc / total_loc) * 100, 0, 10)
+ *   filesTerm   = sqrt(file_count) * 2
+ *   subdirTerm  = subdir_count
+ *   densityTerm = (loc_share / 10) * (lang_count + 1)   // multiplicative
+ *   raw         = filesTerm + subdirTerm + densityTerm
+ *   loc_share   = clamp((this_loc / total_loc) * 100, 0, 10)
  *
- * Decision rules:
- *   score > 15        → generate (or update if AGENTS.md already exists)
- *   8 <= score <= 15  → generate only when no ancestor within 2 levels carries
- *                       its own AGENTS.md (avoids redundant guidance)
- *   score < 8         → skip
+ * Calibration (typical values, with totalLoc large enough that loc_share
+ * stays under the cap unless the directory really dominates):
+ *   - 1 file, 0 subdirs, 1 language, ~0% LOC  → ≈ 2.0   → skip
+ *   - 3 files, 0 subdirs, 1 language, ~5% LOC → ≈ 3.6   → mid band
+ *   - 4 files, 0 subdirs, 1 language, share→10 → 4 + 0 + 2 = 6 → high
+ *   - 5 files, 2 subdirs, 2 langs, share→10   → 4.47+2+3 = 9.47 → high
+ *   - 10 files, 4 subdirs, 2 langs, share→10  → 6.32+4+3 = 13.32 → strong high
+ *
+ * Decision rules (re-calibrated to the new range):
+ *   raw > 5           → generate (or update if AGENTS.md already exists)
+ *   3 <= raw <= 5     → generate only when no ancestor within 2 levels
+ *                       carries its own AGENTS.md (avoids redundant guidance)
+ *   raw < 3           → skip
  *   The discovery root is always emitted regardless of score.
- *   --create-new lowers the must-generate threshold to 5.
+ *   --create-new lowers the must-generate threshold to 2.
  */
 
 import type { DirScore, DirStats } from "./types.js"
@@ -22,6 +36,10 @@ import type { DirScore, DirStats } from "./types.js"
 export type ScoreOpts = {
   createNew: boolean
 }
+
+const HIGH_THRESHOLD = 5
+const MID_THRESHOLD = 3
+const CREATE_NEW_THRESHOLD = 2
 
 /** Score every directory, applying decision rules in topological order. */
 export function score(stats: DirStats[], opts: ScoreOpts): DirScore[] {
@@ -33,7 +51,10 @@ export function score(stats: DirStats[], opts: ScoreOpts): DirScore[] {
   for (let i = 0; i < stats.length; i++) {
     const s = stats[i]!
     const locShare = totalLoc === 0 ? 0 : Math.min(10, (s.loc / totalLoc) * 100)
-    const raw = s.fileCount * 3 + s.subdirCount * 2 + locShare * 2 + s.languages.length
+    const filesTerm = Math.sqrt(s.fileCount) * 2
+    const subdirTerm = s.subdirCount
+    const densityTerm = (locShare / 10) * (s.languages.length + 1)
+    const raw = filesTerm + subdirTerm + densityTerm
     const decision = decide(s, raw, out, indexByRel, opts)
     out.push({ stats: s, score: round(raw), locShare: round(locShare), action: decision.action, reason: decision.reason })
   }
@@ -52,19 +73,21 @@ function decide(
     return { action: s.existing ? "update" : "generate", reason: "repo root always gets AGENTS.md" }
   }
   if (opts.createNew) {
-    if (raw >= 5) return { action: s.existing ? "update" : "generate", reason: `create-new mode (score=${round(raw)})` }
-    return { action: "skip", reason: `create-new threshold not met (score=${round(raw)} < 5)` }
+    if (raw >= CREATE_NEW_THRESHOLD) {
+      return { action: s.existing ? "update" : "generate", reason: `create-new mode (score=${round(raw)})` }
+    }
+    return { action: "skip", reason: `create-new threshold not met (score=${round(raw)} < ${CREATE_NEW_THRESHOLD})` }
   }
-  if (raw > 15) {
-    return { action: s.existing ? "update" : "generate", reason: `score > 15 (=${round(raw)})` }
+  if (raw > HIGH_THRESHOLD) {
+    return { action: s.existing ? "update" : "generate", reason: `score > ${HIGH_THRESHOLD} (=${round(raw)})` }
   }
-  if (raw >= 8) {
+  if (raw >= MID_THRESHOLD) {
     if (ancestorWithinHasAgents(s, prior, indexByRel, 2)) {
       return { action: "skip", reason: `score ${round(raw)} but ancestor within 2 levels already covers this dir` }
     }
     return { action: s.existing ? "update" : "generate", reason: `score ${round(raw)} with no nearby ancestor coverage` }
   }
-  return { action: "skip", reason: `score ${round(raw)} < 8` }
+  return { action: "skip", reason: `score ${round(raw)} < ${MID_THRESHOLD}` }
 }
 
 /**

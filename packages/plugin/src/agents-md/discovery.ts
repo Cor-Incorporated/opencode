@@ -44,7 +44,7 @@ async function walk(
 ): Promise<void> {
   const entries = await safeReadDir(dir)
   if (!entries) return
-  const stats = await collectStats(dir, root, depth, entries)
+  const stats = await collectStats(dir, root, depth, entries, ignore)
   out.push(stats)
   if (depth >= maxDepth) return
   const children = entries
@@ -59,12 +59,19 @@ async function walk(
   }
 }
 
-/** Build {@link DirStats} for one directory using its already-listed entries. */
+/**
+ * Build {@link DirStats} for one directory using its already-listed entries.
+ *
+ * `subdirCount` must use the same filter chain as {@link walk} (excluded list
+ * + dot-prefix + `.gitignore`); otherwise gitignored subdirectories inflate
+ * the score and trigger spurious AGENTS.md generation.
+ */
 async function collectStats(
   dir: string,
   root: string,
   depth: number,
   entries: Awaited<ReturnType<typeof safeReadDir>>,
+  ignore: GitignoreMatcher,
 ): Promise<DirStats> {
   const fileNames = (entries ?? []).filter((e) => e.isFile()).map((e) => e.name)
   const subdirNames = (entries ?? [])
@@ -72,6 +79,7 @@ async function collectStats(
     .map((e) => e.name)
     .filter((name) => !EXCLUDED_DIR_SET.has(name))
     .filter((name) => !name.startsWith("."))
+    .filter((name) => !ignore.matches(toRelPosix(path.join(dir, name), root), true))
   const sourceFiles = fileNames.filter((name) => SOURCE_EXT_SET.has(path.extname(name)))
   const languages = uniqueExtensions(sourceFiles)
   const loc = await sumLoc(dir, sourceFiles)

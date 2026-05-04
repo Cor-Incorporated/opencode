@@ -5,6 +5,12 @@
  * sections whose body text is identical to (or trivially restates) the same
  * section in any ancestor. Parent wins; child is removed. Also strips a small
  * blacklist of generic AI-flavored boilerplate that adds tokens without value.
+ *
+ * The boilerplate strip is intentionally narrow: it only runs on auto sections
+ * that are not marked `<!-- preserve -->`. Hand-written sections (and auto
+ * sections the user pinned) are byte-preserved — the generator never emits the
+ * blacklisted phrases itself, so anyone with these phrases in their AGENTS.md
+ * has put them there deliberately.
  */
 
 import { parseSections } from "./merge.js"
@@ -44,7 +50,16 @@ export type DedupeOutput = {
 export function dedupe(input: DedupeInput): DedupeOutput {
   const ordered = [...input.files.entries()].sort((a, b) => depthOf(a[0]) - depthOf(b[0]))
   const parsed = new Map<string, Section[]>()
-  for (const [rel, text] of ordered) parsed.set(rel, parseSections(stripGeneric(text)))
+  for (const [rel, text] of ordered) parsed.set(rel, parseSections(text))
+  // Strip generic phrases only from auto sections that are not user-pinned.
+  // Hand-written and `<!-- preserve -->`-marked sections must remain byte-identical.
+  for (const sections of parsed.values()) {
+    for (const s of sections) {
+      if (s.isAuto && !s.preserved && s.heading.length > 0) {
+        s.body = stripGeneric(s.body)
+      }
+    }
+  }
   const removed: DedupePair[] = []
   for (const [rel, sections] of parsed) {
     if (rel === "." || rel === "AGENTS.md") continue

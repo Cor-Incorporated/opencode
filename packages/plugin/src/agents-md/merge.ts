@@ -8,12 +8,17 @@
  *   2. Any section not in the auto list, OR a section containing
  *      `<!-- preserve -->`, is kept exactly as it appeared in the existing
  *      file.
- *   3. The file preamble (text before the first `##` heading) is taken from
- *      the generated output, but if the existing preamble carried the
- *      `<!-- preserve -->` marker we keep it instead.
+ *   3. The file preamble (text before the first `##` heading) is preserved
+ *      whenever the existing file has a non-empty preamble; the generated
+ *      preamble is only used when the existing one is missing/empty. This
+ *      protects hand-written directives at the top of an AGENTS.md from
+ *      silent deletion on re-run.
  *   4. Section ordering follows the generated file; preserved sections that
  *      do not appear in the generated output are appended in their original
  *      order at the end of the file so nothing is silently dropped.
+ *   5. `parseSections` tracks fenced code block (` ``` `) state so a
+ *      `## Heading` example inside an example markdown block does not get
+ *      promoted to a real section.
  */
 
 import { AUTO_SECTIONS, type Section } from "./types.js"
@@ -47,13 +52,19 @@ export function merge(existing: string, generated: string): string {
   return out.join("\n").trim() + "\n"
 }
 
-/** Choose which preamble (existing vs generated) to lead the merged file. */
+/**
+ * Choose which preamble (existing vs generated) to lead the merged file.
+ *
+ * Preservation-by-default: any non-empty existing preamble wins. Hand-written
+ * directives at the top of an AGENTS.md (e.g. "always use parallel tools") do
+ * not carry per-line markers, so they would otherwise be silently overwritten
+ * by the generated preamble on every re-run.
+ */
 function pickPreamble(existing: Section[], generated: Section[]): Section {
   const existingPre = existing.find((s) => s.heading === "")
   const generatedPre = generated.find((s) => s.heading === "")
-  if (existingPre && existingPre.preserved) return existingPre
-  if (generatedPre) return generatedPre
-  return existingPre ?? { level: 0, heading: "", body: "", isAuto: true, preserved: false }
+  if (existingPre && existingPre.body.trim().length > 0) return existingPre
+  return generatedPre ?? existingPre ?? { level: 0, heading: "", body: "", isAuto: true, preserved: false }
 }
 
 function findSection(sections: Section[], heading: string): Section | undefined {
@@ -64,13 +75,28 @@ function findSection(sections: Section[], heading: string): Section | undefined 
  * Split markdown into sections at level-2 (`##`) headings. Higher-level
  * headings inside a section (e.g. `###`) stay attached to that section's
  * body so we never split aggregated content like sub-bullet groups.
+ *
+ * Fenced code blocks (` ```… ``` `) are tracked so a `## Heading` line that
+ * appears inside an example markdown snippet is treated as body text rather
+ * than promoted to a real section. Otherwise round-tripping a file that
+ * contains markdown examples would corrupt them on every merge.
  */
 export function parseSections(markdown: string): Section[] {
   const lines = markdown.split("\n")
   const sections: Section[] = []
   let current: Section = { level: 0, heading: "", body: "", isAuto: true, preserved: false }
   const buffer: string[] = []
+  let inFence = false
   for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      buffer.push(line)
+      continue
+    }
+    if (inFence) {
+      buffer.push(line)
+      continue
+    }
     const m = /^(#{1,2})\s+(.+?)\s*$/.exec(line)
     if (m && m[1]?.length === 2) {
       finalizeSection(current, buffer, sections)

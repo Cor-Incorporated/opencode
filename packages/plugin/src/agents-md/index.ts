@@ -27,6 +27,8 @@ export type { InitDeepOpts, InitDeepResult, DirAction } from "./types.js"
 
 const DEFAULT_MAX_DEPTH = 4
 
+type ErrnoLike = { code?: string }
+
 /** Run the full pipeline. With `dryRun: true`, returns the plan only. */
 export async function runInitDeep(opts: InitDeepOpts = {}): Promise<InitDeepResult> {
   const cwd = path.resolve(opts.cwd ?? process.cwd())
@@ -45,10 +47,13 @@ export async function runInitDeep(opts: InitDeepOpts = {}): Promise<InitDeepResu
   }
   const rendered = renderAll(scored, emitting)
   const deduped = dedupe({ files: keyByRelative(rendered, cwd) })
-  const writes = await persist(deduped.files, scored)
+  const persistResult = await persist(deduped.files, scored)
   return {
-    generated: writes,
-    skipped: scored.filter((d) => d.action === "skip").map((d) => ({ path: d.stats.path, reason: d.reason })),
+    generated: persistResult.written,
+    skipped: [
+      ...scored.filter((d) => d.action === "skip").map((d) => ({ path: d.stats.path, reason: d.reason })),
+      ...persistResult.skipped,
+    ],
     duplicatesRemoved: deduped.removed.length,
     approxTokensAdded: [...deduped.files.values()].reduce((acc, t) => acc + approxTokens(t), 0),
   }
@@ -79,21 +84,44 @@ function keyByRelative(files: Map<string, string>, cwd: string): Map<string, str
   return out
 }
 
-/** Write deduped contents back to disk, returning absolute paths written. */
+/**
+ * Write deduped contents back to disk.
+ *
+ * Symlink safety: an `AGENTS.md` that already exists as a symlink could point
+ * outside the project tree. Following it would silently overwrite a foreign
+ * file, so we refuse to write through symlinks and surface the path in the
+ * skip list instead.
+ */
 async function persist(
   files: Map<string, string>,
   scored: DirScore[],
-): Promise<string[]> {
+): Promise<{ written: string[]; skipped: { path: string; reason: string }[] }> {
   const written: string[] = []
+  const skipped: { path: string; reason: string }[] = []
   const byRel = new Map<string, DirScore>()
   for (const d of scored) byRel.set(d.stats.relPath === "." ? "AGENTS.md" : d.stats.relPath + "/AGENTS.md", d)
   for (const [rel, body] of files) {
     const target = byRel.get(rel)
     if (!target) continue
     const abs = path.join(target.stats.path, "AGENTS.md")
+    if (await isSymlink(abs)) {
+      skipped.push({ path: abs, reason: "AGENTS.md is a symlink; refusing to follow (path safety)" })
+      continue
+    }
     await fs.mkdir(path.dirname(abs), { recursive: true })
     await fs.writeFile(abs, body, "utf8")
     written.push(abs)
   }
-  return written.sort()
+  return { written: written.sort(), skipped }
+}
+
+/** True iff `abs` exists and is a symlink. ENOENT (missing file) is fine. */
+async function isSymlink(abs: string): Promise<boolean> {
+  try {
+    const st = await fs.lstat(abs)
+    return st.isSymbolicLink()
+  } catch (e) {
+    if ((e as ErrnoLike).code === "ENOENT") return false
+    throw e
+  }
 }
