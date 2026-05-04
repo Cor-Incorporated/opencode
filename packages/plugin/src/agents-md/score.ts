@@ -17,7 +17,7 @@
  * Calibration (typical values, with totalLoc large enough that loc_share
  * stays under the cap unless the directory really dominates):
  *   - 1 file, 0 subdirs, 1 language, ~0% LOC  → ≈ 2.0   → skip
- *   - 3 files, 0 subdirs, 1 language, ~5% LOC → ≈ 3.6   → mid band
+ *   - 3 files, 0 subdirs, 1 language, ~5% LOC → ≈ 4.5   → mid band
  *   - 4 files, 0 subdirs, 1 language, share→10 → 4 + 0 + 2 = 6 → high
  *   - 5 files, 2 subdirs, 2 langs, share→10   → 4.47+2+3 = 9.47 → high
  *   - 10 files, 4 subdirs, 2 langs, share→10  → 6.32+4+3 = 13.32 → strong high

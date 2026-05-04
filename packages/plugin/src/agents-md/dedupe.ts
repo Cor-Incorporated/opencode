@@ -65,8 +65,13 @@ export function dedupe(input: DedupeInput): DedupeOutput {
     if (rel === "." || rel === "AGENTS.md") continue
     const ancestors = ancestorPaths(rel).filter((a) => parsed.has(a))
     const filtered = sections.filter((s) => {
+      // Skip preamble, preserve-marked, AND hand-written (non-auto) sections.
+      // dedupe should only deduplicate sections that the generator owns; a
+      // child file's hand-written `## House Rules` may legitimately echo its
+      // ancestor verbatim and must not be silently deleted.
       if (s.heading === "") return true
       if (s.preserved) return true
+      if (!s.isAuto) return true
       for (const a of ancestors) {
         const ancestorSection = parsed.get(a)?.find((x) => x.heading === s.heading)
         if (!ancestorSection) continue

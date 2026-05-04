@@ -8,7 +8,7 @@ The pipeline runs in four phases: Discovery → Scoring → Generate → Review/
 Arguments (parse from `$ARGUMENTS`, all optional):
 
 - `--max-depth=N` — maximum traversal depth from the working directory (default: 4).
-- `--create-new` — bypass the standard scoring threshold and emit at every directory with score >= 5.
+- `--create-new` — bypass the standard scoring threshold and emit at every directory with score >= 2.
 - `--dry-run` — compute the plan and print it without writing any files.
 
 Steps:

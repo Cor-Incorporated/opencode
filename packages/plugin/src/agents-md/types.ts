@@ -92,7 +92,7 @@ export type InitDeepOpts = {
   cwd?: string
   /** Maximum depth from `cwd` (root = depth 0). Defaults to 4. */
   maxDepth?: number
-  /** Bypass scoring and emit at every directory with score >= 5. */
+  /** Bypass scoring and emit at every directory with score >= 2. */
   createNew?: boolean
   /** Compute a plan and return it without touching the filesystem. */
   dryRun?: boolean

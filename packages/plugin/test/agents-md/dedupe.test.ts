@@ -75,4 +75,54 @@ describe("dedupe()", () => {
     expect(result.removed[0]!.heading).toBe("Overview")
     expect(result.files.get("pkg/AGENTS.md")!).not.toContain("shared overview")
   })
+
+  // Regression for round-2 CRITICAL — the parent-vs-child dedupe pass used to
+  // run against *every* section (not just generator-owned auto sections), so a
+  // child file's hand-written `## House Rules` that echoed an ancestor
+  // verbatim was silently deleted. Hand-written sections must survive even
+  // when their content matches an ancestor exactly.
+  test("child hand-written sections matching an ancestor are preserved", () => {
+    const root = [
+      "# Project",
+      "",
+      "## House Rules",
+      "",
+      "- ship on Fridays",
+      "- no force push",
+    ].join("\n")
+    const child = [
+      "# Pkg",
+      "",
+      "## House Rules",
+      "",
+      "- ship on Fridays",
+      "- no force push",
+    ].join("\n")
+    const input = new Map<string, string>([
+      ["AGENTS.md", root],
+      ["pkg/AGENTS.md", child],
+    ])
+    const result = dedupe({ files: input })
+    const childOut = result.files.get("pkg/AGENTS.md")!
+    expect(childOut).toContain("## House Rules")
+    expect(childOut).toContain("- ship on Fridays")
+    expect(childOut).toContain("- no force push")
+    expect(result.removed.find((r) => r.child === "pkg/AGENTS.md" && r.heading === "House Rules")).toBeUndefined()
+  })
+
+  // Companion to the above — auto sections (Overview, Build & Test, etc.) MUST
+  // still be deduped against ancestors. The hand-written carve-out is narrow:
+  // only sections the generator does not own are exempt.
+  test("child auto sections matching an ancestor are still removed", () => {
+    const root = ["# Project", "", "## Build & Test", "", "Run `bun test`."].join("\n")
+    const child = ["# Pkg", "", "## Build & Test", "", "Run `bun test`."].join("\n")
+    const input = new Map<string, string>([
+      ["AGENTS.md", root],
+      ["pkg/AGENTS.md", child],
+    ])
+    const result = dedupe({ files: input })
+    const childOut = result.files.get("pkg/AGENTS.md")!
+    expect(childOut).not.toContain("Run `bun test`.")
+    expect(result.removed.find((r) => r.child === "pkg/AGENTS.md" && r.heading === "Build & Test")).toBeDefined()
+  })
 })
