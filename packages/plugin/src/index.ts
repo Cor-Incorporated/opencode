@@ -18,6 +18,15 @@ import { type ToolDefinition } from "./tool.js"
 
 export * from "./tool.js"
 export { createHashlineTool, readWithAnchors } from "./tools/hashline/index.js"
+export {
+  workspaceTools,
+  astGrepReplaceTool,
+  astGrepSearchTool,
+  lspDiagnosticsTool,
+  lspGoToDefinitionTool,
+  lspFindReferencesTool,
+  lspRenameTool,
+} from "./tools/workspace/index.js"
 
 export type ProviderContext = {
   source: "env" | "config" | "custom" | "api"
