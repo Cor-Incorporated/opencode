@@ -1,9 +1,10 @@
 /**
- * Hashline edit tool — clean-room implementation.
+ * Clean-room implementation. Functional spec inspired by the public README of
+ * oh-my-openagent (SUL-1.0). Implementation, constants (alphabet, separator),
+ * and structure are independently chosen. MIT-licensed under
+ * Cor-Incorporated/opencode.
  *
- * Functional spec inspired by oh-my-openagent (SUL-1.0). All code in
- * this directory is original and MIT-licensed under the
- * Cor-Incorporated/opencode fork.
+ * Hashline edit tool entry point.
  *
  * Usage in a plugin:
  *
@@ -19,7 +20,7 @@ import { executeHashlineEdits } from "./edit.js"
 import type { HashlineEdit, HashlineToolArgs } from "./types.js"
 
 export { hashLine, HASH_ALPHABET, HASH_LENGTH, isValidHashChars } from "./hash.js"
-export { ANCHOR_REGEX, parseAnchor, formatAnchor, annotateLines } from "./anchor.js"
+export { ANCHOR_REGEX, ANCHOR_CONTENT_SEPARATOR, parseAnchor, formatAnchor, annotateLines } from "./anchor.js"
 export { executeHashlineEdits, resolveFilePath } from "./edit.js"
 export type {
   Anchor,
@@ -85,7 +86,7 @@ const argsSchema = {
     .describe(
       "If true, allow creating a new file. Only valid when the file does not exist and edits is either empty " +
         "(creates an empty file) or a single replace from the anchor of an empty line at line 1 " +
-        "(use formatAnchor(1, '') to compute it; with the default alphabet this is '1#ZR').",
+        "(use formatAnchor(1, '') to compute it; with the default alphabet this is '1#BH').",
     ),
 }
 

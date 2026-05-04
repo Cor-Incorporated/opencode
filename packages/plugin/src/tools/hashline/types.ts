@@ -1,4 +1,9 @@
 /**
+ * Clean-room implementation. Functional spec inspired by the public README of
+ * oh-my-openagent (SUL-1.0). Implementation, constants (alphabet, separator),
+ * and structure are independently chosen. MIT-licensed under
+ * Cor-Incorporated/opencode.
+ *
  * Type definitions for the hashline edit tool.
  *
  * The hashline tool prevents stale-line edit failures by requiring an

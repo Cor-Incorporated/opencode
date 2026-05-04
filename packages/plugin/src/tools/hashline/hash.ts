@@ -1,4 +1,9 @@
 /**
+ * Clean-room implementation. Functional spec inspired by the public README of
+ * oh-my-openagent (SUL-1.0). Implementation, constants (alphabet, separator),
+ * and structure are independently chosen. MIT-licensed under
+ * Cor-Incorporated/opencode.
+ *
  * Content-hash utilities for the hashline edit tool.
  *
  * Algorithm: xxHash32 (`Bun.hash.xxHash32`).
@@ -13,9 +18,17 @@
 
 /**
  * Fixed 16-character alphabet used for hash encoding.
- * Excludes I/O/L (and similar look-alikes) to avoid agent confusion.
+ *
+ * Independently chosen consonant set drawn from the basic Latin alphabet:
+ *   - All vowels (A, E, I, O, U, Y) excluded — avoids accidental words and
+ *     also drops the most common look-alikes (I/O).
+ *   - L, W, X, Z excluded for visual clarity (L confuses with 1/I and W/X/Z
+ *     are visually heavy when adjacent in fixed-width fonts).
+ *   - Result: 16 visually distinct uppercase consonants.
+ *
+ * Not derived from any third-party source.
  */
-export const HASH_ALPHABET = "ZPMQVRWSNKTXJBYH"
+export const HASH_ALPHABET = "BCDFGHJKMNPQRSTV"
 
 /**
  * Length of an encoded hash (always 2 characters).

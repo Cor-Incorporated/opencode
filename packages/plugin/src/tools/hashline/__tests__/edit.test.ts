@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import { Effect } from "effect"
 
-import { formatAnchor } from "../anchor.js"
+import { ANCHOR_CONTENT_SEPARATOR, formatAnchor } from "../anchor.js"
 import { executeHashlineEdits } from "../edit.js"
 import { hashLine } from "../hash.js"
 import { createHashlineTool, readWithAnchors } from "../index.js"
@@ -212,6 +212,90 @@ describe("executeHashlineEdits — multi-edit batches and atomicity", () => {
     expect(result.ok).toBe(false)
     expect(await readFile(path)).toBe(before)
   })
+
+  // Regression: PR-A review HIGH — overlapping same-line edits silently
+  // corrupted the file because both anchors validated against the original
+  // file. The exact case: replace [2..3] + delete [3..4] both touch line 3,
+  // and the reverse-line apply ran the delete first (shrinking the buffer)
+  // so the replace clobbered the wrong lines. We must reject the batch.
+  test("rejects overlapping replace+delete on the same line and leaves file untouched", async () => {
+    const lines = ["one", "two", "three", "four", "five"]
+    const path = await writeFile("a.txt", lines.join("\n") + "\n")
+    const before = await readFile(path)
+
+    const result = await executeHashlineEdits({
+      filePath: path,
+      edits: [
+        {
+          op: "replace",
+          pos: anchor(2, "two"),
+          end: anchor(3, "three"),
+          lines: ["X"],
+        },
+        {
+          op: "delete",
+          pos: anchor(3, "three"),
+          end: anchor(4, "four"),
+        },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toContain("overlap")
+      expect(result.error).toContain("disjoint")
+    }
+    // File must be entirely untouched.
+    expect(await readFile(path)).toBe(before)
+  })
+
+  test("rejects two replaces that share even a single line", async () => {
+    const lines = ["a", "b", "c", "d"]
+    const path = await writeFile("a.txt", lines.join("\n") + "\n")
+    const before = await readFile(path)
+
+    const result = await executeHashlineEdits({
+      filePath: path,
+      edits: [
+        { op: "replace", pos: anchor(1, "a"), end: anchor(2, "b"), lines: ["A"] },
+        { op: "replace", pos: anchor(2, "b"), end: anchor(3, "c"), lines: ["B"] },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    expect(await readFile(path)).toBe(before)
+  })
+
+  test("rejects two appends at the same line (ambiguous order)", async () => {
+    const path = await writeFile("a.txt", "a\nb\n")
+    const before = await readFile(path)
+
+    const result = await executeHashlineEdits({
+      filePath: path,
+      edits: [
+        { op: "append", pos: anchor(1, "a"), lines: ["x"] },
+        { op: "append", pos: anchor(1, "a"), lines: ["y"] },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    expect(await readFile(path)).toBe(before)
+  })
+
+  test("allows non-overlapping edits at adjacent lines", async () => {
+    const path = await writeFile("a.txt", "a\nb\nc\nd\n")
+    const result = await executeHashlineEdits({
+      filePath: path,
+      edits: [
+        { op: "replace", pos: anchor(1, "a"), lines: ["A"] },
+        { op: "replace", pos: anchor(2, "b"), lines: ["B"] },
+        { op: "delete", pos: anchor(3, "c") },
+        { op: "append", pos: anchor(4, "d"), lines: ["E"] },
+      ],
+    })
+    expect(result.ok).toBe(true)
+    expect(await readFile(path)).toBe("A\nB\nd\nE\n")
+  })
 })
 
 describe("executeHashlineEdits — rename", () => {
@@ -238,6 +322,41 @@ describe("executeHashlineEdits — rename", () => {
       edits: [],
     })
     expect(result.ok).toBe(false)
+  })
+
+  // Regression: PR-A review CRITICAL — silent data loss when the rename
+  // target already exists. The tool must refuse, leaving BOTH files intact.
+  test("refuses to overwrite an existing file at the rename target", async () => {
+    const srcPath = await writeFile("src.txt", "one\ntwo\n")
+    const dstPath = await writeFile("dst.txt", "EXISTING DESTINATION CONTENT\n")
+    const dstBefore = await readFile(dstPath)
+    const srcBefore = await readFile(srcPath)
+
+    const result = await executeHashlineEdits({
+      filePath: srcPath,
+      rename: dstPath,
+      edits: [{ op: "replace", pos: anchor(1, "one"), lines: ["ONE"] }],
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error).toContain("target file already exists")
+      expect(result.error).toContain(dstPath)
+    }
+    // Both files must be untouched.
+    expect(await readFile(dstPath)).toBe(dstBefore)
+    expect(await readFile(srcPath)).toBe(srcBefore)
+  })
+
+  test("rename to the same path as filePath is allowed (no-op move)", async () => {
+    const path = await writeFile("a.txt", "one\ntwo\n")
+    const result = await executeHashlineEdits({
+      filePath: path,
+      rename: path,
+      edits: [{ op: "replace", pos: anchor(1, "one"), lines: ["ONE"] }],
+    })
+    expect(result.ok).toBe(true)
+    expect(await readFile(path)).toBe("ONE\ntwo\n")
   })
 })
 
@@ -284,21 +403,45 @@ describe("executeHashlineEdits — createIfMissing", () => {
     })
     expect(result.ok).toBe(false)
   })
+
+  // Regression: PR-A review MEDIUM — pre-existing zero-byte file used to
+  // reject the same line-1 edit a createIfMissing flow accepted, because
+  // the synthetic empty-line buffer was only constructed when the file
+  // was newly created. Now both code paths share the synthesis.
+  test("accepts a line-1 replace against a pre-existing zero-byte file", async () => {
+    const path = await writeFile("empty.txt", "")
+    const result = await executeHashlineEdits({
+      filePath: path,
+      edits: [{ op: "replace", pos: `1#${hashLine("")}`, lines: ["hello", "world"] }],
+    })
+    expect(result.ok).toBe(true)
+    // Pre-existing file had no trailing newline, so the result also has none.
+    // The fix only restores parity with the createIfMissing flow at the
+    // VALIDATION layer — line-1 edit no longer wrongly rejected.
+    expect(await readFile(path)).toBe("hello\nworld")
+  })
 })
 
-describe("executeHashlineEdits — programmer errors", () => {
-  test("throws when filePath is missing", async () => {
-    await expect(
-      // @ts-expect-error — testing runtime guard
-      executeHashlineEdits({ edits: [] }),
-    ).rejects.toThrow()
+describe("executeHashlineEdits — programmer errors are returned as values", () => {
+  test("returns ok:false when filePath is missing (no throw)", async () => {
+    // @ts-expect-error — testing runtime guard
+    const result = await executeHashlineEdits({ edits: [] })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain("filePath is required")
   })
 
-  test("throws when edits is not an array", async () => {
-    await expect(
-      // @ts-expect-error — testing runtime guard
-      executeHashlineEdits({ filePath: "/tmp/x", edits: "nope" }),
-    ).rejects.toThrow()
+  test("returns ok:false when edits is not an array (no throw)", async () => {
+    // @ts-expect-error — testing runtime guard
+    const result = await executeHashlineEdits({ filePath: "/tmp/x", edits: "nope" })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain("edits must be an array")
+  })
+
+  test("returns ok:false when args is null", async () => {
+    // @ts-expect-error — testing runtime guard
+    const result = await executeHashlineEdits(null)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain("args must be an object")
   })
 })
 
@@ -355,14 +498,14 @@ describe("createHashlineTool", () => {
 })
 
 describe("readWithAnchors", () => {
-  test("returns lines annotated with LINE#ID|content", async () => {
+  test("returns lines annotated with LINE#ID<RS>content", async () => {
     const path = await writeFile("a.txt", "alpha\nbeta\ngamma\n")
     const annotated = await readWithAnchors(path)
     expect(annotated).not.toBeNull()
     expect(annotated).toEqual([
-      `${anchor(1, "alpha")}|alpha`,
-      `${anchor(2, "beta")}|beta`,
-      `${anchor(3, "gamma")}|gamma`,
+      `${anchor(1, "alpha")}${ANCHOR_CONTENT_SEPARATOR}alpha`,
+      `${anchor(2, "beta")}${ANCHOR_CONTENT_SEPARATOR}beta`,
+      `${anchor(3, "gamma")}${ANCHOR_CONTENT_SEPARATOR}gamma`,
     ])
   })
 

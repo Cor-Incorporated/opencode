@@ -1,20 +1,31 @@
 /**
+ * Clean-room implementation. Functional spec inspired by the public README of
+ * oh-my-openagent (SUL-1.0). Implementation, constants (alphabet, separator),
+ * and structure are independently chosen. MIT-licensed under
+ * Cor-Incorporated/opencode.
+ *
  * Atomic, hash-validated edit engine for the hashline tool.
  *
  * The flow for every call:
  *   1. Read the file from disk (or treat as empty if `createIfMissing`).
  *   2. For every anchor in every edit, recompute the line hash and
  *      reject the entire batch on any mismatch.
- *   3. Apply edits in reverse-line order so earlier-line edits do not
+ *   3. Reject the batch if any two edits target overlapping line ranges
+ *      (computed against the ORIGINAL file), since the reverse-line apply
+ *      order would otherwise silently corrupt later edits.
+ *   4. Apply edits in reverse-line order so earlier-line edits do not
  *      shift later-line numbers — every anchor in the batch refers to
  *      the file as it was BEFORE any edit applied.
- *   4. Write the result atomically (temp file + rename, or fall back
+ *   5. Write the result atomically (temp file + rename, or fall back
  *      to `Bun.write` if rename is unavailable).
  *
- * Errors are returned as values; the only thrown exceptions are for
- * genuine programmer errors (bad arg shapes).
+ * Errors are returned as values; programmer-shape errors (missing
+ * filePath, edits not an array, etc.) are also surfaced as values via
+ * the public `executeHashlineEdits` entry point so callers never have
+ * to wrap calls in try/catch for argument-validation failures.
  */
 
+import { randomBytes } from "node:crypto"
 import { rename, mkdir } from "node:fs/promises"
 import { dirname, isAbsolute, resolve } from "node:path"
 
@@ -160,6 +171,64 @@ function editSortKey(edit: ResolvedEdit): [number, number] {
 }
 
 /**
+ * Numeric range an edit "claims" against the ORIGINAL file. Replace and
+ * delete claim their inclusive line range. Append/prepend claim a single
+ * half-integer point so they don't conflict with replaces/deletes whose
+ * range simply touches the same line — but two appends at the same line
+ * (or an append + a prepend at the same line) DO collide and must be
+ * rejected, since both the order of insertion and the post-apply line
+ * numbering would be ambiguous.
+ */
+function rangeOf(edit: ResolvedEdit): [number, number] {
+  if (edit.op === "replace" || edit.op === "delete") return [edit.start, edit.end]
+  if (edit.op === "append") return [edit.pos + 0.5, edit.pos + 0.5]
+  // prepend
+  return [edit.pos - 0.5, edit.pos - 0.5]
+}
+
+/**
+ * Detect overlapping ranges across a batch of resolved edits. Returns
+ * an error message identifying the first conflicting pair, or null when
+ * all ranges are disjoint.
+ *
+ * Algorithm: sort by range start, then walk forward checking that each
+ * interval starts strictly after the previous interval's end. Inclusive
+ * ranges from replace/delete that share even a single line are rejected.
+ */
+function detectOverlap(resolved: ResolvedEdit[]): string | null {
+  const indexed = resolved.map((edit, originalIndex) => {
+    const [lo, hi] = rangeOf(edit)
+    return { edit, originalIndex, lo, hi }
+  })
+  indexed.sort((a, b) => (a.lo === b.lo ? a.hi - b.hi : a.lo - b.lo))
+  for (let i = 1; i < indexed.length; i++) {
+    const prev = indexed[i - 1]!
+    const cur = indexed[i]!
+    if (cur.lo <= prev.hi) {
+      return (
+        `edits[${prev.originalIndex}] (${prev.edit.op} covering lines [${describeRange(prev.lo, prev.hi)}]) ` +
+        `overlaps edits[${cur.originalIndex}] (${cur.edit.op} covering lines [${describeRange(cur.lo, cur.hi)}]). ` +
+        `All edits in a batch must target disjoint line ranges in the ORIGINAL file.`
+      )
+    }
+  }
+  return null
+}
+
+/**
+ * Render a half-integer range as a user-readable string.
+ * E.g. [2, 3] -> "2..3"; [2.5, 2.5] -> "after 2"/"before 3".
+ */
+function describeRange(lo: number, hi: number): string {
+  if (Number.isInteger(lo) && Number.isInteger(hi)) {
+    return lo === hi ? String(lo) : `${lo}..${hi}`
+  }
+  // half-integer point
+  const base = Math.floor(lo)
+  return lo > base ? `between ${base} and ${base + 1}` : `before ${base + 1}`
+}
+
+/**
  * Apply a single resolved edit to a mutable lines buffer.
  * Mutation here is local to the function's owned buffer; the public
  * API still presents an immutable contract.
@@ -205,10 +274,15 @@ async function readIfExists(absPath: string): Promise<string | null> {
  * Atomically write `content` to `absPath` using a sibling temp file
  * plus rename. Falls back to direct write only if rename is impossible
  * (cross-device, etc.). The temp file is cleaned up on rename failure.
+ *
+ * The temp suffix carries 4 random bytes (8 hex chars) on top of pid +
+ * timestamp so that two concurrent writers in the same process at the
+ * same millisecond don't collide.
  */
 async function atomicWrite(absPath: string, content: string): Promise<void> {
   await mkdir(dirname(absPath), { recursive: true })
-  const tempPath = `${absPath}.hashline-${process.pid}-${Date.now()}.tmp`
+  const entropy = randomBytes(4).toString("hex")
+  const tempPath = `${absPath}.hashline-${process.pid}-${Date.now()}-${entropy}.tmp`
   await Bun.write(tempPath, content)
   try {
     await rename(tempPath, absPath)
@@ -261,13 +335,20 @@ function evaluateCreate(
 
 /**
  * Validate the rename target before performing any writes.
+ *
+ * `renamePath` is named to avoid shadowing the `node:fs/promises#rename`
+ * import. Returns the absolute target path (or null when no rename was
+ * requested) and an error string when the value is structurally invalid.
  */
-function evaluateRename(rename: string | undefined, baseDir?: string): { absPath: string | null; error?: string } {
-  if (rename === undefined) return { absPath: null }
-  if (typeof rename !== "string" || rename.trim() === "") {
+function evaluateRename(
+  renamePath: string | undefined,
+  baseDir?: string,
+): { absPath: string | null; error?: string } {
+  if (renamePath === undefined) return { absPath: null }
+  if (typeof renamePath !== "string" || renamePath.trim() === "") {
     return { absPath: null, error: `rename must be a non-empty string` }
   }
-  return { absPath: resolveFilePath(rename, baseDir) }
+  return { absPath: resolveFilePath(renamePath, baseDir) }
 }
 
 /**
@@ -313,7 +394,11 @@ async function loadSource(args: HashlineToolArgs, absSource: string): Promise<Lo
 
 /**
  * Resolve every edit's anchors in order, aborting on the first failure
- * so the caller can return atomically without applying anything.
+ * so the caller can return atomically without applying anything. After
+ * resolution succeeds, also reject the batch if any two resolved edits
+ * overlap on the ORIGINAL file's line numbers — since edits are applied
+ * in reverse-line order, an undetected overlap would silently shift or
+ * destroy lines from later edits.
  */
 function resolveAll(
   edits: HashlineEdit[],
@@ -326,11 +411,19 @@ function resolveAll(
     if (!result.ok) return { ok: false, error: result.error }
     resolved.push(result.resolved)
   }
+  const overlap = detectOverlap(resolved)
+  if (overlap) return { ok: false, error: overlap }
   return { ok: true, resolved }
 }
 
 /**
  * Persist the new content and (if renaming) remove the old path.
+ *
+ * Pre-condition: callers must already have ensured `targetPath` does not
+ * point at a different existing file — this function will overwrite the
+ * file at `targetPath` (the atomic rename is allowed to clobber the
+ * source-when-no-rename case). See `executeHashlineEdits` for the
+ * rename-target-exists guard.
  */
 async function commit(
   serialized: string,
@@ -357,19 +450,21 @@ async function commit(
 }
 
 /**
- * Validate the runtime shape of `args`. Throws on programmer errors;
- * never throws for edit-content errors (those return as values).
+ * Validate the runtime shape of `args`. Returns an error string for
+ * any structurally invalid input. Does NOT throw — callers receive the
+ * failure as a value, matching the rest of the tool's contract.
  */
-function assertValidArgs(args: HashlineToolArgs): void {
+function checkArgs(args: HashlineToolArgs): string | null {
   if (!args || typeof args !== "object") {
-    throw new Error("executeHashlineEdits: args must be an object")
+    return "executeHashlineEdits: args must be an object"
   }
   if (typeof args.filePath !== "string" || args.filePath.length === 0) {
-    throw new Error("executeHashlineEdits: filePath is required")
+    return "executeHashlineEdits: filePath is required"
   }
   if (!Array.isArray(args.edits)) {
-    throw new Error("executeHashlineEdits: edits must be an array")
+    return "executeHashlineEdits: edits must be an array"
   }
+  return null
 }
 
 /**
@@ -378,21 +473,51 @@ function assertValidArgs(args: HashlineToolArgs): void {
  * `baseDir` is typically the session's project directory, used to
  * resolve relative `filePath` / `rename` arguments. When omitted,
  * `process.cwd()` is used.
+ *
+ * All structural failures (missing args, malformed anchors, stale hashes,
+ * overlapping ranges, rename-target collisions, write errors) are
+ * returned as `{ ok: false, error }` values. The function rejects only
+ * if the underlying runtime throws (e.g. the host filesystem is gone).
  */
 export async function executeHashlineEdits(args: HashlineToolArgs, baseDir?: string): Promise<HashlineResult> {
-  assertValidArgs(args)
+  const argsError = checkArgs(args)
+  if (argsError) return { ok: false, error: argsError }
 
   const absSource = resolveFilePath(args.filePath, baseDir)
   const renameInfo = evaluateRename(args.rename, baseDir)
   if (renameInfo.error) return { ok: false, error: renameInfo.error }
 
+  // Reject rename-into-existing-file BEFORE touching the source — silently
+  // overwriting an unrelated file is a data-loss class of bug.
+  if (renameInfo.absPath && renameInfo.absPath !== absSource) {
+    try {
+      const targetExists = await Bun.file(renameInfo.absPath).exists()
+      if (targetExists) {
+        return {
+          ok: false,
+          error:
+            `Refusing to rename ${absSource} → ${renameInfo.absPath}: target file already exists. ` +
+            `Delete or move the existing file first if the overwrite is intentional.`,
+        }
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        error: `Failed to stat rename target ${renameInfo.absPath}: ${(err as Error).message}`,
+      }
+    }
+  }
+
   const loaded = await loadSource(args, absSource)
   if (!loaded.ok) return { ok: false, error: loaded.error }
 
   const split = splitLines(loaded.original)
-  // For a newly-created file with edits, replace line 1 of a synthetic
-  // single-empty-line buffer so the empty-line anchor matches.
-  const lines = !loaded.existed && args.edits.length > 0 ? [""] : split.lines
+  // For ANY zero-line buffer (newly-created OR pre-existing zero-byte file)
+  // followed by edits, synthesize a single empty line so the user-supplied
+  // `1#<hash("")>` anchor matches. Without this, a pre-existing empty file
+  // would inconsistently reject the same edit a createIfMissing flow accepts.
+  const needsEmptyLineSynth = split.lines.length === 0 && args.edits.length > 0
+  const lines = needsEmptyLineSynth ? [""] : split.lines
   const finalTrailing = !loaded.existed ? true : split.trailingNewline
 
   const resolved = resolveAll(args.edits, lines, args.filePath)

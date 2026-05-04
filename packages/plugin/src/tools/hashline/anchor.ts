@@ -1,4 +1,9 @@
 /**
+ * Clean-room implementation. Functional spec inspired by the public README of
+ * oh-my-openagent (SUL-1.0). Implementation, constants (alphabet, separator),
+ * and structure are independently chosen. MIT-licensed under
+ * Cor-Incorporated/opencode.
+ *
  * Anchor format helpers.
  *
  * An anchor is the string form `<line>#<hash>`, where `<line>` is a
@@ -6,12 +11,25 @@
  * hash produced by `./hash`.
  *
  * Format examples:
- *   "1#ZZ"
+ *   "1#BB"
  *   "42#KT"
+ *
+ * The `annotateLines` helper renders one annotated line as
+ * `<anchor><RS><content>` where `<RS>` is the ASCII Record Separator
+ * (U+001E). RS was chosen over `|`/`:` because it cannot appear in any
+ * legitimate file path, source-code token, or shell-quoted string,
+ * eliminating ambiguity when the annotated form is parsed downstream.
  */
 
 import type { Anchor } from "./types.js"
 import { HASH_ALPHABET, HASH_LENGTH, hashLine } from "./hash.js"
+
+/**
+ * Separator used between anchor and content in `annotateLines` output.
+ * ASCII Record Separator (U+001E). Independently chosen — see the file
+ * header for the rationale (path/code-safe control character).
+ */
+export const ANCHOR_CONTENT_SEPARATOR = ""
 
 /**
  * Strict regex for a valid anchor:
@@ -49,8 +67,9 @@ export function formatAnchor(lineNumber: number, lineContent: string): string {
 
 /**
  * Annotate an array of file lines with their anchors.
- * Each output line has the form `LINE#ID|content`.
+ * Each output line has the form `LINE#ID<RS>content` where `<RS>` is
+ * `ANCHOR_CONTENT_SEPARATOR` (U+001E).
  */
 export function annotateLines(lines: string[]): string[] {
-  return lines.map((content, i) => `${formatAnchor(i + 1, content)}|${content}`)
+  return lines.map((content, i) => `${formatAnchor(i + 1, content)}${ANCHOR_CONTENT_SEPARATOR}${content}`)
 }

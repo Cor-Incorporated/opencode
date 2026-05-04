@@ -71,14 +71,14 @@ describe("hashLine", () => {
 
 describe("isValidHashChars", () => {
   test("accepts valid 2-char hashes", () => {
-    expect(isValidHashChars("ZZ")).toBe(true)
+    expect(isValidHashChars("BB")).toBe(true)
     expect(isValidHashChars("HH")).toBe(true)
     expect(isValidHashChars("KT")).toBe(true)
   })
 
   test("rejects wrong length", () => {
-    expect(isValidHashChars("Z")).toBe(false)
-    expect(isValidHashChars("ZZZ")).toBe(false)
+    expect(isValidHashChars("B")).toBe(false)
+    expect(isValidHashChars("BBB")).toBe(false)
     expect(isValidHashChars("")).toBe(false)
   })
 
@@ -86,8 +86,10 @@ describe("isValidHashChars", () => {
     expect(isValidHashChars("II")).toBe(false)
     expect(isValidHashChars("OO")).toBe(false)
     expect(isValidHashChars("LL")).toBe(false)
-    expect(isValidHashChars("AC")).toBe(false)
-    expect(isValidHashChars("zz")).toBe(false)
+    expect(isValidHashChars("AE")).toBe(false)
+    expect(isValidHashChars("ZZ")).toBe(false) // Z dropped from alphabet
+    expect(isValidHashChars("XX")).toBe(false) // X dropped from alphabet
+    expect(isValidHashChars("bb")).toBe(false) // lowercase
     expect(isValidHashChars("12")).toBe(false)
   })
 })
