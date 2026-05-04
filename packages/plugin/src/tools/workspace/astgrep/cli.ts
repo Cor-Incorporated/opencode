@@ -6,7 +6,9 @@
  * combined with `--update-all` to apply changes (unless dryRun=true).
  */
 
+import { Buffer } from "node:buffer"
 import { readFile, writeFile, rename as renameFile } from "node:fs/promises"
+import { createRequire } from "node:module"
 import path from "node:path"
 
 import type {
@@ -50,6 +52,27 @@ interface AstGrepRawMatch {
 }
 
 const SEARCH_RESULT_CAP = 200
+
+/**
+ * Exit codes from `sg` we treat as "no matches" (not an error).
+ *
+ * ast-grep historically returns exit 1 when zero matches are found and the
+ * pattern compiled cleanly. Anything else with non-empty stderr is a real
+ * failure (bad pattern, missing path, IO error, etc.).
+ */
+const ASTGREP_NO_MATCH_EXIT_CODES = new Set([0, 1])
+
+/** Raised by {@link AstGrepCli} when the underlying CLI fails. */
+export class AstGrepCliError extends Error {
+  constructor(
+    message: string,
+    public readonly exitCode: number,
+    public readonly stderr: string,
+  ) {
+    super(message)
+    this.name = "AstGrepCliError"
+  }
+}
 
 export class AstGrepCli {
   private readonly spawnFn: SpawnFn
@@ -149,10 +172,42 @@ function candidateBinaries(): string[] {
 async function binaryWorks(binary: string, spawnFn: SpawnFn): Promise<boolean> {
   try {
     const proc = spawnFn([binary, "--version"], {})
+    // Drain stdout/stderr so a chatty binary on PATH (e.g. another `sg`
+    // that prints help text on `--version`) cannot fill the OS pipe
+    // buffer (~64 KiB on Linux) and deadlock waiting for `exited`.
+    drainStreamSilently(proc.stdout)
+    if (proc.stderr) drainStreamSilently(proc.stderr)
     const code = await proc.exited
     return code === 0
   } catch {
     return false
+  }
+}
+
+/** Best-effort drain of a stdout/stderr stream without retaining the data. */
+function drainStreamSilently(stream: ReadableStream<Uint8Array> | NodeJS.ReadableStream): void {
+  if (isWebStream(stream)) {
+    void (async () => {
+      try {
+        const reader = stream.getReader()
+        while (true) {
+          const { done } = await reader.read()
+          if (done) return
+        }
+      } catch {
+        // ignore
+      }
+    })()
+    return
+  }
+  try {
+    stream.on("data", () => {})
+    stream.on("error", () => {})
+    if (typeof (stream as { resume?: unknown }).resume === "function") {
+      ;(stream as { resume: () => void }).resume()
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -212,7 +267,11 @@ async function applyMatchesToDisk(matches: AstGrepRawMatch[]): Promise<void> {
     list.push(m)
     byFile.set(m.file, list)
   }
-  // Build all updated contents first, then write atomically per file.
+  // Build all updated contents first, then write per file. Each write is
+  // atomic at the file level (temp+rename); if the process is interrupted
+  // between files the run is NOT atomic across files. Recovery story:
+  // re-run the same `replace` after fixing the cause — applied edits
+  // remain, unapplied files retain their original contents on disk.
   const writes: Array<{ file: string; content: string }> = []
   for (const [file, fileMatches] of byFile) {
     const original = await readFile(file, "utf8")
@@ -226,24 +285,54 @@ async function applyMatchesToDisk(matches: AstGrepRawMatch[]): Promise<void> {
   }
 }
 
+/**
+ * Apply replacement edits using ast-grep's UTF-8 byte offsets.
+ *
+ * IMPORTANT: ast-grep emits `byteOffset.{start,end}` as UTF-8 byte
+ * positions, but JavaScript strings are UTF-16 code units. Slicing the
+ * string directly with byte offsets corrupts any file containing
+ * multi-byte characters (CJK, emoji, accented Latin, BOM, etc.).
+ *
+ * We round-trip through a Node `Buffer` so the slice math is performed
+ * in the same byte space ast-grep emitted, then decode the result back
+ * to UTF-8.
+ */
 function applyByteEdits(content: string, matches: AstGrepRawMatch[]): string {
-  // Apply in reverse byte-offset order so earlier offsets remain valid.
   const sorted = [...matches]
     .filter((m) => m.range?.byteOffset && m.replacement !== undefined)
     .sort((a, b) => (b.range!.byteOffset!.start ?? 0) - (a.range!.byteOffset!.start ?? 0))
-  let out = content
+  if (sorted.length === 0) return content
+  let bytes = Buffer.from(content, "utf8")
   for (const m of sorted) {
     const start = m.range!.byteOffset!.start
     const end = m.range!.byteOffset!.end
-    out = out.slice(0, start) + (m.replacement ?? "") + out.slice(end)
+    const head = bytes.subarray(0, start)
+    const tail = bytes.subarray(end)
+    const replacement = Buffer.from(m.replacement ?? "", "utf8")
+    bytes = Buffer.concat([head, replacement, tail])
   }
-  return out
+  return bytes.toString("utf8")
 }
 
 async function collectMatches(proc: SpawnedProcess): Promise<AstGrepRawMatch[]> {
-  const text = await readAllText(proc.stdout)
-  const code = await proc.exited
-  // ast-grep exits with non-zero when no matches found; treat that as empty result.
+  // Read stdout and stderr concurrently with `exited` so we never block
+  // the child by leaving pipes un-drained.
+  const stdoutP = readAllText(proc.stdout)
+  const stderrP = proc.stderr ? readAllText(proc.stderr) : Promise.resolve("")
+  const [text, stderr, code] = await Promise.all([stdoutP, stderrP, proc.exited])
+
+  // Real CLI failure (bad pattern, missing path, IO, etc.). ast-grep
+  // returns exit 1 when there are no matches but the run was successful;
+  // anything else is a hard failure we must surface so callers don't
+  // silently treat broken patterns as "no results".
+  if (!ASTGREP_NO_MATCH_EXIT_CODES.has(code)) {
+    throw new AstGrepCliError(
+      `ast-grep CLI exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`,
+      code,
+      stderr,
+    )
+  }
+
   if (text.trim().length === 0) return []
   const matches: AstGrepRawMatch[] = []
   // --json=stream produces newline-delimited JSON.
@@ -261,8 +350,6 @@ async function collectMatches(proc: SpawnedProcess): Promise<AstGrepRawMatch[]> 
       // Skip malformed lines (e.g. progress messages).
     }
   }
-  // Suppress unused-code warning: callers rely on side effect of awaiting exited.
-  void code
   return matches
 }
 
@@ -297,28 +384,29 @@ function isWebStream(stream: unknown): stream is ReadableStream<Uint8Array> {
   )
 }
 
+/**
+ * `createRequire` lets us load `node:child_process` synchronously from an
+ * ESM module without a top-level `await`. This is the canonical Node.js
+ * escape hatch and avoids the bare `require(...)` call that fails under
+ * strict ESM resolution. Both Node and Bun support it.
+ */
+const moduleRequire = createRequire(import.meta.url)
+const nodeChildProcess = moduleRequire("node:child_process") as typeof import("node:child_process")
+
 const defaultSpawn: SpawnFn = (cmd, opts) => {
-  const bunGlobal = (globalThis as { Bun?: { spawn: (cmd: string[], opts: unknown) => unknown } }).Bun
-  if (bunGlobal?.spawn) {
-    const proc = bunGlobal.spawn(cmd, {
-      cwd: opts.cwd,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    }) as {
-      stdout: ReadableStream<Uint8Array>
-      stderr: ReadableStream<Uint8Array> | null
-      exited: Promise<number>
-    }
-    return { stdout: proc.stdout, stderr: proc.stderr, exited: proc.exited }
-  }
-  // Fallback to Node child_process for non-Bun runtimes.
-  const { spawn } = require("node:child_process") as typeof import("node:child_process")
-  const child = spawn(cmd[0]!, cmd.slice(1), { cwd: opts.cwd })
+  // We deliberately use node:child_process even under Bun. The rest of
+  // the module reads stdout/stderr as Node streams; uniform stream type
+  // keeps `readAllText` simple and matches the LSP client decision in
+  // ./lsp/client.ts.
+  const child = nodeChildProcess.spawn(cmd[0]!, cmd.slice(1), {
+    cwd: opts.cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
   const exited = new Promise<number>((resolve) => {
     child.on("exit", (code) => resolve(code ?? 1))
+    child.on("error", () => resolve(1))
   })
-  return { stdout: child.stdout, stderr: child.stderr, exited }
+  return { stdout: child.stdout!, stderr: child.stderr, exited }
 }
 
 /** Exposed for tests: lang validator. */

@@ -10,6 +10,7 @@ import { tool, type ToolDefinition } from "../../../tool.js"
 import { LspClient, uriToPath, type LspClientOptions } from "./client.js"
 import { specForFile } from "./server-registry.js"
 import type { LocationReport } from "./types.js"
+import { friendlyError } from "./util.js"
 
 export interface DefinitionResult {
   ok: boolean
@@ -37,12 +38,6 @@ export async function runGoToDefinition(
   } catch (err) {
     return { ok: false, error: friendlyError(err, spec.installHint) }
   }
-}
-
-function friendlyError(err: unknown, installHint: string): string {
-  const msg = err instanceof Error ? err.message : String(err)
-  if (/ENOENT|not found|spawn .* ENOENT/i.test(msg)) return installHint
-  return msg
 }
 
 export const lspGoToDefinitionTool: ToolDefinition = tool({

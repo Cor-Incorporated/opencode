@@ -58,11 +58,20 @@ export function uriToPath(uri: DocumentUri): string {
   return fileURLToPath(uri)
 }
 
-/** Walk parent directories looking for any of the given marker filenames. */
+/** Maximum number of parent directories `findRoot` will visit before giving up. */
+export const FIND_ROOT_MAX_DEPTH = 16
+
+/**
+ * Walk parent directories looking for any of the given marker filenames.
+ *
+ * Bounded to {@link FIND_ROOT_MAX_DEPTH} ascents so a misconfigured file
+ * path can never cause an unbounded `await access` loop.
+ */
 export async function findRoot(filePath: string, markers: string[]): Promise<string> {
-  let dir = path.dirname(path.resolve(filePath))
+  const startDir = path.dirname(path.resolve(filePath))
+  let dir = startDir
   const root = path.parse(dir).root
-  while (true) {
+  for (let depth = 0; depth < FIND_ROOT_MAX_DEPTH; depth++) {
     for (const marker of markers) {
       const candidate = path.join(dir, marker)
       try {
@@ -72,11 +81,12 @@ export async function findRoot(filePath: string, markers: string[]): Promise<str
         // marker not present in this dir — keep walking
       }
     }
-    if (dir === root) return path.dirname(path.resolve(filePath))
+    if (dir === root) return startDir
     const parent = path.dirname(dir)
-    if (parent === dir) return path.dirname(path.resolve(filePath))
+    if (parent === dir) return startDir
     dir = parent
   }
+  return startDir
 }
 
 /**
@@ -89,6 +99,9 @@ export class LspClient {
   private waiters = new Map<string, Array<(d: Diagnostic[]) => void>>()
   private closed = false
   private readonly timeoutMs: number
+
+  /** Per-URI cleanup callbacks invoked when diagnostics arrive (e.g. clearTimeout). */
+  private waiterCleanups = new Map<string, Set<() => void>>()
 
   constructor(
     private readonly conn: RpcConnection,
@@ -105,6 +118,17 @@ export class LspClient {
       if (pending) {
         this.waiters.delete(p.uri)
         for (const resolve of pending) resolve(p.diagnostics ?? [])
+      }
+      const cleanups = this.waiterCleanups.get(p.uri)
+      if (cleanups) {
+        this.waiterCleanups.delete(p.uri)
+        for (const fn of cleanups) {
+          try {
+            fn()
+          } catch {
+            // best-effort cleanup
+          }
+        }
       }
     })
     this.conn.onClose(() => {
@@ -211,14 +235,26 @@ export class LspClient {
       const list = this.waiters.get(uri) ?? []
       list.push(resolve)
       this.waiters.set(uri, list)
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         const pending = this.waiters.get(uri)
-        if (!pending) return
-        const remaining = pending.filter((cb) => cb !== resolve)
-        if (remaining.length === 0) this.waiters.delete(uri)
-        else this.waiters.set(uri, remaining)
+        if (pending) {
+          const remaining = pending.filter((cb) => cb !== resolve)
+          if (remaining.length === 0) this.waiters.delete(uri)
+          else this.waiters.set(uri, remaining)
+        }
+        const cleanups = this.waiterCleanups.get(uri)
+        if (cleanups) {
+          cleanups.delete(cleanup)
+          if (cleanups.size === 0) this.waiterCleanups.delete(uri)
+        }
         resolve(this.diagnosticsByUri.get(uri) ?? [])
       }, waitMs)
+      const cleanup = (): void => {
+        clearTimeout(timer)
+      }
+      const set = this.waiterCleanups.get(uri) ?? new Set<() => void>()
+      set.add(cleanup)
+      this.waiterCleanups.set(uri, set)
     })
   }
 
@@ -319,32 +355,40 @@ async function loadJsonRpcNode(): Promise<JsonRpcNodeModule> {
   return mod
 }
 
+/**
+ * Default LSP connection factory.
+ *
+ * IMPORTANT: We deliberately use `node:child_process.spawn` rather than
+ * `Bun.spawn` even when running under Bun, because `vscode-jsonrpc/node`'s
+ * `StreamMessageReader` / `StreamMessageWriter` expect Node.js stream
+ * objects (`stream.on("data", ...)`, `stream.write(...)`). `Bun.spawn`
+ * exposes WHATWG Web `ReadableStream` instances on `proc.stdout`, which
+ * lack the `.on(...)` API and silently break the JSON-RPC framing —
+ * the LSP handshake never completes.
+ *
+ * `node:child_process` is fully supported under Bun and returns Node-style
+ * streams that plug straight into the JSON-RPC reader/writer.
+ */
 const defaultConnectionFactory: ConnectionFactory = async (spec, rootPath) => {
   const rpc = await loadJsonRpcNode()
-  let stdout: NodeJS.ReadableStream
-  let stdin: NodeJS.WritableStream
-  let dispose: () => void
-
-  const bunGlobal = (globalThis as { Bun?: { spawn: (...args: unknown[]) => unknown } }).Bun
-  if (bunGlobal?.spawn) {
-    const proc = bunGlobal.spawn([spec.command, ...spec.args], {
-      cwd: rootPath,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-    }) as { stdin: NodeJS.WritableStream; stdout: NodeJS.ReadableStream; kill?: () => void }
-    stdout = proc.stdout
-    stdin = proc.stdin
-    dispose = () => proc.kill?.()
-  } else {
-    const cp = await import("node:child_process")
-    const proc = cp.spawn(spec.command, spec.args, {
-      cwd: rootPath,
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-    stdout = proc.stdout
-    stdin = proc.stdin
-    dispose = () => proc.kill()
+  const cp = await import("node:child_process")
+  const proc = cp.spawn(spec.command, spec.args, {
+    cwd: rootPath,
+    stdio: ["pipe", "pipe", "pipe"],
+  })
+  if (!proc.stdout || !proc.stdin) {
+    throw new Error(`Failed to open stdio for LSP server '${spec.command}'`)
+  }
+  const stdout: NodeJS.ReadableStream = proc.stdout
+  const stdin: NodeJS.WritableStream = proc.stdin
+  // Drain stderr to prevent the OS pipe buffer from filling and blocking the server.
+  proc.stderr?.resume()
+  const dispose = (): void => {
+    try {
+      proc.kill()
+    } catch {
+      // already exited
+    }
   }
 
   const reader = new rpc.StreamMessageReader(stdout)

@@ -11,6 +11,7 @@ import { tool, type ToolDefinition } from "../../../tool.js"
 import { LspClient, uriToPath, type LspClientOptions } from "./client.js"
 import { specForFile } from "./server-registry.js"
 import type { Range, RenameSummary, TextEdit, WorkspaceEdit } from "./types.js"
+import { friendlyError } from "./util.js"
 
 export interface RenameResult {
   ok: boolean
@@ -81,8 +82,9 @@ function compareRanges(a: Range, b: Range): number {
 }
 
 /**
- * Atomic write: write to a sibling temp file and rename. Avoids leaving a
- * partially-written file behind if the process is interrupted mid-write.
+ * Atomic write at the file level: write to a sibling temp file then rename.
+ * Avoids leaving a partially-written file behind if the process is
+ * interrupted mid-write.
  */
 async function atomicWrite(filePath: string, content: string): Promise<void> {
   const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`
@@ -90,6 +92,17 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
   await renameFile(tmp, filePath)
 }
 
+/**
+ * Apply a workspace-wide rename to disk.
+ *
+ * Atomicity: each file write is atomic (temp+rename), but the multi-file
+ * application is NOT atomic across files. If the process is interrupted
+ * mid-batch, files written before the failure point retain the new name
+ * while later files retain the old name. Recovery: re-run `lsp_rename`
+ * with the same arguments — completed writes are idempotent for the
+ * remaining symbols and the LSP server will compute the residual edit set
+ * against the partially-renamed source.
+ */
 async function applyGroups(groups: FileEditGroup[]): Promise<void> {
   // Build all updated contents first; only write after all builds succeed.
   const writes: Array<{ filePath: string; content: string }> = []
@@ -136,25 +149,24 @@ export async function runRename(
   }
 }
 
-function friendlyError(err: unknown, installHint: string): string {
-  const msg = err instanceof Error ? err.message : String(err)
-  if (/ENOENT|not found|spawn .* ENOENT/i.test(msg)) return installHint
-  return msg
-}
-
 export const lspRenameTool: ToolDefinition = tool({
   description:
     "Rename the symbol at (line, column) workspace-wide via LSP. " +
-    "Returns the WorkspaceEdit summary. With dryRun=true, no files are modified.",
+    "Returns the WorkspaceEdit summary. With dryRun=true (the default), no files are modified.",
   args: {
     filePath: tool.schema.string().describe("Absolute path to the file containing the symbol"),
     line: tool.schema.number().int().nonnegative().describe("Zero-based line number"),
     column: tool.schema.number().int().nonnegative().describe("Zero-based column number"),
     newName: tool.schema.string().min(1).describe("New identifier"),
-    dryRun: tool.schema.boolean().optional().describe("If true, return the edit set without writing files"),
+    dryRun: tool.schema
+      .boolean()
+      .optional()
+      .describe("If true (default), return the edit set without writing files"),
   },
   async execute({ filePath, line, column, newName, dryRun }) {
-    const result = await runRename(filePath, line, column, newName, dryRun ?? false)
+    // Default to dryRun=true so a destructive workspace-wide rename never
+    // happens implicitly. Callers must opt in to writing files.
+    const result = await runRename(filePath, line, column, newName, dryRun ?? true)
     return {
       output: JSON.stringify(result, null, 2),
       metadata: {

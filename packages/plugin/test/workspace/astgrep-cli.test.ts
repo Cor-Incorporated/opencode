@@ -214,6 +214,76 @@ describe("AstGrepCli.replace (mocked)", () => {
     expect(await readFile(file, "utf8")).toBe('logger.info("hi")\n')
     await rm(dir, { recursive: true, force: true })
   })
+
+  it("preserves non-ASCII content when applying byte-offset edits (regression)", async () => {
+    // PR-B regression: ast-grep emits UTF-8 byte offsets, but the previous
+    // implementation sliced UTF-16 code units. CJK characters are 3 bytes
+    // each in UTF-8 but 1 code unit in UTF-16, so even a simple replacement
+    // around them used to land on the wrong byte boundary and corrupt the
+    // file. We assert that 'こんにちは' survives unchanged when the edit
+    // happens AFTER it.
+    const dir = await mkdtemp(path.join(tmpdir(), "ag-utf8-"))
+    const file = path.join(dir, "foo.ts")
+    const original = 'console.log("こんにちは")\n'
+    await writeFile(file, original)
+    // Byte offsets of `console.log("こんにちは")`:
+    //   "console.log(\"" = 13 bytes
+    //   "こんにちは"      = 5 chars × 3 bytes = 15 bytes
+    //   "\")"             = 2 bytes
+    //   total            = 30 bytes
+    const startByte = 0
+    const endByte = Buffer.byteLength(original.trimEnd(), "utf8") // 30
+    const stdout = JSON.stringify({
+      file,
+      text: 'console.log("こんにちは")',
+      replacement: 'logger.info("こんにちは")',
+      range: {
+        byteOffset: { start: startByte, end: endByte },
+        start: { line: 0, column: 0 },
+        end: { line: 0, column: 24 },
+      },
+    })
+    const { spawn } = mockSpawn(stdout)
+    const cli = new AstGrepCli({ binary: "/fake/sg", spawn })
+    const out = await cli.replace({
+      pattern: "console.log($MSG)",
+      rewrite: "logger.info($MSG)",
+      lang: "ts",
+    })
+    expect(out.filesChanged).toBe(1)
+    expect(out.totalEdits).toBe(1)
+    const written = await readFile(file, "utf8")
+    expect(written).toBe('logger.info("こんにちは")\n')
+    // Sanity check: non-ASCII bytes survive byte-for-byte.
+    expect(Buffer.from(written, "utf8").toString("utf8")).toContain("こんにちは")
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it("surfaces a real CLI failure as an error (not silent empty results)", async () => {
+    // PR-B regression: previously a non-zero exit + non-empty stderr was
+    // dropped on the floor. Bad patterns now throw AstGrepCliError.
+    const spawn: SpawnFn = () => ({
+      stdout: Readable.from([]),
+      stderr: Readable.from([Buffer.from("error: Pattern is invalid\n")]),
+      exited: Promise.resolve(2),
+    })
+    const cli = new AstGrepCli({ binary: "/fake/sg", spawn })
+    await expect(cli.search({ pattern: "((", lang: "ts" })).rejects.toThrow(/exited with code 2/)
+  })
+
+  it("treats exit code 1 with empty stdout as 'no matches' (not failure)", async () => {
+    // ast-grep returns 1 when no matches are found — we must not surface
+    // this as an error or callers will break on every clean search.
+    const spawn: SpawnFn = () => ({
+      stdout: Readable.from([]),
+      stderr: null,
+      exited: Promise.resolve(1),
+    })
+    const cli = new AstGrepCli({ binary: "/fake/sg", spawn })
+    const out = await cli.search({ pattern: "x", lang: "ts" })
+    expect(out.total).toBe(0)
+    expect(out.results).toHaveLength(0)
+  })
 })
 
 describe("AstGrepCli.ensureBinary", () => {

@@ -114,6 +114,31 @@ describe("LspClient (mocked)", () => {
     expect(order[1]).toBe("initialized")
   })
 
+  it("sends an initialize payload with the LSP-required shape", async () => {
+    // PR-B regression: assert that the JSON-RPC params we send actually
+    // satisfy the LSP 3.17 initialize contract — capabilities are required
+    // and rootUri / workspaceFolders must be present for project-scoped
+    // language servers.
+    const { conn, calls } = makeMockConnection({
+      onRequest: () => ({ capabilities: {} }),
+    })
+    const spec = specForFile("/x/foo.ts")!
+    const client = new LspClient(conn, spec, "/x")
+    await client.initialize("file:///x")
+    const init = calls.find((c) => c.method === "initialize")
+    expect(init).toBeDefined()
+    const params = init!.params as {
+      rootUri: string
+      capabilities: { textDocument: unknown; workspace: unknown }
+      workspaceFolders: Array<{ uri: string; name: string }>
+    }
+    expect(params.rootUri).toBe("file:///x")
+    expect(params.capabilities.textDocument).toBeDefined()
+    expect(params.capabilities.workspace).toBeDefined()
+    expect(Array.isArray(params.workspaceFolders)).toBe(true)
+    expect(params.workspaceFolders[0]?.uri).toBe("file:///x")
+  })
+
   it("routes publishDiagnostics notifications to waiters", async () => {
     const { conn, emit } = makeMockConnection({
       onRequest: () => ({ capabilities: {} }),
@@ -203,6 +228,138 @@ describe("applyEdits (rename math)", () => {
     ])
     expect(out).toBe("AAb\ncd\nEEf\n")
   })
+})
+
+describe("LSP connection factory (Bun-spawn regression)", () => {
+  beforeEach(() => {
+    LspClient.evictAll()
+  })
+
+  it(
+    "completes the initialize handshake against a real spawned process under Bun",
+    async () => {
+      // PR-B regression: previously the default factory branched on
+      // globalThis.Bun and called Bun.spawn. Bun.spawn returns Web
+      // ReadableStream objects, but vscode-jsonrpc/node's
+      // StreamMessageReader / StreamMessageWriter call stdout.on("data")
+      // and stdin.write(...) — Node-stream APIs that Web streams don't
+      // implement. The handshake therefore never completed at runtime.
+      //
+      // This test stands in for a real LSP server: we spawn a Node script
+      // that speaks the Content-Length-framed JSON-RPC protocol (echoing
+      // initialize -> { capabilities: {} }). It exercises the exact
+      // code path used by defaultConnectionFactory in client.ts —
+      // node:child_process.spawn + vscode-jsonrpc/node — so any
+      // regression to Web-stream-based spawning would surface as a
+      // hung test that the timeout wrapper turns into a failure.
+      const dir = await mkdtemp(path.join(tmpdir(), "lsp-spawn-"))
+      const stub = path.join(dir, "stub-lsp-server.mjs")
+      // Minimal LSP-compatible stub. Reads framed JSON-RPC from stdin
+      // and writes a hand-rolled response so we don't depend on any
+      // external LSP binary.
+      const stubSource = [
+        "let buffer = Buffer.alloc(0)",
+        "process.stdin.on('data', (chunk) => {",
+        "  buffer = Buffer.concat([buffer, chunk])",
+        "  while (true) {",
+        "    const headerEnd = buffer.indexOf('\\r\\n\\r\\n')",
+        "    if (headerEnd === -1) return",
+        "    const header = buffer.slice(0, headerEnd).toString('utf8')",
+        "    const match = /Content-Length: (\\d+)/i.exec(header)",
+        "    if (!match) return",
+        "    const len = parseInt(match[1], 10)",
+        "    const bodyStart = headerEnd + 4",
+        "    if (buffer.length < bodyStart + len) return",
+        "    const body = buffer.slice(bodyStart, bodyStart + len).toString('utf8')",
+        "    buffer = buffer.slice(bodyStart + len)",
+        "    let msg",
+        "    try { msg = JSON.parse(body) } catch { continue }",
+        "    if (msg.method === 'initialize' && msg.id !== undefined) {",
+        "      const reply = JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { capabilities: {} } })",
+        "      const payload = `Content-Length: ${Buffer.byteLength(reply, 'utf8')}\\r\\n\\r\\n${reply}`",
+        "      process.stdout.write(payload)",
+        "    }",
+        "    if (msg.method === 'shutdown' && msg.id !== undefined) {",
+        "      const reply = JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: null })",
+        "      const payload = `Content-Length: ${Buffer.byteLength(reply, 'utf8')}\\r\\n\\r\\n${reply}`",
+        "      process.stdout.write(payload)",
+        "    }",
+        "    if (msg.method === 'exit') process.exit(0)",
+        "  }",
+        "})",
+        "process.stdin.on('end', () => process.exit(0))",
+      ].join("\n")
+      await writeFile(stub, stubSource)
+
+      // Build a connection factory that mirrors defaultConnectionFactory
+      // exactly, but points at our stub binary. If anyone re-introduces
+      // Bun.spawn here, the stream-API mismatch will hang and the
+      // timeout will fire — turning the regression into a clean failure.
+      const cp = await import("node:child_process")
+      const rpc = (await import("vscode-jsonrpc/node")) as unknown as {
+        StreamMessageReader: new (s: NodeJS.ReadableStream) => unknown
+        StreamMessageWriter: new (s: NodeJS.WritableStream) => unknown
+        createMessageConnection: (
+          r: unknown,
+          w: unknown,
+        ) => {
+          sendRequest: <T>(m: string, p: unknown) => Promise<T>
+          sendNotification: (m: string, p: unknown) => unknown
+          onNotification: (m: string, h: (p: unknown) => void) => unknown
+          onClose: (h: () => void) => unknown
+          listen: () => void
+          dispose: () => void
+        }
+      }
+
+      const factory = async (): Promise<RpcConnection> => {
+        const proc = cp.spawn(process.execPath, [stub], { stdio: ["pipe", "pipe", "pipe"] })
+        // Sanity: these are Node streams. The whole point of the
+        // regression test — assert the stream type the production
+        // factory actually depends on.
+        expect(typeof (proc.stdout as NodeJS.ReadableStream).on).toBe("function")
+        expect(typeof (proc.stdin as NodeJS.WritableStream).write).toBe("function")
+        proc.stderr?.resume()
+
+        const reader = new rpc.StreamMessageReader(proc.stdout)
+        const writer = new rpc.StreamMessageWriter(proc.stdin)
+        const conn = rpc.createMessageConnection(reader, writer)
+        return {
+          sendRequest: <T>(m: string, p: unknown) => conn.sendRequest<T>(m, p),
+          sendNotification: (m, p) => {
+            void conn.sendNotification(m, p)
+          },
+          onNotification: (m, h) => {
+            conn.onNotification(m, h)
+          },
+          onClose: (h) => {
+            conn.onClose(h)
+          },
+          listen: () => conn.listen(),
+          dispose: () => {
+            try {
+              conn.dispose()
+            } finally {
+              try {
+                proc.kill()
+              } catch {
+                // already exited
+              }
+            }
+          },
+        }
+      }
+
+      // Drive a full handshake through the public LspClient API.
+      const fakeFile = path.join(dir, "x.ts")
+      await writeFile(fakeFile, "export const x = 1\n")
+      const client = await LspClient.forFile(fakeFile, { factory, timeoutMs: 5_000 })
+      expect(client.isClosed).toBe(false)
+      await client.shutdown()
+      await rm(dir, { recursive: true, force: true })
+    },
+    15_000,
+  )
 })
 
 describe("rename WorkspaceEdit -> disk (atomic)", () => {
