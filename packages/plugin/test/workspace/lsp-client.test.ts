@@ -300,7 +300,6 @@ describe("LSP connection factory (Bun-spawn regression)", () => {
       const stubSpec: LspServerSpec = {
         language: "stub",
         languageId: "stub",
-        extensions: [],
         rootPatterns: [],
         command: process.execPath,
         args: [stub],

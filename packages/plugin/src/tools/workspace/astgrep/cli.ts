@@ -171,6 +171,11 @@ export class AstGrepCli {
   }
 }
 
+// FIXME(follow-up): plumb context.directory from ToolContext for correct workspace cwd.
+// `process.cwd()` happens to equal the session project directory in the common
+// `opencode` CLI launch path, but we should not rely on it — `ToolContext`
+// already carries an authoritative `directory`. Tracked separately to keep this
+// PR focused on the LSP/ast-grep surface.
 function defaultSpawnCwd(): string | undefined {
   return typeof process !== "undefined" ? process.cwd() : undefined
 }
