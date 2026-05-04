@@ -8,7 +8,7 @@
  *
  * Usage in a plugin:
  *
- *   import { createHashlineTool } from "@opencode-ai/plugin/tools/hashline"
+ *   import { createHashlineTool } from "@opencode-ai/plugin"
  *   const myPlugin: Plugin = async () => ({
  *     tool: { hashline_edit: createHashlineTool() },
  *   })
