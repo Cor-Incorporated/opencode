@@ -21,6 +21,13 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.3-codex-spark",
   "gpt-5.4",
   "gpt-5.4-mini",
+  // Fork (Cor-Incorporated/opencode): models referenced by guardrails/profile/opencode.json
+  // and guardrails/managed/opencode.json. Without these the provider.models hook filters
+  // them out before the guardrail allow-list runs.
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-mini",
+  "gpt-5.1-codex-max",
+  "gpt-5.2-codex",
 ])
 
 interface PkceCodes {
