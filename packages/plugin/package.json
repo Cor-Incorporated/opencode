@@ -6,19 +6,24 @@
   "license": "MIT",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "bun test --timeout 30000",
+    "test:ci": "mkdir -p .artifacts/unit && bun test --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml"
   },
   "exports": {
     ".": "./src/index.ts",
     "./tool": "./src/tool.ts",
-    "./tui": "./src/tui.ts"
+    "./tui": "./src/tui.ts",
+    "./tools/workspace": "./src/tools/workspace/index.ts"
   },
   "files": [
     "dist"
   ],
   "dependencies": {
     "@opencode-ai/sdk": "workspace:*",
+    "@ast-grep/cli": "^0.30.0",
     "effect": "catalog:",
+    "vscode-jsonrpc": "^8.2.0",
     "zod": "catalog:"
   },
   "peerDependencies": {
