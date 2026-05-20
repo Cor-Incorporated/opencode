@@ -417,9 +417,15 @@ function workerTools(push: boolean) {
   }
 }
 
-function permit(base: Rule[]) {
+function workerWriteRule(rule: Rule) {
+  if (rule.action === "deny") return true
+  return rule.permission !== "edit" && rule.permission !== "*"
+}
+
+function permit(base: Rule[], isolatedWrite = false) {
   return [
-    ...base,
+    ...(isolatedWrite ? [{ permission: "edit", pattern: "*", action: "allow" as const }] : []),
+    ...(isolatedWrite ? base.filter(workerWriteRule) : base),
     { permission: "bash", pattern: "*", action: "allow" as const },
     { permission: "bash", pattern: "pwd", action: "allow" as const },
     { permission: "bash", pattern: "ls", action: "allow" as const },
@@ -1327,6 +1333,7 @@ export default async function team(input: { client: Client; worktree: string; di
         mergeWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt,
         push,
       )
+      const isolatedWrite = push && mergeWorktree && box !== ctx.directory
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
@@ -1340,7 +1347,7 @@ export default async function team(input: { client: Client; worktree: string; di
         body: {
           parentID: ctx.sessionID,
           title: item.description,
-          permission: permit(ctx.permission),
+          permission: permit(ctx.permission, isolatedWrite),
         },
         query: {
           directory: box,
