@@ -16,11 +16,15 @@ const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
 const ALLOWED_MODELS = new Set([
   "gpt-5.5",
+  "gpt-5.5-pro",
   "gpt-5.2",
+  "gpt-5.2-pro",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.4-pro",
   // Fork (Cor-Incorporated/opencode): models referenced by guardrails/profile/opencode.json
   // and guardrails/managed/opencode.json. Without these the provider.models hook filters
   // them out before the guardrail allow-list runs.
