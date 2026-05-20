@@ -18,7 +18,6 @@ import { SystemPrompt } from "./system"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { Bus } from "@/bus"
-import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -516,16 +515,18 @@ function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" 
   return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
 }
 
-export function workflowApprovalRuleset(
+function workflowApprovalRuleset(
   agentPermission: Permission.Ruleset | undefined,
   sessionPermission: Permission.Ruleset | undefined,
 ) {
   return Permission.merge(
     [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
-    (agentPermission ?? []).filter(
-      (rule) => rule.permission !== "*" && Wildcard.match("workflow_tool_approval", rule.permission),
+    (agentPermission ?? []).filter((rule) => rule.permission === "workflow_tool_approval"),
+    (sessionPermission ?? []).filter(
+      (rule) =>
+        rule.permission === "workflow_tool_approval" ||
+        (rule.permission === "*" && rule.pattern === "*" && rule.action === "allow"),
     ),
-    sessionPermission ?? [],
   )
 }
 

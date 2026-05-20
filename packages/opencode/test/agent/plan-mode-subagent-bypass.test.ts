@@ -122,6 +122,7 @@ it.instance("explore subagent launched from build receives non-interactive worke
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("allow")
     expect(Permission.evaluate("workflow_tool_approval", "bash: git status", effective).action).toBe("allow")
     expect(Permission.evaluate("doom_loop", "bash", effective).action).toBe("allow")
+    expect(Permission.evaluate("mcp_custom_tool", "anything", effective).action).toBe("allow")
   }),
 )
 
