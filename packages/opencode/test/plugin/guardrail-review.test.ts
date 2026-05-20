@@ -104,6 +104,41 @@ test("external opencode review marks GLM review done", async () => {
   expect(events.some((item) => item.type === "external_review.completed")).toBe(true)
 })
 
+test("review gate blocks when code-reviewer state is missing", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({ review_codex_state: "done" }))
+  const { ctx } = await context(state)
+  const review = createReviewPipeline(ctx)
+
+  expect(review.reviewGate({ review_codex_state: "done" })).toEqual({
+    done: false,
+    pending: ["GLM code-reviewer"],
+    message: "pending: GLM code-reviewer",
+  })
+
+  await review.syncReviewState()
+  expect((await Bun.file(state).json()).review_state).toBe("")
+})
+
+test("checklist blocks stale review state after edits", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  const { ctx } = await context(state)
+
+  expect(
+    createReviewPipeline(ctx).checklist({
+      tests_executed: true,
+      ci_green: true,
+      review_glm_state: "done",
+      review_codex_state: "done",
+      edits_since_review: 1,
+    }).blocking,
+  ).toContain("review_fresh")
+})
+
 test("external claude code-reviewer marks GLM review done", async () => {
   await using tmp = await tmpdir()
   const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")

@@ -105,11 +105,132 @@ mark() {
 guardrails_profile_has_team_plugin() {
   "$BUN_BIN" --eval '
     const config = await Bun.file(process.argv[1]).json()
-    if (!Array.isArray(config.plugin) || !config.plugin.includes("./plugins/team.ts")) {
-      console.error("missing ./plugins/team.ts in guardrails profile plugin list")
+    const missing = ["./plugins/guardrail.ts", "./plugins/team.ts"].filter(
+      (item) => !Array.isArray(config.plugin) || !config.plugin.includes(item),
+    )
+    if (missing.length) {
+      console.error(`missing guardrails profile plugin(s): ${missing.join(", ")}`)
       process.exit(1)
     }
   ' "$GUARDRAILS_PROFILE/opencode.json" >/dev/null
+}
+
+guardrails_policy_plugins_smoke() {
+  "$BUN_BIN" --conditions=browser --eval '
+    const { mkdtemp, mkdir, rm } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { pathToFileURL } = await import("node:url")
+
+    const profile = process.argv[1]
+    const reviewMod = await import(pathToFileURL(join(profile, "plugins/guardrail-review.ts")).href)
+    const gitMod = await import(pathToFileURL(join(profile, "plugins/guardrail-git.ts")).href)
+    const dir = await mkdtemp(join(tmpdir(), "opencode-local-policy-check-"))
+    try {
+      const state = join(dir, ".opencode/guardrails/state.json")
+      await mkdir(join(dir, ".opencode/guardrails"), { recursive: true })
+      await Bun.write(state, JSON.stringify({ review_codex_state: "done" }))
+      const events = []
+      const ctx = {
+        input: { client: {}, directory: dir, worktree: dir },
+        mode: "enforced",
+        root: join(dir, ".opencode/guardrails"),
+        log: join(dir, ".opencode/guardrails/events.jsonl"),
+        state,
+        allow: {},
+        hasCodexMcp: true,
+        maxParallelTasks: 5,
+        maxSessionCost: 10,
+        agentModelTier: {},
+        tierModels: {},
+        domainDirs: {},
+        mark: async (data) => {
+          await Bun.write(state, JSON.stringify({ ...(await Bun.file(state).json().catch(() => ({}))), ...data }))
+        },
+        seen: async (type, data) => events.push({ type, ...data }),
+        note: () => ({ sessionID: undefined, permission: undefined, patterns: undefined }),
+        hidden: () => false,
+        code: () => false,
+        fact: () => false,
+        stale: () => false,
+        factLine: () => "",
+        reviewLine: () => "",
+        compact: () => "",
+        deny: () => undefined,
+        baseline: () => undefined,
+        version: async () => undefined,
+        budget: async () => 0,
+        gate: () => undefined,
+      }
+
+      const review = reviewMod.createReviewPipeline(ctx)
+      await review.handleExternalReviewDetection(
+        { tool: "bash", args: { command: "opencode run /review" } },
+        { output: "Review completed. No CRITICAL or HIGH findings were identified.", metadata: { exitCode: 0 } },
+      )
+      const data = await Bun.file(state).json()
+      if (data.review_glm_state !== "done" || data.review_state !== "done") {
+        console.error("guardrail-review did not mark external review complete")
+        process.exit(1)
+      }
+
+      const git = gitMod.createGitHandlers(ctx, review)
+      await Bun.$`git init`.cwd(dir).quiet()
+      await Bun.$`git config core.fsmonitor false`.cwd(dir).quiet()
+      await Bun.$`git config commit.gpgsign false`.cwd(dir).quiet()
+      await Bun.$`git config user.email "local-check@opencode.test"`.cwd(dir).quiet()
+      await Bun.$`git config user.name "OpenCode Local Check"`.cwd(dir).quiet()
+      await Bun.$`git commit --allow-empty -m root`.cwd(dir).quiet()
+      await Bun.$`git branch -M dev`.cwd(dir).quiet()
+      await Bun.$`git update-ref refs/remotes/origin/dev HEAD`.cwd(dir).quiet()
+      await Bun.$`git checkout -b docs-smoke`.cwd(dir).quiet()
+      await mkdir(join(dir, "docs"), { recursive: true })
+      await Bun.write(join(dir, "docs/guardrails.md"), "docs-only local deploy smoke\n")
+      await Bun.$`git add docs/guardrails.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "docs: local deploy smoke"`.cwd(dir).quiet()
+      try {
+        await git.bashBeforeGit("git merge dev", {}, {})
+      } catch (err) {
+        console.error(`guardrail-git docs-only merge smoke should pass: ${String(err)}`)
+        process.exit(1)
+      }
+
+      await Bun.$`git checkout -B policy-smoke origin/dev`.cwd(dir).quiet()
+      await mkdir(join(dir, "packages/guardrails/profile/plugins"), { recursive: true })
+      await Bun.write(join(dir, "packages/guardrails/profile/plugins/guardrail-git.ts"), "policy local deploy smoke\n")
+      await Bun.$`git add packages/guardrails/profile/plugins/guardrail-git.ts`.cwd(dir).quiet()
+      await Bun.$`git commit -m "fix: local deploy policy smoke"`.cwd(dir).quiet()
+      try {
+        await git.bashBeforeGit("git merge dev", {}, {})
+        console.error("guardrail-git source/policy merge smoke should block FULL tier")
+        process.exit(1)
+      } catch (err) {
+        if (!String(err).includes("merge blocked (FULL tier)")) {
+          console.error(`guardrail-git source/policy merge smoke blocked for wrong reason: ${String(err)}`)
+          process.exit(1)
+        }
+      }
+
+      const blocked = []
+      for (const cmd of [
+        "git push origin main",
+        "git reset --soft origin/dev",
+        "codex exec '\''review PR #1'\''",
+      ]) {
+        try {
+          await git.bashBeforeGit(cmd, {}, {})
+        } catch (err) {
+          if (String(err).includes("Guardrail policy blocked")) blocked.push(cmd)
+        }
+      }
+      if (blocked.length !== 3) {
+        console.error(`guardrail-git policy smoke blocked ${blocked.length}/3 commands`)
+        process.exit(1)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  ' "$GUARDRAILS_PROFILE" >/dev/null
 }
 
 guardrails_team_plugin_loads() {
@@ -182,7 +303,8 @@ mark "$([[ -x "$GUARDRAILS_BIN" ]] && echo ok || echo fail)" "guardrails wrapper
 mark "$(grep -Fq "OPENCODE_CONFIG_DIR" "$GUARDRAILS_BIN" 2>/dev/null && echo ok || echo fail)" "guardrails wrapper sets OPENCODE_CONFIG_DIR"
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/auto.md" ]] && echo ok || echo fail)" "guardrails profile includes /auto"
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/plan.md" ]] && echo ok || echo fail)" "guardrails profile includes /plan"
-mark "$(guardrails_profile_has_team_plugin && echo ok || echo fail)" "guardrails profile enables team plugin"
+mark "$(guardrails_profile_has_team_plugin && echo ok || echo fail)" "guardrails profile enables guardrail and team plugins"
+mark "$(guardrails_policy_plugins_smoke && echo ok || echo fail)" "guardrails review/git policy smoke passes"
 mark "$(guardrails_team_plugin_loads && echo ok || echo fail)" "guardrails team plugin loads team/background/team_status"
 
 entry_target="$(readlink "$ENTRYPOINT" 2>/dev/null || true)"

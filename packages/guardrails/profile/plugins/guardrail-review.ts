@@ -181,7 +181,7 @@ export function createReviewPipeline(ctx: GuardrailContext) {
   async function handleCodexDetection(item: { tool: string; args?: Record<string, unknown> }, out: { output: string }) {
     if (item.tool !== "mcp__codex__codex") return
     const prompt = str(item.args?.prompt || item.args?.command || "")
-    if (!/\b(review|code[\.\-_]review|diff[\.\-_]review)\b/i.test(prompt)) return
+    if (!/\b(review|code[._-]review|diff[._-]review)\b/i.test(prompt)) return
     const output = str(out.output).trim()
     if (!output || output.length < 20) {
       await ctx.seen("codex_review.empty_or_short", { length: output.length })

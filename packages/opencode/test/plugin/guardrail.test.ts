@@ -1,11 +1,38 @@
 import { describe, expect, test } from "bun:test"
+import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import {
+import guardrail, {
   ensureLocalOpencodeIgnored,
   partID,
   teamWorkerWorktree,
 } from "../../../../packages/guardrails/profile/plugins/guardrail"
+import type { GuardrailInput } from "../../../../packages/guardrails/profile/plugins/guardrail-context"
+
+function client(): GuardrailInput["client"] {
+  return {
+    session: {
+      async create() {
+        return { data: { id: "unused" } }
+      },
+      async promptAsync() {
+        return {}
+      },
+      async prompt() {
+        return {}
+      },
+      async status() {
+        return { data: {} }
+      },
+      async messages() {
+        return { data: [] }
+      },
+      async abort() {
+        return {}
+      },
+    },
+  }
+}
 
 describe("guardrail plugin", () => {
   test("uses OpenCode-compatible part ids for injected text", () => {
@@ -35,5 +62,33 @@ describe("guardrail plugin", () => {
 
     expect(await ensureLocalOpencodeIgnored(teamDir)).toBe(false)
     expect(await Bun.file(exclude).text()).toBe(before)
+  })
+
+  test("tool hook blocks code PR merge when code-reviewer state is missing", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Bun.$`git branch -M dev`.cwd(tmp.path).quiet()
+    await Bun.$`git update-ref refs/remotes/origin/dev HEAD`.cwd(tmp.path).quiet()
+    await Bun.$`git checkout -b feat/full-review`.cwd(tmp.path).quiet()
+    await fs.mkdir(path.join(tmp.path, "src"), { recursive: true })
+    await Bun.write(path.join(tmp.path, "src", "policy.ts"), "export const policy = true\n")
+    await Bun.$`git add src/policy.ts`.cwd(tmp.path).quiet()
+    await Bun.$`git commit -m "add policy source"`.cwd(tmp.path).quiet()
+    const plugin = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+
+    await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_test" } } })
+    await Bun.write(
+      path.join(tmp.path, ".opencode", "guardrails", "state.json"),
+      JSON.stringify({
+        ...(await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()),
+        review_codex_state: "done",
+      }),
+    )
+
+    await expect(
+      plugin["tool.execute.before"](
+        { tool: "bash", args: { command: "git merge dev" } },
+        { args: { command: "git merge dev" } },
+      ),
+    ).rejects.toThrow("pending: GLM code-reviewer")
   })
 })

@@ -17,7 +17,9 @@ export function teamWorkerWorktree(worktree: string) {
 
 export async function ensureLocalOpencodeIgnored(worktree: string) {
   if (teamWorkerWorktree(worktree)) return false
-  const projectIgnore = await Bun.file(path.join(worktree, ".gitignore")).text().catch(() => "")
+  const projectIgnore = await Bun.file(path.join(worktree, ".gitignore"))
+    .text()
+    .catch(() => "")
   if (projectIgnore.includes(".opencode")) return false
 
   const target = await git(worktree, ["rev-parse", "--git-path", "info/exclude"]).catch(() => ({
@@ -30,7 +32,9 @@ export async function ensureLocalOpencodeIgnored(worktree: string) {
   const exclude = path.isAbsolute(target.stdout.trim())
     ? target.stdout.trim()
     : path.join(worktree, target.stdout.trim())
-  const current = await Bun.file(exclude).text().catch(() => "")
+  const current = await Bun.file(exclude)
+    .text()
+    .catch(() => "")
   if (current.split(/\r?\n/).some((line) => line.trim() === OPENCODE_IGNORE || line.trim() === ".opencode")) {
     return false
   }
@@ -42,19 +46,14 @@ export async function ensureLocalOpencodeIgnored(worktree: string) {
   return true
 }
 
-export default async function guardrail(
-  input: GuardrailInput,
-  opts?: Record<string, unknown>,
-) {
+export default async function guardrail(input: GuardrailInput, opts?: Record<string, unknown>) {
   const ctx = await createContext(input, opts)
   const access = createAccessHandlers(ctx)
   const review = createReviewPipeline(ctx)
   const gitHandlers = createGitHandlers(ctx, review)
 
   return {
-    config: async (cfg: {
-      provider?: Record<string, { whitelist?: string[] }>
-    }) => {
+    config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
       for (const key of Object.keys(ctx.allow)) delete ctx.allow[key]
       for (const [key, val] of Object.entries(cfg.provider ?? {})) {
         const ids = list(val.whitelist)
@@ -71,9 +70,17 @@ export default async function guardrail(
         try {
           const { existsSync } = await import("fs")
           if (existsSync(path.join(ctx.input.worktree, "package.json"))) stacks.push("node")
-          if (existsSync(path.join(ctx.input.worktree, "pyproject.toml")) || existsSync(path.join(ctx.input.worktree, "requirements.txt"))) stacks.push("python")
+          if (
+            existsSync(path.join(ctx.input.worktree, "pyproject.toml")) ||
+            existsSync(path.join(ctx.input.worktree, "requirements.txt"))
+          )
+            stacks.push("python")
           if (existsSync(path.join(ctx.input.worktree, "go.mod"))) stacks.push("go")
-          if (existsSync(path.join(ctx.input.worktree, "Dockerfile")) || existsSync(path.join(ctx.input.worktree, "terraform"))) stacks.push("infra")
+          if (
+            existsSync(path.join(ctx.input.worktree, "Dockerfile")) ||
+            existsSync(path.join(ctx.input.worktree, "terraform"))
+          )
+            stacks.push("infra")
         } catch {}
 
         let branchWarning = ""
@@ -84,7 +91,8 @@ export default async function guardrail(
           if (/^(main|master)$/.test(currentBranch)) {
             branchWarning = `WARNING: on ${currentBranch} branch. Create a feature branch: git checkout -b feat/<description> develop`
           } else if (currentBranch === "develop") {
-            branchWarning = "On develop branch. Use feature branch for implementation: git checkout -b feat/<description>"
+            branchWarning =
+              "On develop branch. Use feature branch for implementation: git checkout -b feat/<description>"
           }
         } catch {}
 
@@ -146,9 +154,15 @@ export default async function guardrail(
         }
         try {
           const settingsPath = path.join(process.env.HOME || "~", ".claude", "settings.json")
-          const settings = JSON.parse(await Bun.file(settingsPath).text().catch(() => "{}"))
+          const settings = JSON.parse(
+            await Bun.file(settingsPath)
+              .text()
+              .catch(() => "{}"),
+          )
           const mcpServers = settings.mcpServers ?? settings.mcp_servers ?? {}
-          ctx.hasCodexMcp = Object.keys(mcpServers).some((item) => /^codex$/i.test(item) || /^mcp[_-]codex$/i.test(item))
+          ctx.hasCodexMcp = Object.keys(mcpServers).some(
+            (item) => /^codex$/i.test(item) || /^mcp[_-]codex$/i.test(item),
+          )
           if (!ctx.hasCodexMcp) {
             await ctx.mark({ review_codex_state: "done", review_codex_at: "auto:no-codex-mcp" })
             await ctx.seen("codex_mcp.not_configured", { auto_satisfied: true })
@@ -211,25 +225,34 @@ export default async function guardrail(
               stderr: "pipe",
             })
             const fetchResult = await Promise.race([
-              Promise.all([
-                new Response(proc.stdout).text(),
-                new Response(proc.stderr).text(),
-                proc.exited,
-              ]).then(([stdout, stderr, code]) => ({ stdout, stderr, code })),
+              Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]).then(
+                ([stdout, stderr, code]) => ({ stdout, stderr, code }),
+              ),
               Bun.sleep(5000).then(() => {
                 proc.kill()
                 return null
               }),
             ])
-            if (fetchResult && fetchResult.code === 0 && (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))) {
-              await ctx.mark({ git_freshness_advisory: "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes." })
+            if (
+              fetchResult &&
+              fetchResult.code === 0 &&
+              (fetchResult.stdout.trim() || fetchResult.stderr.includes("From"))
+            ) {
+              await ctx.mark({
+                git_freshness_advisory:
+                  "⚠️ Your branch may be behind origin. Consider running `git pull` before making changes.",
+              })
             }
           } catch {}
         })()
       }
       const branchWarn = str(data.branch_warning)
       if (branchWarn) {
-        const statusCheck = await git(ctx.input.worktree, ["status", "--porcelain"]).catch(() => ({ stdout: "", stderr: "", code: 1 }))
+        const statusCheck = await git(ctx.input.worktree, ["status", "--porcelain"]).catch(() => ({
+          stdout: "",
+          stderr: "",
+          code: 1,
+        }))
         const dirty = statusCheck.stdout.trim().length > 0 && !statusCheck.stderr.trim()
         out.parts.push({
           id: partID(),
@@ -286,9 +309,15 @@ export default async function guardrail(
             await ctx.seen("workflow.plan_approved", { sessionID: "plan_exit" })
           }
           const taskCount = num(data.active_task_count)
-          const hasDelegation = taskCount > 0 || Object.keys(data).filter((k) => k.startsWith("delegation_")).some((k) => num(data[k]) > 0)
+          const hasDelegation =
+            taskCount > 0 ||
+            Object.keys(data)
+              .filter((k) => k.startsWith("delegation_"))
+              .some((k) => num(data[k]) > 0)
           if (!hasDelegation) {
-            out.output = (out.output || "") + "\n\n⚠️ [DELEGATION ADVISORY] Plan approved without delegation assignments.\n" +
+            out.output =
+              (out.output || "") +
+              "\n\n⚠️ [DELEGATION ADVISORY] Plan approved without delegation assignments.\n" +
               "ADR-004 rules: 2+ independent tasks → Agent Team (TeamCreate), " +
               "1 large autonomous task → Codex CLI (route C), " +
               "review → code-reviewer + Codex CLI (route A). " +
@@ -318,7 +347,15 @@ export default async function guardrail(
       if (item.tool === "task") {
         const cmd = typeof item.args?.command === "string" ? item.args.command : ""
         const agent = typeof item.args?.subagent_type === "string" ? item.args.subagent_type : ""
-        if (cmd === "review" || agent.includes("review")) {
+        const rawOutput = str(out.output)
+        const taskResultMatch = rawOutput.match(/<task_result>([\s\S]*?)<\/task_result>/)
+        const payload = taskResultMatch ? taskResultMatch[1].trim() : rawOutput.trim()
+        const reviewFailed =
+          out.title === "Error" ||
+          (typeof out.metadata?.exitCode === "number" && out.metadata.exitCode !== 0) ||
+          payload.length < 20 ||
+          /Tool execution aborted|review failed|^error\b/i.test(payload)
+        if ((cmd === "review" || agent.includes("review")) && !reviewFailed) {
           const isCodexReview = /codex/i.test(agent) || /codex/i.test(cmd)
           if (isCodexReview) {
             await ctx.mark({
@@ -338,6 +375,8 @@ export default async function guardrail(
             })
           }
           await review.syncReviewState()
+        } else if (cmd === "review" || agent.includes("review")) {
+          await ctx.seen("task_review.not_completed", { agent, payload_length: payload.length })
         }
         const activeTasks = json(data.active_tasks)
         const callID = str(item.callID) || str(item.args?.callID) || ""
@@ -351,11 +390,12 @@ export default async function guardrail(
         }
         const agentDelegations = num(data[`delegation_${agent}`])
         await ctx.mark({ [`delegation_${agent}`]: agentDelegations + 1 })
-        const rawOutput = str(out.output)
-        const taskResultMatch = rawOutput.match(/<task_result>([\s\S]*?)<\/task_result>/)
-        const payload = taskResultMatch ? taskResultMatch[1].trim() : rawOutput.trim()
         if (agent && payload.length < 20) {
-          out.output = (out.output || "") + "\n⚠️ Agent output appears empty or trivially short (" + payload.length + " chars). Verify the agent completed its task."
+          out.output =
+            (out.output || "") +
+            "\n⚠️ Agent output appears empty or trivially short (" +
+            payload.length +
+            " chars). Verify the agent completed its task."
           await ctx.seen("verify_agent.short_output", { agent, payload_length: payload.length })
         }
       }
@@ -375,7 +415,10 @@ export default async function guardrail(
           [/xox[bprs]-[a-zA-Z0-9-]+/g, "slack-token"],
           [/npm_[a-zA-Z0-9]{36}/g, "npm-token"],
           [/-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, "private-key"],
-          [/\b[A-Z_]*(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE)[A-Z_]*\s*=\s*["']?[A-Za-z0-9_\-+/=]{10,}["']?/gi, "env-secret"],
+          [
+            /\b[A-Z_]*(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE)[A-Z_]*\s*=\s*["']?[A-Za-z0-9_\-+/=]{10,}["']?/gi,
+            "env-secret",
+          ],
         ]
         let output = str(out.output)
         let maskedCount = 0
@@ -409,8 +452,14 @@ export default async function guardrail(
 
         const output = str(out.output)
         const currentPhase = str(data.workflow_phase)
-        const pipelineActive = currentPhase && currentPhase !== "idle" && currentPhase !== "done" && currentPhase !== "blocked"
-        if (pipelineActive && currentPhase === "implementing" && /\bgh\s+pr\s+create\b/.test(cmd) && output.includes("github.com")) {
+        const pipelineActive =
+          currentPhase && currentPhase !== "idle" && currentPhase !== "done" && currentPhase !== "blocked"
+        if (
+          pipelineActive &&
+          currentPhase === "implementing" &&
+          /\bgh\s+pr\s+create\b/.test(cmd) &&
+          output.includes("github.com")
+        ) {
           const prUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)
           if (prUrl) {
             await ctx.mark({ workflow_phase: "testing", workflow_pr_url: prUrl[0] })
@@ -418,7 +467,11 @@ export default async function guardrail(
             out.output += "\n\n[WORKFLOW] PR created. Next: run tests, then /review, then /ship."
           }
         }
-        if (pipelineActive && currentPhase === "testing" && /\b(bun\s+test|pytest|go\s+test|npm\s+test|vitest|jest)\b/.test(cmd)) {
+        if (
+          pipelineActive &&
+          currentPhase === "testing" &&
+          /\b(bun\s+test|pytest|go\s+test|npm\s+test|vitest|jest)\b/.test(cmd)
+        ) {
           const testExit = out.metadata?.exitCode ?? (output.includes("FAIL") ? 1 : 0)
           if (testExit === 0 && !output.includes("FAIL")) {
             await ctx.mark({ workflow_phase: "reviewing", tests_executed: true })
@@ -426,13 +479,22 @@ export default async function guardrail(
             out.output += "\n\n[WORKFLOW] Tests passed. Next: run /review."
           }
         }
-        if (pipelineActive && currentPhase === "shipping" && /\bgh\s+pr\s+merge\b/.test(cmd) && !output.includes("error") && !output.includes("failed")) {
+        if (
+          pipelineActive &&
+          currentPhase === "shipping" &&
+          /\bgh\s+pr\s+merge\b/.test(cmd) &&
+          !output.includes("error") &&
+          !output.includes("failed")
+        ) {
           await ctx.mark({ workflow_phase: "done" })
           await ctx.seen("workflow.merged", {})
           out.output += "\n\n[WORKFLOW] Merge complete. Create follow-up issues for any discovered problems."
         }
         if (pipelineActive && /\bgh\s+pr\s+checks\b/.test(cmd)) {
-          const allPass = !output.toLowerCase().includes("fail") && !output.toLowerCase().includes("pending")
+          const allPass =
+            !/\b(fail(?:ed|ing)?|pending|queued|in[_ -]?progress|neutral|skipped|cancel(?:led|ed)|timed[_ -]?out|action[_ -]?required|startup[_ -]?failure|stale)\b/i.test(
+              output,
+            )
           await ctx.mark({ ci_green: allPass })
         }
         if (/\bgh\s+issue\s+create\b/.test(cmd) && output.includes("github.com")) {
@@ -476,7 +538,9 @@ export default async function guardrail(
         await ctx.seen("workflow.started", { command: item.command })
         const wfPart = out.parts.find((part) => part.type === "subtask" && typeof part.prompt === "string")
         if (wfPart) {
-          wfPart.prompt = (wfPart.prompt || "") + "\n\nAfter implementation:\n" +
+          wfPart.prompt =
+            (wfPart.prompt || "") +
+            "\n\nAfter implementation:\n" +
             "1. Run relevant tests (bun test / pytest / go test)\n" +
             "2. Create a PR with proper branch naming\n" +
             "3. Run /review and address CRITICAL/HIGH findings (max 3 cycles)\n" +
@@ -621,23 +685,26 @@ export default async function guardrail(
         ].join(" "),
       )
     },
-    "experimental.chat.system.transform": async (
-      _item: {},
-      out: { system: string[] },
-    ) => {
+    "experimental.chat.system.transform": async (_item: {}, out: { system: string[] }) => {
       const data = await stash(ctx.state)
       const phase = str(data.workflow_phase)
       if (phase && phase !== "idle" && phase !== "done") {
-        out.system.push("[WORKFLOW] Phase: " + phase + ". Pipeline: implement→test→review→fix→ship. Complete autonomously. Do not stop at PR creation.")
-        out.system.push("When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline.")
+        out.system.push(
+          "[WORKFLOW] Phase: " +
+            phase +
+            ". Pipeline: implement→test→review→fix→ship. Complete autonomously. Do not stop at PR creation.",
+        )
+        out.system.push(
+          "When you discover problems outside the current scope, create follow-up issues: `gh issue create --title '<desc>' --body '<details>' --label 'tech-debt'`. Do NOT fix out-of-scope problems inline.",
+        )
       }
       out.system.push(
         "[DELEGATION] ADR-004 rules: " +
-        "2+ independent tasks → Agent Team (TeamCreate, max 5). " +
-        "1 large autonomous task → Codex CLI (route C). " +
-        "Review → code-reviewer + Codex CLI (route A). " +
-        "Limits: sub-agents 5-7, Bash 3-4, Codex CLI 1, total 7. " +
-        "Include delegation assignments in plans. Do not self-implement everything.",
+          "2+ independent tasks → Agent Team (TeamCreate, max 5). " +
+          "1 large autonomous task → Codex CLI (route C). " +
+          "Review → code-reviewer + Codex CLI (route A). " +
+          "Limits: sub-agents 5-7, Bash 3-4, Codex CLI 1, total 7. " +
+          "Include delegation assignments in plans. Do not self-implement everything.",
       )
     },
   }
