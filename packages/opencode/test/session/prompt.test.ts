@@ -523,6 +523,114 @@ noLLMServer.instance(
   { config: cfg },
 )
 
+noLLMServer.instance(
+  "prompt tool toggles preserve existing permissive session permissions",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const permission = yield* Permission.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Worker",
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "edit", pattern: "*", action: "allow" },
+          { permission: "external_directory", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "rm -rf *", action: "deny" },
+        ],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "write docs/spikes/live-adapter-options.md" }],
+        tools: {
+          team: false,
+          background: false,
+          task: false,
+        },
+      })
+
+      const updated = yield* sessions.get(chat.id)
+      expect(Permission.evaluate("edit", "docs/spikes/live-adapter-options.md", updated.permission ?? []).action).toBe(
+        "allow",
+      )
+      expect(
+        Permission.evaluate("external_directory", "/Users/example/project/file.txt", updated.permission ?? []).action,
+      ).toBe("allow")
+      expect(Permission.evaluate("team", "*", updated.permission ?? []).action).toBe("deny")
+      expect(Permission.evaluate("background", "*", updated.permission ?? []).action).toBe("deny")
+      expect(Permission.evaluate("task", "*", updated.permission ?? []).action).toBe("deny")
+      expect(Permission.evaluate("bash", "rm -rf .opencode", updated.permission ?? []).action).toBe("deny")
+      yield* permission.ask({
+        sessionID: chat.id,
+        permission: "edit",
+        patterns: ["docs/spikes/live-adapter-options.md"],
+        always: ["*"],
+        metadata: {},
+        ruleset: updated.permission ?? [],
+      })
+      yield* permission.ask({
+        sessionID: chat.id,
+        permission: "external_directory",
+        patterns: ["/Users/example/project/file.txt"],
+        always: ["*"],
+        metadata: {},
+        ruleset: updated.permission ?? [],
+      })
+      expect(yield* permission.list()).toEqual([])
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "prompt tool toggles keep broad worker bash permissions non-interactive",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const permission = yield* Permission.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Worker",
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "edit", pattern: "*", action: "allow" },
+          { permission: "external_directory", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "*", action: "allow" },
+        ],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "run autonomous worker commands" }],
+        tools: {
+          team: false,
+          background: false,
+          task: false,
+        },
+      })
+
+      const updated = yield* sessions.get(chat.id)
+      expect(Permission.evaluate("bash", "opencode run /init", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("bash", "gh pr merge 150", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("bash", "rm -rf .opencode", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("team", "*", updated.permission ?? []).action).toBe("deny")
+      yield* permission.ask({
+        sessionID: chat.id,
+        permission: "bash",
+        patterns: ["opencode run /init", "gh pr merge 150", "rm -rf .opencode"],
+        always: ["*"],
+        metadata: {},
+        ruleset: updated.permission ?? [],
+      })
+      expect(yield* permission.list()).toEqual([])
+    }),
+  { config: cfg },
+)
+
 it.instance("static loop returns assistant text through local provider", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

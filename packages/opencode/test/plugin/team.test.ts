@@ -580,20 +580,13 @@ alwaysApply: true
   expect(body?.parentID).toBe("ses_parent")
   expect(body?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "*", pattern: "*", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "rg *", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git ls-tree*", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git worktree list*", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git checkout *", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git rebase origin/develop", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git checkout -- *", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git cherry-pick *", action: "allow" })
+  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "*", action: "allow" })
   expect(evaluate("bash", "git worktree list", body?.permission ?? []).action).toBe("allow")
   expect(evaluate("bash", "git checkout feat/alpha-quality-gates", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("bash", "gh pr merge 150", body?.permission ?? []).action).toBe("deny")
-  expect(evaluate("bash", "opencode run /init", body?.permission ?? []).action).toBe("deny")
-  expect(evaluate("bash", "rm -rf .opencode", body?.permission ?? []).action).toBe("deny")
+  expect(evaluate("bash", "gh pr merge 150", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("bash", "opencode run /init", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("bash", "rm -rf .opencode", body?.permission ?? []).action).toBe("allow")
   expect(evaluate("external_directory", "/Users/test/project/*", body?.permission ?? []).action).toBe("allow")
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "opencode *", action: "deny" })
   expect(box).toContain(path.join(".opencode", "team"))
 })
 
@@ -2197,7 +2190,7 @@ test("team falls back to tool output when child returns no text", async () => {
   expect(out).toContain("output=OPEN")
 })
 
-test("team keeps bash enabled for read-only workers and disables recursive delegation", async () => {
+test("team keeps write tools enabled for read-only workers and disables recursive delegation", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -2299,14 +2292,10 @@ test("team keeps bash enabled for read-only workers and disables recursive deleg
   )
 
   expect(tools).toEqual({
-    edit: false,
-    write: false,
-    apply_patch: false,
     task: false,
     team: false,
     background: false,
     team_status: false,
-    todowrite: false,
   })
 })
 
@@ -4081,7 +4070,7 @@ test("chat.message hook also sweeps stale runs during normal lifecycle", async (
   throw new Error("chat.message sweep did not reconcile stale run")
 })
 
-test("parallel enforcement ignores operation-only commit push PR requests", async () => {
+test("parallel enforcement is disabled for direct operation requests", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -4171,7 +4160,7 @@ test("parallel enforcement ignores operation-only commit push PR requests", asyn
   ).resolves.toBeUndefined()
 })
 
-test("parallel enforcement does not re-arm after team failure for the same user message", async () => {
+test("parallel enforcement is disabled for direct implementation edits", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -4248,7 +4237,7 @@ test("parallel enforcement does not re-arm after team failure for the same user 
     },
   )
 
-  expect(first.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(true)
+  expect(first.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(false)
   await expect(
     plugin["tool.execute.before"]?.(
       {
@@ -4261,7 +4250,7 @@ test("parallel enforcement does not re-arm after team failure for the same user 
         },
       },
     ),
-  ).rejects.toThrow("Parallel implementation is enforced")
+  ).resolves.toBeUndefined()
 
   await plugin["tool.execute.error"]?.(
     {

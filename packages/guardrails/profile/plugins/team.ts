@@ -7,25 +7,12 @@ const z = tool.schema
 
 const gap = 750
 const cap = 5
-const kids = new Set<string>()
-const need = new Map<string, Need>()
 const live = new Map<string, Run>()
 const seen = new WeakMap<object, Seen>()
 const sweeping = new Map<string, Promise<void>>()
 const models = new Map<string, Lane>()
 const sweepWait = 1000
 const defaultIdleTimeout = 10 * 60 * 1000
-
-function partID() {
-  return `prt_${crypto.randomUUID()}`
-}
-
-type Need = {
-  done: boolean
-  reason: string
-  fingerprint: string
-  at: string
-}
 
 type Note = {
   id?: string
@@ -250,113 +237,6 @@ function pick(list: Msg[], completedOnly = false) {
   return done ?? (completedOnly ? undefined : items[0])
 }
 
-function scrub(cmd: string) {
-  return cmd
-    .replace(/(?:\d*>>?|\&>>?|\&>)\s*\/dev\/null\b/g, " ")
-    .replace(/\d*>\s*&\s*\d+\b/g, " ")
-    .replace(/\d*>\s*&-/g, " ")
-}
-
-function redir(cmd: string) {
-  let sq = false
-  let dq = false
-  let bt = false
-  let esc = false
-
-  for (const ch of cmd) {
-    if (esc) {
-      esc = false
-      continue
-    }
-
-    if (ch === "\\") {
-      if (!sq) esc = true
-      continue
-    }
-
-    if (sq) {
-      if (ch === "'") sq = false
-      continue
-    }
-
-    if (dq) {
-      if (ch === '"') dq = false
-      continue
-    }
-
-    if (bt) {
-      if (ch === "`") bt = false
-      continue
-    }
-
-    if (ch === "'") {
-      sq = true
-      continue
-    }
-
-    if (ch === '"') {
-      dq = true
-      continue
-    }
-
-    if (ch === "`") {
-      bt = true
-      continue
-    }
-
-    if (ch === ">") return true
-  }
-
-  return false
-}
-
-function mut(cmd: string) {
-  const data = scrub(cmd)
-  return (
-    [
-      /\brm\s+/i,
-      /\bmv\s+/i,
-      /\bcp\s+/i,
-      /\bchmod\b/i,
-      /\bchown\b/i,
-      /\btouch\b/i,
-      /\btruncate\b/i,
-      /\btee\b/i,
-      /\bsed\s+-i\b/i,
-      /\bperl\s+-pi\b/i,
-      /\bgit\s+(apply|am|rebase|cherry-pick|checkout\s+--|reset\s+--hard)\b/i,
-      /\bgit\s+merge(\s|$)/i,
-    ].some((item) => item.test(data)) || redir(data)
-  )
-}
-
-function big(text: string) {
-  const data = text.trim()
-  if (!data) return false
-  if (operationOnly(data)) return false
-  // Exempt read-only investigation requests that start with investigation verbs
-  // and do NOT contain write-intent keywords
-  const readOnly =
-    /^\s*(investigate|diagnose|explain|analyze|check|status|report|describe|show|list|review|audit|inspect|確認|調査|分析|説明|レビュー)/i.test(
-      data,
-    ) && !/(implement|create|rewrite|patch|refactor|fix|add|edit|write|modify|実装|改修|修正|追加)/i.test(data)
-  if (readOnly) return false
-  const plan = (data.match(/^\s*([-*]|\d+\.)\s+/gm) ?? []).length
-  const impl =
-    /(implement|implementation|build|create|add|fix|refactor|rewrite|patch|parallel|subagent|team|background|worker|修正|実装|追加|改修|並列|サブエージェント|チーム)/i.test(
-      data,
-    )
-  const wide =
-    data.length >= 500 ||
-    plan >= 3 ||
-    /(packages\/|apps\/|services\/|複数|multi[- ]file|cross[- ]cutting|large plan|大きな実装|大規模)/i.test(data)
-  return impl && wide
-}
-
-function fingerprint(text: string) {
-  return text.trim().replace(/\s+/g, " ").slice(0, 500)
-}
-
 function operationOnly(text: string) {
   const data = text.trim()
   if (!data) return false
@@ -399,20 +279,12 @@ ${writeRule}
 ${next}`
 }
 
-function workerTools(push: boolean) {
-  const recursive = {
+function workerTools() {
+  return {
     task: false,
     team: false,
     background: false,
     team_status: false,
-  }
-  if (push) return recursive
-  return {
-    edit: false,
-    write: false,
-    apply_patch: false,
-    todowrite: false,
-    ...recursive,
   }
 }
 
@@ -422,46 +294,6 @@ function permit() {
     { permission: "edit", pattern: "*", action: "allow" as const },
     { permission: "external_directory", pattern: "*", action: "allow" as const },
     { permission: "bash", pattern: "*", action: "allow" as const },
-    { permission: "bash", pattern: "pwd", action: "allow" as const },
-    { permission: "bash", pattern: "ls", action: "allow" as const },
-    { permission: "bash", pattern: "ls *", action: "allow" as const },
-    { permission: "bash", pattern: "find *", action: "allow" as const },
-    { permission: "bash", pattern: "rg *", action: "allow" as const },
-    { permission: "bash", pattern: "cat *", action: "allow" as const },
-    { permission: "bash", pattern: "sed *", action: "allow" as const },
-    { permission: "bash", pattern: "head *", action: "allow" as const },
-    { permission: "bash", pattern: "tail *", action: "allow" as const },
-    { permission: "bash", pattern: "git status*", action: "allow" as const },
-    { permission: "bash", pattern: "git diff*", action: "allow" as const },
-    { permission: "bash", pattern: "git branch*", action: "allow" as const },
-    { permission: "bash", pattern: "git log*", action: "allow" as const },
-    { permission: "bash", pattern: "git rev-parse*", action: "allow" as const },
-    { permission: "bash", pattern: "git ls-tree*", action: "allow" as const },
-    { permission: "bash", pattern: "git show*", action: "allow" as const },
-    { permission: "bash", pattern: "git ls-files*", action: "allow" as const },
-    { permission: "bash", pattern: "git grep *", action: "allow" as const },
-    { permission: "bash", pattern: "git restore *", action: "allow" as const },
-    { permission: "bash", pattern: "git worktree list*", action: "allow" as const },
-    { permission: "bash", pattern: "git checkout *", action: "allow" as const },
-    { permission: "bash", pattern: "git checkout -- *", action: "allow" as const },
-    { permission: "bash", pattern: "git switch *", action: "allow" as const },
-    { permission: "bash", pattern: "git rebase origin/develop", action: "allow" as const },
-    { permission: "bash", pattern: "git rebase develop", action: "allow" as const },
-    { permission: "bash", pattern: "git rebase origin/main", action: "allow" as const },
-    { permission: "bash", pattern: "git rebase main", action: "allow" as const },
-    { permission: "bash", pattern: "git rebase --continue", action: "allow" as const },
-    { permission: "bash", pattern: "git rebase --skip", action: "allow" as const },
-    { permission: "bash", pattern: "git cherry-pick *", action: "allow" as const },
-    { permission: "bash", pattern: "rm -rf *", action: "deny" as const },
-    { permission: "bash", pattern: "sudo *", action: "deny" as const },
-    { permission: "bash", pattern: "git reset --hard*", action: "deny" as const },
-    { permission: "bash", pattern: "git merge *", action: "deny" as const },
-    { permission: "bash", pattern: "gh pr merge *", action: "deny" as const },
-    { permission: "bash", pattern: "curl * | sh*", action: "deny" as const },
-    { permission: "bash", pattern: "curl * | bash*", action: "deny" as const },
-    { permission: "bash", pattern: "opencode *", action: "deny" as const },
-    { permission: "bash", pattern: "claude *", action: "deny" as const },
-    { permission: "bash", pattern: "codex *", action: "deny" as const },
   ]
 }
 
@@ -1392,7 +1224,6 @@ export default async function team(input: { client: Client; worktree: string; di
       })
       if (process.env.DEBUG_TEAM) console.log("job.created", run.id, item.id, next?.data?.id)
       child = next.data.id
-      kids.add(child)
 
       todo(run, item.id, {
         session: child,
@@ -1411,7 +1242,7 @@ export default async function team(input: { client: Client; worktree: string; di
             providerID: item.provider,
             modelID: item.model,
           },
-          tools: workerTools(push),
+          tools: workerTools(),
           variant: item.variant || undefined,
           parts: [
             {
@@ -1620,12 +1451,6 @@ export default async function team(input: { client: Client; worktree: string; di
       run.state = run.tasks.some((item) => item.state === "error") ? "error" : "done"
       run.updated_at = now()
       await save(runRoot, run)
-      need.set(ctx.sessionID, {
-        done: true,
-        reason: "team",
-        fingerprint: need.get(ctx.sessionID)?.fingerprint ?? "",
-        at: now(),
-      })
       return note(run)
     },
   })
@@ -1796,38 +1621,6 @@ export default async function team(input: { client: Client; worktree: string; di
       void sweep(input.client, inputRoot)
       recordModel(item.sessionID, item.model, item.variant)
       if (out.message.role !== "user") return
-      if (kids.has(item.sessionID)) return
-      if (item.agent && /(review|technical-writer|doc-updater)/i.test(item.agent)) return
-      const text = body(out.parts)
-      if (text.includes("under the guardrail profile.")) return
-      if (!big(text)) return
-      const id = fingerprint(text)
-      const current = need.get(item.sessionID)
-      if (current?.done && current.fingerprint === id) return
-      const headCheck = await git(input.worktree, ["rev-parse", "--verify", "HEAD"])
-      if (headCheck.code !== 0) {
-        out.parts.push({
-          id: partID(),
-          sessionID: out.message.sessionID,
-          messageID: out.message.id,
-          type: "text",
-          text: "Bootstrap mode: this repository has no commits yet. Parallel implementation policy is suspended until the first commit is created. Proceed with direct mutations to bootstrap the repository.",
-        })
-        return
-      }
-      need.set(item.sessionID, {
-        done: false,
-        reason: clip(text, 240),
-        fingerprint: id,
-        at: now(),
-      })
-      out.parts.push({
-        id: partID(),
-        sessionID: out.message.sessionID,
-        messageID: out.message.id,
-        type: "text",
-        text: "Parallel implementation policy is active for this request. Before any edit, write, apply_patch, or mutating bash call, you MUST call the `team` tool and fan out at least one worker task. Mark tasks that should edit code with `write: true`; those tasks will be isolated in git worktrees and merged back when possible. Use `background` only for side work that should keep running after this turn.",
-      })
     },
     "chat.params": async (item: {
       sessionID: string
@@ -1846,14 +1639,8 @@ export default async function team(input: { client: Client; worktree: string; di
       },
     ) => {
       void sweep(input.client, inputRoot)
-      const gate = need.get(item.sessionID)
-      if (!gate || gate.done) return
-      if (item.tool === "team") return
-      if (item.tool !== "edit" && item.tool !== "write" && item.tool !== "apply_patch" && item.tool !== "bash") return
-      if (item.tool === "bash" && !mut(String(out.args.command ?? ""))) return
-      throw new Error(
-        `Parallel implementation is enforced for this turn. Call the team tool before mutating the worktree. Reason: ${gate.reason}`,
-      )
+      void item
+      void out
     },
     "tool.execute.after": async (
       item: {
@@ -1867,14 +1654,8 @@ export default async function team(input: { client: Client; worktree: string; di
       },
     ) => {
       void sweep(input.client, inputRoot)
-      if (item.tool !== "team" && item.tool !== "background") return
-      const gate = need.get(item.sessionID)
-      need.set(item.sessionID, {
-        done: true,
-        reason: item.tool,
-        fingerprint: gate?.fingerprint ?? "",
-        at: now(),
-      })
+      void item
+      void _out
     },
     "tool.execute.error": async (
       item: {
@@ -1886,13 +1667,8 @@ export default async function team(input: { client: Client; worktree: string; di
       },
     ) => {
       void sweep(input.client, inputRoot)
-      if (item.tool !== "team" && item.tool !== "background") return
-      need.set(item.sessionID, {
-        done: true,
-        reason: `${item.tool}-failed`,
-        fingerprint: need.get(item.sessionID)?.fingerprint ?? "",
-        at: now(),
-      })
+      void item
+      void _out
     },
     "experimental.chat.system.transform": async (
       _item: {},
@@ -1902,7 +1678,7 @@ export default async function team(input: { client: Client; worktree: string; di
     ) => {
       void sweep(input.client, inputRoot)
       out.system.unshift(
-        "When the user asks for a broad or multi-file implementation, decompose with the team tool before mutating files. Background work belongs in background; large implementation turns are hook-enforced.",
+        "The team and background tools are available for optional fan-out when they materially help, but direct implementation is allowed. Worker sessions are already configured for non-interactive execution; avoid recursive team/background/task calls inside workers.",
       )
     },
   }
