@@ -2085,6 +2085,160 @@ test("background failure with notify false is persisted without sending parent p
   expect(status).toContain("Blocked on permission: bash (background deployment) :: deploy production")
 })
 
+test("background workers use permissive child permissions and keep write tools enabled", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let createBody:
+    | {
+        parentID: string
+        title: string
+        permission?: {
+          permission: string
+          pattern: string
+          action: "allow" | "ask" | "deny"
+        }[]
+      }
+    | undefined
+  let promptBody:
+    | {
+        tools?: Record<string, boolean>
+        parts: { type: "text"; text: string }[]
+      }
+    | undefined
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return {
+            data: {
+              permission: [
+                { permission: "edit", pattern: "*", action: "deny" as const },
+                { permission: "write", pattern: "*", action: "deny" as const },
+                { permission: "apply_patch", pattern: "*", action: "deny" as const },
+                { permission: "todowrite", pattern: "*", action: "deny" as const },
+              ],
+            },
+          }
+        },
+        async create(input) {
+          createBody = input.body
+          return {
+            data: {
+              id: "ses_child_background_permissions",
+            },
+          }
+        },
+        async promptAsync(input) {
+          promptBody = input.body
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child_background_permissions: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.background.execute(
+    {
+      description: "background-permissions",
+      prompt: "write docs/background.md",
+      write: true,
+      worktree: false,
+      notify: false,
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => undefined,
+      metadata() {},
+    },
+  )
+
+  await Background.wait(tmp.path)
+
+  expect(out).toContain("run_id:")
+  expect(createBody?.parentID).toBe("ses_parent")
+  expect(createBody?.title).toBe("background-permissions")
+  expect(createBody?.permission).toContainEqual({ permission: "*", pattern: "*", action: "allow" })
+  expect(createBody?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
+  expect(createBody?.permission).toContainEqual({ permission: "external_directory", pattern: "*", action: "allow" })
+  expect(createBody?.permission).toContainEqual({ permission: "bash", pattern: "*", action: "allow" })
+  expect(createBody?.permission?.filter((item) => item.action === "deny")).toEqual([])
+  expect(evaluate("bash", "git commit -am background", createBody?.permission ?? []).action).toBe("allow")
+  expect(evaluate("external_directory", "../outside.txt", createBody?.permission ?? []).action).toBe("allow")
+  expect(evaluate("edit", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
+  expect(evaluate("write", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
+  expect(evaluate("apply_patch", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
+  expect(evaluate("todowrite", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
+  expect(promptBody?.tools).toEqual({
+    task: false,
+    team: false,
+    background: false,
+    team_status: false,
+    question: false,
+    plan_exit: false,
+  })
+  expect(promptBody?.tools?.edit).toBeUndefined()
+  expect(promptBody?.tools?.write).toBeUndefined()
+  expect(promptBody?.tools?.apply_patch).toBeUndefined()
+  expect(promptBody?.tools?.todowrite).toBeUndefined()
+  expect(promptBody?.parts[0]?.text).toContain("This is a write task.")
+})
+
 test("team falls back to tool output when child returns no text", async () => {
   await using tmp = await tmpdir({
     git: true,
@@ -2296,7 +2450,13 @@ test("team keeps write tools enabled for read-only workers and disables recursiv
     team: false,
     background: false,
     team_status: false,
+    question: false,
+    plan_exit: false,
   })
+  expect(tools?.edit).toBeUndefined()
+  expect(tools?.write).toBeUndefined()
+  expect(tools?.apply_patch).toBeUndefined()
+  expect(tools?.todowrite).toBeUndefined()
 })
 
 test("team disables recursive orchestration tools for write workers", async () => {
@@ -2405,7 +2565,13 @@ test("team disables recursive orchestration tools for write workers", async () =
     team: false,
     background: false,
     team_status: false,
+    question: false,
+    plan_exit: false,
   })
+  expect(tools?.edit).toBeUndefined()
+  expect(tools?.write).toBeUndefined()
+  expect(tools?.apply_patch).toBeUndefined()
+  expect(tools?.todowrite).toBeUndefined()
 })
 
 test("team rewrites nested opencode init prompts to direct bootstrap work", async () => {
@@ -4145,19 +4311,24 @@ test("parallel enforcement is disabled for direct operation requests", async () 
   )
 
   expect(parts.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(false)
-  await expect(
-    plugin["tool.execute.before"]?.(
-      {
-        tool: "write",
-        sessionID: "ses_operation_only",
-      },
-      {
-        args: {
-          filePath: "completion.md",
+  for (const item of [
+    { tool: "edit", args: { filePath: "completion.md", oldString: "before", newString: "after" } },
+    { tool: "write", args: { filePath: "completion.md" } },
+    { tool: "apply_patch", args: { patch: "*** Begin Patch\n*** End Patch\n" } },
+    { tool: "bash", args: { command: "git commit -am complete" } },
+  ]) {
+    await expect(
+      plugin["tool.execute.before"]?.(
+        {
+          tool: item.tool,
+          sessionID: "ses_operation_only",
         },
-      },
-    ),
-  ).resolves.toBeUndefined()
+        {
+          args: item.args,
+        },
+      ),
+    ).resolves.toBeUndefined()
+  }
 })
 
 test("parallel enforcement is disabled for direct implementation edits", async () => {
@@ -4238,19 +4409,24 @@ test("parallel enforcement is disabled for direct implementation edits", async (
   )
 
   expect(first.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(false)
-  await expect(
-    plugin["tool.execute.before"]?.(
-      {
-        tool: "write",
-        sessionID: "ses_rearm",
-      },
-      {
-        args: {
-          filePath: "blocked.md",
+  for (const item of [
+    { tool: "edit", args: { filePath: "blocked.md", oldString: "before", newString: "after" } },
+    { tool: "write", args: { filePath: "blocked.md" } },
+    { tool: "apply_patch", args: { patch: "*** Begin Patch\n*** End Patch\n" } },
+    { tool: "bash", args: { command: "git commit -am blocked" } },
+  ]) {
+    await expect(
+      plugin["tool.execute.before"]?.(
+        {
+          tool: item.tool,
+          sessionID: "ses_rearm",
         },
-      },
-    ),
-  ).resolves.toBeUndefined()
+        {
+          args: item.args,
+        },
+      ),
+    ).resolves.toBeUndefined()
+  }
 
   await plugin["tool.execute.error"]?.(
     {
@@ -4279,19 +4455,24 @@ test("parallel enforcement is disabled for direct implementation edits", async (
   )
 
   expect(second.some((part) => part.text?.includes("Parallel implementation policy is active"))).toBe(false)
-  await expect(
-    plugin["tool.execute.before"]?.(
-      {
-        tool: "write",
-        sessionID: "ses_rearm",
-      },
-      {
-        args: {
-          filePath: "allowed.md",
+  for (const item of [
+    { tool: "edit", args: { filePath: "allowed.md", oldString: "before", newString: "after" } },
+    { tool: "write", args: { filePath: "allowed.md" } },
+    { tool: "apply_patch", args: { patch: "*** Begin Patch\n*** End Patch\n" } },
+    { tool: "bash", args: { command: "git commit -am allowed" } },
+  ]) {
+    await expect(
+      plugin["tool.execute.before"]?.(
+        {
+          tool: item.tool,
+          sessionID: "ses_rearm",
         },
-      },
-    ),
-  ).resolves.toBeUndefined()
+        {
+          args: item.args,
+        },
+      ),
+    ).resolves.toBeUndefined()
+  }
 })
 
 test("team merge excludes runtime artifacts and leaves unrelated parent edits untouched", async () => {

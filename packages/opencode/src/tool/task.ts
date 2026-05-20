@@ -202,6 +202,9 @@ export const TaskTool = Tool.define(
           },
           agent: next.name,
           tools: {
+            question: false,
+            plan_enter: false,
+            plan_exit: false,
             ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
             ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
             ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),

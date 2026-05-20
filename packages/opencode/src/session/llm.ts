@@ -257,10 +257,9 @@ const live: Layer.Layer<
           }
         }
 
-        const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
+        const approvalRuleset = workflowApprovalRuleset(input.agent.permission, input.permission)
         workflowModel.sessionPreapprovedTools = Object.keys(sortedTools).filter((name) => {
-          const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
-          return !match || match.action !== "ask"
+          return Permission.evaluate("workflow_tool_approval", name, approvalRuleset).action === "allow"
         })
 
         const bridge = yield* EffectBridge.make()
@@ -297,7 +296,7 @@ const live: Layer.Layer<
                 patterns: uniquePatterns,
                 metadata: { tools: approvalTools },
                 always: uniquePatterns,
-                ruleset: [],
+                ruleset: approvalRuleset,
               }),
             )
             for (const name of uniqueNames) approvedToolsForSession.add(name)
@@ -515,6 +514,19 @@ function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" 
     Permission.merge(input.agent.permission, input.permission ?? []),
   )
   return Record.filter(input.tools, (_, k) => input.user.tools?.[k] !== false && !disabled.has(k))
+}
+
+export function workflowApprovalRuleset(
+  agentPermission: Permission.Ruleset | undefined,
+  sessionPermission: Permission.Ruleset | undefined,
+) {
+  return Permission.merge(
+    [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
+    (agentPermission ?? []).filter(
+      (rule) => rule.permission !== "*" && Wildcard.match("workflow_tool_approval", rule.permission),
+    ),
+    sessionPermission ?? [],
+  )
 }
 
 // Check if messages contain any tool-call content

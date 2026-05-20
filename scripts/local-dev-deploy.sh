@@ -8,6 +8,11 @@ GUARDRAILS_PROFILE="$ROOT/packages/guardrails/profile"
 ALLOWED_WRITE_ROOT="$HOME/.local/bin"
 ENTRYPOINT="${OPENCODE_LOCAL_ENTRYPOINT:-$ALLOWED_WRITE_ROOT/opencode}"
 LIVE_WRAPPER="${OPENCODE_LOCAL_WRAPPER:-$ALLOWED_WRITE_ROOT/opencode-live-guardrails-wrapper}"
+BUN_BIN="${BUN_BIN:-$(command -v bun 2>/dev/null || true)}"
+if [[ -z "$BUN_BIN" && -x "$HOME/.bun/bin/bun" ]]; then
+  BUN_BIN="$HOME/.bun/bin/bun"
+fi
+BUN_BIN="${BUN_BIN:-bun}"
 
 # HIGH fix (review #205, codex): enforce write boundary. Both ENTRYPOINT and
 # LIVE_WRAPPER must resolve under $HOME/.local/bin so user-supplied env vars
@@ -97,6 +102,45 @@ mark() {
   fi
 }
 
+guardrails_profile_has_team_plugin() {
+  "$BUN_BIN" --eval '
+    const config = await Bun.file(process.argv[1]).json()
+    if (!Array.isArray(config.plugin) || !config.plugin.includes("./plugins/team.ts")) {
+      console.error("missing ./plugins/team.ts in guardrails profile plugin list")
+      process.exit(1)
+    }
+  ' "$GUARDRAILS_PROFILE/opencode.json" >/dev/null
+}
+
+guardrails_team_plugin_loads() {
+  "$BUN_BIN" --conditions=browser --eval '
+    const { mkdtemp, rm } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const { join, resolve } = await import("node:path")
+    const { pathToFileURL } = await import("node:url")
+    const config = await Bun.file(process.argv[1]).json()
+    const entry = Array.isArray(config.plugin) ? config.plugin.find((item) => item === "./plugins/team.ts") : undefined
+    if (!entry) {
+      console.error("missing ./plugins/team.ts in guardrails profile plugin list")
+      process.exit(1)
+    }
+    const dir = await mkdtemp(join(tmpdir(), "opencode-local-check-"))
+    try {
+      const mod = await import(pathToFileURL(resolve(process.argv[2], entry)).href)
+      const plugin = await mod.default({ client: {}, worktree: dir, directory: dir })
+      const missing = ["team", "background", "team_status"].filter(
+        (name) => typeof plugin?.tool?.[name]?.execute !== "function",
+      )
+      if (missing.length) {
+        console.error(`missing guardrails team tools: ${missing.join(", ")}`)
+        process.exit(1)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  ' "$GUARDRAILS_PROFILE/opencode.json" "$GUARDRAILS_PROFILE" >/dev/null
+}
+
 repair_links() {
   mkdir -p "$ALLOWED_WRITE_ROOT" "$PACKAGE/bin"
 
@@ -128,7 +172,7 @@ EOF
 }
 
 if [[ "$mode" == "deploy" ]]; then
-  (cd "$PACKAGE" && bun run build)
+  (cd "$PACKAGE" && "$BUN_BIN" run build)
   repair_links
 elif [[ "$mode" == "fix" ]]; then
   repair_links
@@ -138,6 +182,8 @@ mark "$([[ -x "$GUARDRAILS_BIN" ]] && echo ok || echo fail)" "guardrails wrapper
 mark "$(grep -Fq "OPENCODE_CONFIG_DIR" "$GUARDRAILS_BIN" 2>/dev/null && echo ok || echo fail)" "guardrails wrapper sets OPENCODE_CONFIG_DIR"
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/auto.md" ]] && echo ok || echo fail)" "guardrails profile includes /auto"
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/plan.md" ]] && echo ok || echo fail)" "guardrails profile includes /plan"
+mark "$(guardrails_profile_has_team_plugin && echo ok || echo fail)" "guardrails profile enables team plugin"
+mark "$(guardrails_team_plugin_loads && echo ok || echo fail)" "guardrails team plugin loads team/background/team_status"
 
 entry_target="$(readlink "$ENTRYPOINT" 2>/dev/null || true)"
 mark "$([[ "$entry_target" == "$LIVE_WRAPPER" ]] && echo ok || echo fail)" "entrypoint is fixed: $ENTRYPOINT -> $LIVE_WRAPPER"

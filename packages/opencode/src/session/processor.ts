@@ -74,6 +74,7 @@ type ToolCall = {
 interface ProcessorContext extends Input {
   toolcalls: Record<string, ToolCall>
   shouldBreak: boolean
+  permission?: Permission.Ruleset
   snapshot: string | undefined
   blocked: boolean
   needsCompaction: boolean
@@ -455,7 +456,7 @@ export const layer = Layer.effect(
               sessionID: ctx.assistantMessage.sessionID,
               metadata: { tool: value.name, input },
               always: [value.name],
-              ruleset: agent.permission,
+              ruleset: Permission.merge(agent.permission, ctx.permission ?? []),
             })
             return
           }
@@ -792,6 +793,7 @@ export const layer = Layer.effect(
         slog.info("process")
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        ctx.permission = streamInput.permission
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
