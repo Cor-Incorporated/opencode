@@ -285,6 +285,8 @@ function workerTools() {
     team: false,
     background: false,
     team_status: false,
+    question: false,
+    plan_exit: false,
   }
 }
 

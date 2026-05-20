@@ -101,6 +101,30 @@ it.instance("[#26514] explore subagent launched from plan mode also stays read-o
   }),
 )
 
+it.instance("explore subagent launched from build receives non-interactive worker permissions", () =>
+  Effect.gen(function* () {
+    const buildAgent = yield* Agent.Service.use((svc) => svc.get("build"))
+    const explore = yield* Agent.Service.use((svc) => svc.get("explore"))
+    expect(buildAgent).toBeDefined()
+    expect(explore).toBeDefined()
+
+    const effective = Permission.merge(
+      explore!.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: [],
+        parentAgent: buildAgent,
+        subagent: explore!,
+      }),
+    )
+
+    expect(Permission.evaluate("edit", "/x.ts", effective).action).toBe("allow")
+    expect(Permission.evaluate("external_directory", "/tmp/outside.txt", effective).action).toBe("allow")
+    expect(Permission.evaluate("bash", "git status", effective).action).toBe("allow")
+    expect(Permission.evaluate("workflow_tool_approval", "bash: git status", effective).action).toBe("allow")
+    expect(Permission.evaluate("doom_loop", "bash", effective).action).toBe("allow")
+  }),
+)
+
 it.instance(
   "[#26514] custom user subagent launched from plan mode bypasses Plan Mode read-only",
   // The most damaging case: a user-defined subagent with default
@@ -207,6 +231,32 @@ it.effect("subagent inherits parent session deny rules as hard runtime ceilings"
       }),
     )
 
+    expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("subagent drops inherited ask rules that would strand background workers", () =>
+  Effect.sync(() => {
+    const executor = testAgent({
+      name: "executor",
+      mode: "subagent",
+      permission: {
+        bash: "allow",
+      },
+    })
+    const effective = Permission.merge(
+      executor.permission,
+      deriveSubagentSessionPermission({
+        parentSessionPermission: Permission.fromConfig({
+          external_directory: "ask",
+          bash: "deny",
+        }),
+        parentAgent: undefined,
+        subagent: executor,
+      }),
+    )
+
+    expect(Permission.evaluate("external_directory", "/tmp/outside.txt", effective).action).toBe("allow")
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
   }),
 )

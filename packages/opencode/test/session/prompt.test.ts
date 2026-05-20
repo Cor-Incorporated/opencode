@@ -51,7 +51,7 @@ import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
-import { reply, TestLLMServer } from "../lib/llm-server"
+import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -439,6 +439,52 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   return { prompt, run, sessions, chat }
 })
 
+const expectNoPermissionPrompt = Effect.fn("test.expectNoPermissionPrompt")(function* (input: {
+  sessionID: SessionID
+  permission: string
+  patterns: string[]
+  ruleset: Permission.Ruleset
+}) {
+  const permission = yield* Permission.Service
+  yield* awaitWithTimeout(
+    permission.ask({
+      sessionID: input.sessionID,
+      permission: input.permission,
+      patterns: input.patterns,
+      always: ["*"],
+      metadata: {},
+      ruleset: input.ruleset,
+    }),
+    `${input.permission} permission unexpectedly prompted`,
+  )
+  expect(yield* permission.list()).toEqual([])
+})
+
+const expectPermissionDenied = Effect.fn("test.expectPermissionDenied")(function* (input: {
+  sessionID: SessionID
+  permission: string
+  patterns: string[]
+  ruleset: Permission.Ruleset
+}) {
+  const permission = yield* Permission.Service
+  const exit = yield* awaitWithTimeout(
+    permission
+      .ask({
+        sessionID: input.sessionID,
+        permission: input.permission,
+        patterns: input.patterns,
+        always: ["*"],
+        metadata: {},
+        ruleset: input.ruleset,
+      })
+      .pipe(Effect.exit),
+    `${input.permission} permission unexpectedly prompted`,
+  )
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.DeniedError)
+  expect(yield* permission.list()).toEqual([])
+})
+
 // Loop semantics
 
 noLLMServer.instance(
@@ -528,7 +574,6 @@ noLLMServer.instance(
   () =>
     Effect.gen(function* () {
       const prompt = yield* SessionPrompt.Service
-      const permission = yield* Permission.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({
         title: "Worker",
@@ -563,23 +608,18 @@ noLLMServer.instance(
       expect(Permission.evaluate("background", "*", updated.permission ?? []).action).toBe("deny")
       expect(Permission.evaluate("task", "*", updated.permission ?? []).action).toBe("deny")
       expect(Permission.evaluate("bash", "rm -rf .opencode", updated.permission ?? []).action).toBe("deny")
-      yield* permission.ask({
+      yield* expectNoPermissionPrompt({
         sessionID: chat.id,
         permission: "edit",
         patterns: ["docs/spikes/live-adapter-options.md"],
-        always: ["*"],
-        metadata: {},
         ruleset: updated.permission ?? [],
       })
-      yield* permission.ask({
+      yield* expectNoPermissionPrompt({
         sessionID: chat.id,
         permission: "external_directory",
         patterns: ["/Users/example/project/file.txt"],
-        always: ["*"],
-        metadata: {},
         ruleset: updated.permission ?? [],
       })
-      expect(yield* permission.list()).toEqual([])
     }),
   { config: cfg },
 )
@@ -589,7 +629,6 @@ noLLMServer.instance(
   () =>
     Effect.gen(function* () {
       const prompt = yield* SessionPrompt.Service
-      const permission = yield* Permission.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({
         title: "Worker",
@@ -618,17 +657,141 @@ noLLMServer.instance(
       expect(Permission.evaluate("bash", "gh pr merge 150", updated.permission ?? []).action).toBe("allow")
       expect(Permission.evaluate("bash", "rm -rf .opencode", updated.permission ?? []).action).toBe("allow")
       expect(Permission.evaluate("team", "*", updated.permission ?? []).action).toBe("deny")
-      yield* permission.ask({
+      yield* expectNoPermissionPrompt({
         sessionID: chat.id,
         permission: "bash",
         patterns: ["opencode run /init", "gh pr merge 150", "rm -rf .opencode"],
-        always: ["*"],
-        metadata: {},
         ruleset: updated.permission ?? [],
       })
-      expect(yield* permission.list()).toEqual([])
     }),
   { config: cfg },
+)
+
+noLLMServer.instance(
+  "prompt tool toggles keep recursive worker tool denies effective",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Worker",
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "edit", pattern: "*", action: "allow" },
+          { permission: "external_directory", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "gh pr merge *", action: "deny" },
+        ],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "run without recursively spawning workers" }],
+        tools: {
+          team: false,
+          background: false,
+          task: false,
+        },
+      })
+
+      const updated = yield* sessions.get(chat.id)
+      const ruleset = updated.permission ?? []
+      expect(Permission.evaluate("bash", "bun test", ruleset).action).toBe("allow")
+      expect(Permission.evaluate("edit", "packages/opencode/test/session/prompt.test.ts", ruleset).action).toBe(
+        "allow",
+      )
+      expect(Permission.evaluate("external_directory", "/tmp/opencode-worker/file.txt", ruleset).action).toBe("allow")
+      expect(Permission.evaluate("bash", "gh pr merge 150", ruleset).action).toBe("deny")
+      expect(Permission.evaluate("team", "*", ruleset).action).toBe("deny")
+      expect(Permission.evaluate("background", "*", ruleset).action).toBe("deny")
+      expect(Permission.evaluate("task", "*", ruleset).action).toBe("deny")
+
+      yield* expectNoPermissionPrompt({
+        sessionID: chat.id,
+        permission: "bash",
+        patterns: ["bun test"],
+        ruleset,
+      })
+      yield* expectNoPermissionPrompt({
+        sessionID: chat.id,
+        permission: "edit",
+        patterns: ["packages/opencode/test/session/prompt.test.ts"],
+        ruleset,
+      })
+      yield* expectNoPermissionPrompt({
+        sessionID: chat.id,
+        permission: "external_directory",
+        patterns: ["/tmp/opencode-worker/file.txt"],
+        ruleset,
+      })
+      yield* expectPermissionDenied({
+        sessionID: chat.id,
+        permission: "team",
+        patterns: ["*"],
+        ruleset,
+      })
+      yield* expectPermissionDenied({
+        sessionID: chat.id,
+        permission: "background",
+        patterns: ["*"],
+        ruleset,
+      })
+      yield* expectPermissionDenied({
+        sessionID: chat.id,
+        permission: "task",
+        patterns: ["*"],
+        ruleset,
+      })
+    }),
+  { config: cfg },
+)
+
+it.instance("prompt tool toggles preserve external directory permission for actual read tool calls", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const permission = yield* Permission.Service
+    const sessions = yield* Session.Service
+    const external = path.join(path.dirname(dir), "toggle-external.txt")
+    const chat = yield* sessions.create({
+      title: "Worker",
+      permission: [
+        { permission: "*", pattern: "*", action: "allow" },
+        { permission: "external_directory", pattern: "*", action: "allow" },
+      ],
+    })
+    yield* writeText(external, "external toggle")
+
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "read an external file" }],
+      tools: {
+        team: false,
+        background: false,
+        task: false,
+      },
+    })
+    yield* llm.tool("read", { filePath: external })
+    yield* llm.text("done")
+
+    const result = yield* awaitWithTimeout(
+      prompt.loop({ sessionID: chat.id }),
+      "external_directory permission ask blocked actual read tool call",
+    )
+
+    expect(result.info.role).toBe("assistant")
+    expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+    const tool = (yield* MessageV2.filterCompactedEffect(chat.id))
+      .flatMap((message) => message.parts)
+      .find((part): part is MessageV2.ToolPart => part.type === "tool" && part.tool === "read")
+    expect(tool?.state.status).toBe("completed")
+    if (tool?.state.status === "completed") expect(tool.state.output).toContain("external toggle")
+    expect(yield* permission.list()).toEqual([])
+  }),
 )
 
 it.instance("static loop returns assistant text through local provider", () =>
@@ -724,6 +887,71 @@ it.instance("loop continues when finish is tool-calls", () =>
       expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
       expect(result.info.finish).toBe("stop")
     }
+  }),
+)
+
+it.instance("session allow-all prevents doom_loop prompts for repeated tool calls", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const permission = yield* Permission.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Doom loop permission",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const file = path.join(dir, "loop.txt")
+    const input = { filePath: file }
+    yield* writeText(file, "repeat")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "read the same file repeatedly" }],
+    })
+    yield* llm.push(
+      raw({
+        chunks: [
+          { choices: [{ delta: { role: "assistant" } }] },
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [0, 1, 2].map((index) => ({
+                    index,
+                    id: `call_${index + 1}`,
+                    type: "function",
+                    function: { name: "read", arguments: "" },
+                  })),
+                },
+              },
+            ],
+          },
+          ...[0, 1, 2].map((index) => ({
+            choices: [{ delta: { tool_calls: [{ index, function: { arguments: JSON.stringify(input) } }] } }],
+          })),
+          { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+        ],
+      }),
+    )
+    yield* llm.text("done")
+
+    const result = yield* awaitWithTimeout(
+      prompt.loop({ sessionID: session.id }),
+      "doom_loop permission ask blocked repeated tool calls",
+    )
+
+    expect(result.info.role).toBe("assistant")
+    expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+    const assistant = (yield* MessageV2.filterCompactedEffect(session.id)).find(
+      (message) =>
+        message.info.role === "assistant" &&
+        message.parts.filter((part) => part.type === "tool" && part.tool === "read").length === 3,
+    )
+    expect(assistant).toBeDefined()
+    expect(yield* llm.calls).toBe(2)
+    expect(yield* permission.list()).toEqual([])
   }),
 )
 

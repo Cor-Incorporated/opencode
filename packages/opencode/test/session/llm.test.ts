@@ -9,6 +9,8 @@ import { InstanceRef } from "../../src/effect/instance-ref"
 import { LLM } from "../../src/session/llm"
 import type { InstanceContext } from "../../src/project/instance-context"
 import { LLMClient, RequestExecutor } from "@opencode-ai/llm/route"
+import type { LanguageModelV3CallOptions, LanguageModelV3StreamPart, LanguageModelV3StreamResult } from "@ai-sdk/provider"
+import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
@@ -704,6 +706,182 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
   })
 }
 
+type WorkflowApprovalResult = Awaited<ReturnType<NonNullable<GitLabWorkflowLanguageModel["approvalHandler"]>>>
+type WorkflowApprovalTestResult = WorkflowApprovalResult | "pending"
+
+class TestGitLabWorkflowLanguageModel extends GitLabWorkflowLanguageModel {
+  approvalResult: WorkflowApprovalTestResult | undefined
+
+  constructor(
+    workDir: string,
+    private readonly approvalTimeoutMs?: number,
+  ) {
+    super(
+      "duo-workflow",
+      {
+        provider: "gitlab.workflow",
+        instanceUrl: "https://gitlab.example",
+        getHeaders: () => ({}),
+      },
+      { workingDirectory: workDir },
+    )
+  }
+
+  override async doStream(_options: LanguageModelV3CallOptions): Promise<LanguageModelV3StreamResult> {
+    const handler = this.approvalHandler
+    if (!handler) throw new Error("approval handler not configured")
+    const approval = handler([{ name: "bash", args: JSON.stringify({ title: "bun test" }) }])
+    this.approvalResult =
+      this.approvalTimeoutMs === undefined
+        ? await approval
+        : await Promise.race<WorkflowApprovalTestResult>([
+            approval,
+            new Promise((resolve) => setTimeout(() => resolve("pending"), this.approvalTimeoutMs)),
+          ])
+    return {
+      stream: new ReadableStream<LanguageModelV3StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] })
+          controller.enqueue({
+            type: "finish",
+            finishReason: { unified: "stop", raw: "stop" },
+            usage: {
+              inputTokens: { total: 0, noCache: 0, cacheRead: undefined, cacheWrite: undefined },
+              outputTokens: { total: 0, text: 0, reasoning: undefined },
+            },
+          })
+          controller.close()
+        },
+      }),
+    }
+  }
+}
+
+async function runWorkflowApproval(input: {
+  agentPermission: Permission.Ruleset
+  sessionPermission?: Permission.Ruleset
+  approvalTimeoutMs?: number
+}) {
+  await using tmp = await tmpdir({ git: true })
+  const result = {} as {
+    approvalResult: WorkflowApprovalTestResult | undefined
+    preapprovedTools: string[]
+  }
+
+  await withTestInstance({
+    directory: tmp.path,
+    fn: async (ctx) => {
+      const workflowModel = new TestGitLabWorkflowLanguageModel(tmp.path, input.approvalTimeoutMs)
+      const model = workflowModelTestModel()
+      const layer = workflowApprovalTestLayer(workflowModel, model)
+      const sessionID = SessionID.make("session-test-workflow-approval")
+      const agent = {
+        name: "test",
+        mode: "primary",
+        options: {},
+        permission: input.agentPermission,
+      } satisfies Agent.Info
+      const user = {
+        id: MessageID.make("msg_user-workflow-approval"),
+        sessionID,
+        role: "user",
+        time: { created: Date.now() },
+        agent: agent.name,
+        model: { providerID: ProviderID.gitlab, modelID: model.id },
+      } satisfies MessageV2.User
+
+      await drainWith(
+        layer,
+        {
+          user,
+          sessionID,
+          model,
+          agent,
+          permission: input.sessionPermission,
+          system: ["You are a helpful assistant."],
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {
+            bash: tool({
+              description: "Run a command",
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "" }),
+            }),
+          },
+        },
+        ctx,
+      )
+
+      result.approvalResult = workflowModel.approvalResult
+      result.preapprovedTools = [...workflowModel.sessionPreapprovedTools]
+    },
+  })
+
+  return result
+}
+
+function workflowModelTestModel() {
+  return {
+    id: ModelID.make("duo-workflow-test"),
+    providerID: ProviderID.gitlab,
+    api: { id: "duo-workflow-test", url: "https://gitlab.example", npm: "gitlab-ai-provider" },
+    name: "GitLab Workflow Test",
+    capabilities: {
+      temperature: true,
+      reasoning: false,
+      attachment: false,
+      toolcall: true,
+      input: { text: true, image: false, audio: false, video: false, pdf: false },
+      output: { text: true, image: false, audio: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    limit: { context: 100_000, output: 8_192 },
+    status: "active",
+    options: {},
+    headers: {},
+    release_date: "2026-01-01",
+  } satisfies Provider.Model
+}
+
+function workflowApprovalTestLayer(workflowModel: TestGitLabWorkflowLanguageModel, model: Provider.Model) {
+  return LLM.layer.pipe(
+    Layer.provide(
+      Layer.mock(Auth.Service)({
+        get: () => Effect.succeed(undefined),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Config.Service)({
+        get: () => Effect.succeed({} as Config.Info),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Provider.Service)({
+        getProvider: () =>
+          Effect.succeed({
+            id: ProviderID.gitlab,
+            name: "GitLab",
+            source: "config",
+            env: [],
+            options: {},
+            models: { [model.id]: model },
+          } satisfies Provider.Info),
+        getLanguage: () => Effect.succeed(workflowModel),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(Plugin.Service)({
+        trigger: <Name extends string, Input, Output>(_name: Name, _input: Input, output: Output) =>
+          Effect.succeed(output),
+        list: () => Effect.succeed([]),
+        init: () => Effect.void,
+      }),
+    ),
+    Layer.provide(LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))),
+    Layer.provide(RuntimeFlags.layer({})),
+  )
+}
+
 describe("session.llm.stream", () => {
   test("sends temperature, tokens, and reasoning options for openai-compatible models", async () => {
     const server = state.server
@@ -971,6 +1149,86 @@ describe("session.llm.stream", () => {
         expect(tools?.some((item) => item.function?.name === "question")).toBe(true)
       },
     })
+  })
+
+  test("keeps workflow approvals asking when only agent default allows all", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "*", pattern: "*", action: "allow" }],
+      approvalTimeoutMs: 50,
+    })
+
+    expect(result.approvalResult).toBe("pending")
+    expect(result.preapprovedTools).not.toContain("bash")
+  })
+
+  test("lets session allow-all override workflow approvals for worker sessions", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "*", pattern: "*", action: "allow" }],
+      sessionPermission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+
+    expect(result.approvalResult).toEqual({ approved: true })
+    expect(result.preapprovedTools).toContain("bash")
+  })
+
+  test("lets worker session allow-all override explicit agent workflow asks", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
+      sessionPermission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+
+    expect(result.approvalResult).toEqual({ approved: true })
+    expect(result.preapprovedTools).toContain("bash")
+  })
+
+  test("honors explicit agent workflow approval allow rules", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "allow" }],
+    })
+
+    expect(result.approvalResult).toEqual({ approved: true })
+    expect(result.preapprovedTools).toContain("bash")
+  })
+
+  test("honors explicit agent workflow approval ask rules", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
+      approvalTimeoutMs: 50,
+    })
+
+    expect(result.approvalResult).toBe("pending")
+    expect(result.preapprovedTools).not.toContain("bash")
+  })
+
+  test("honors explicit agent workflow approval deny rules", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "deny" }],
+    })
+
+    expect(result.approvalResult).toEqual({ approved: false })
+    expect(result.preapprovedTools).not.toContain("bash")
+  })
+
+  test("honors wildcard agent workflow approval allow rules", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "workflow_*", pattern: "*", action: "allow" }],
+    })
+
+    expect(result.approvalResult).toEqual({ approved: true })
+    expect(result.preapprovedTools).toContain("bash")
+  })
+
+  test("honors explicit session workflow approval rules over session allow-all", async () => {
+    const result = await runWorkflowApproval({
+      agentPermission: [{ permission: "*", pattern: "*", action: "allow" }],
+      sessionPermission: [
+        { permission: "*", pattern: "*", action: "allow" },
+        { permission: "workflow_tool_approval", pattern: "*", action: "deny" },
+      ],
+    })
+
+    expect(result.approvalResult).toEqual({ approved: false })
+    expect(result.preapprovedTools).not.toContain("bash")
   })
 
   test("sends responses API payload for OpenAI models", async () => {

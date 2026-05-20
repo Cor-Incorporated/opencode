@@ -12,6 +12,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { ModelID, ProviderID } from "../../src/provider/schema"
+import { Permission } from "@/permission"
 import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
@@ -407,24 +408,20 @@ describe("tool.task", () => {
 
         const child = yield* sessions.get(result.metadata.sessionId)
         expect(child.parentID).toBe(chat.id)
-        expect(child.permission).toEqual([
-          {
-            permission: "todowrite",
-            pattern: "*",
-            action: "deny",
-          },
-          {
-            permission: "bash",
-            pattern: "*",
-            action: "allow",
-          },
-          {
-            permission: "read",
-            pattern: "*",
-            action: "allow",
-          },
-        ])
+        expect(Permission.evaluate("edit", "docs/task.md", child.permission ?? []).action).toBe("allow")
+        expect(Permission.evaluate("external_directory", "/tmp/outside.txt", child.permission ?? []).action).toBe(
+          "allow",
+        )
+        expect(Permission.evaluate("bash", "git status", child.permission ?? []).action).toBe("allow")
+        expect(Permission.evaluate("workflow_tool_approval", "bash: git status", child.permission ?? []).action).toBe(
+          "allow",
+        )
+        expect(Permission.evaluate("doom_loop", "bash", child.permission ?? []).action).toBe("allow")
+        expect(Permission.evaluate("todowrite", "*", child.permission ?? []).action).toBe("deny")
         expect(seen?.tools).toEqual({
+          question: false,
+          plan_enter: false,
+          plan_exit: false,
           todowrite: false,
           bash: false,
           read: false,
