@@ -4,6 +4,7 @@ import {
   createPermissionBodyState,
   permissionAlwaysLines,
   permissionCancel,
+  permissionCtrlC,
   permissionEscape,
   permissionInfo,
   permissionReject,
@@ -74,6 +75,13 @@ describe("run permission shared", () => {
       stage: "permission",
       selected: "always",
     })
+  })
+
+  test("detects ctrl-c for permission exit handling", () => {
+    expect(permissionCtrlC({ name: "c", ctrl: true })).toBe(true)
+    expect(permissionCtrlC({ name: "c", ctrl: true, shift: true })).toBe(false)
+    expect(permissionCtrlC({ name: "C", ctrl: true })).toBe(false)
+    expect(permissionCtrlC({ name: "escape" })).toBe(false)
   })
 
   test("maps supported permission types into display info", () => {

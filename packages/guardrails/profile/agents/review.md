@@ -9,7 +9,7 @@ permission:
   list: allow
   lsp: allow
   skill: allow
-  webfetch: ask
+  webfetch: allow
   bash:
     "*": deny
     "git diff *": allow

@@ -171,6 +171,16 @@ export function permissionHover(state: PermissionBodyState, option: PermissionOp
   }
 }
 
+export function permissionCtrlC(event: {
+  name: string
+  ctrl?: boolean
+  meta?: boolean
+  shift?: boolean
+  super?: boolean
+}): boolean {
+  return event.name === "c" && !!event.ctrl && !event.meta && !event.shift && !event.super
+}
+
 export function permissionRun(state: PermissionBodyState, requestID: string, option: PermissionOption): PermissionStep {
   if (state.submitting) {
     return { state }
