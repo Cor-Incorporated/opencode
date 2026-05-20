@@ -3,8 +3,6 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { Effect } from "effect"
-
 import { ANCHOR_CONTENT_SEPARATOR, formatAnchor } from "../anchor.js"
 import { executeHashlineEdits } from "../edit.js"
 import { hashLine } from "../hash.js"
@@ -455,7 +453,7 @@ describe("createHashlineTool", () => {
       worktree: directory,
       abort: new AbortController().signal,
       metadata: () => undefined,
-      ask: () => Effect.void,
+      ask: async () => undefined,
     }
   }
 

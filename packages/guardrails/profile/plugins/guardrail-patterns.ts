@@ -62,7 +62,7 @@ export const src = new Set([
 ])
 
 export const paid: Record<string, Set<string>> = {
-  "zai-coding-plan": new Set([
+  zai: new Set([
     "glm-4.5",
     "glm-4.5-air",
     "glm-4.5-flash",
@@ -75,6 +75,14 @@ export const paid: Record<string, Set<string>> = {
     "glm-5",
     "glm-5-turbo",
     "glm-5.1",
+    "glm-5v-turbo",
+  ]),
+  "zai-coding-plan": new Set([
+    "glm-4.5-air",
+    "glm-4.7",
+    "glm-5-turbo",
+    "glm-5.1",
+    "glm-5v-turbo",
   ]),
   openai: new Set([
     "gpt-5.1-codex",
@@ -82,9 +90,15 @@ export const paid: Record<string, Set<string>> = {
     "gpt-5.1-codex-mini",
     "gpt-5.2",
     "gpt-5.2-codex",
+    "gpt-5.2-pro",
     "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-5.4-pro",
     "gpt-5.5",
-    "gpt-5.5-mini",
+    "gpt-5.5-pro",
   ]),
 }
 
@@ -218,4 +232,3 @@ export function cmp(left: string, right: string) {
   if (a[1] !== b[1]) return a[1] - b[1]
   return a[2] - b[2]
 }
-

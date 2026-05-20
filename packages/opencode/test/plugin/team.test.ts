@@ -1,10 +1,8 @@
 import { afterEach, expect, test } from "bun:test"
-import { Effect } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import team from "../../../../packages/guardrails/profile/plugins/team"
 import { evaluate } from "../../src/permission/evaluate"
-import { Instance } from "../../src/project/instance"
 import { Background } from "../../src/util/background"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 
@@ -94,7 +92,7 @@ test("team uses default limit when caller omits limit", async () => {
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -232,7 +230,7 @@ test("team creates run before stale sweep can block launch", async () => {
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata(input) {
         metadata.push(input.metadata ?? {})
       },
@@ -367,7 +365,7 @@ test("team worker model inherits the parent session model", async () => {
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -573,7 +571,7 @@ alwaysApply: true
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -705,7 +703,7 @@ test("team carries local .opencode config even when the project gitignore ignore
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -816,7 +814,7 @@ test("team rewrites parent absolute paths into isolated worker prompts", async (
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -921,7 +919,7 @@ test("team fails isolated write tasks that produce no patch", async () => {
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -1002,7 +1000,7 @@ test("team classifies model routing failures as llm_unavailable", async () => {
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -1108,7 +1106,7 @@ test("team allows explicit no_patch write tasks for operation-only work", async 
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -1191,7 +1189,7 @@ test("team reports worktree setup failures instead of dependency deadlocks", asy
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     )
@@ -1286,7 +1284,7 @@ test("team removes worktree when session create fails", async () => {
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -1389,7 +1387,7 @@ test("team surfaces blocked child permissions instead of hanging", async () => {
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -1480,7 +1478,7 @@ test("team removes worktree when child prompt fails", async () => {
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -1590,7 +1588,7 @@ test("team persists failed runs without leaving tasks nonterminal", async () => 
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -1694,7 +1692,7 @@ test("background surfaces blocked child permissions before returning", async () 
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -1802,7 +1800,7 @@ test("background continues after returning, notifies parent, and team_status rec
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata(input) {
         metadata.push(input.metadata ?? {})
       },
@@ -1833,7 +1831,7 @@ test("background continues after returning, notifies parent, and team_status rec
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -1934,7 +1932,7 @@ test("background failure with notify false is persisted without sending parent p
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata(input) {
         metadata.push(input.metadata ?? {})
       },
@@ -1956,7 +1954,7 @@ test("background failure with notify false is persisted without sending parent p
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -2063,7 +2061,7 @@ test("team falls back to tool output when child returns no text", async () => {
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -2167,7 +2165,7 @@ test("team keeps bash enabled for read-only workers and disables recursive deleg
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -2280,7 +2278,7 @@ test("team disables recursive orchestration tools for write workers", async () =
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -2390,7 +2388,7 @@ test("team rewrites nested opencode init prompts to direct bootstrap work", asyn
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -2503,7 +2501,7 @@ test("team surfaces permission.asked events instead of polling forever", async (
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -2600,7 +2598,7 @@ test("team surfaces child worktree-local permission asks from guardrail state", 
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -2691,7 +2689,7 @@ test("team times out busy child sessions instead of polling forever", async () =
           directory: tmp.path,
           worktree: tmp.path,
           abort: new AbortController().signal,
-          ask: () => Effect.void,
+          ask: async () => undefined,
           metadata() {},
         },
       ),
@@ -2809,7 +2807,7 @@ test("team waits when child status is temporarily missing before idle", async ()
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -2928,7 +2926,7 @@ test("team ignores parent abort while waiting for child completion", async () =>
       directory: tmp.path,
       worktree: tmp.path,
       abort: abort.signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -3041,7 +3039,7 @@ test("team treats session.idle event as completion even when status never appear
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -3147,7 +3145,7 @@ test("team treats completed assistant messages as completion even when status st
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -3274,7 +3272,7 @@ test("team waits past completed tool-call assistant messages", async () => {
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -3378,7 +3376,7 @@ test("team retries event subscriptions before consuming session.idle", async () 
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -3506,7 +3504,7 @@ test("team_status reconciles stale running runs from completed child messages", 
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -3674,7 +3672,7 @@ test("team execute sweeps stale running runs before launching new work", async (
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -4285,7 +4283,7 @@ test("team merge excludes runtime artifacts and leaves unrelated parent edits un
       directory: tmp.path,
       worktree: tmp.path,
       abort: new AbortController().signal,
-      ask: () => Effect.void,
+      ask: async () => undefined,
       metadata() {},
     },
   )
@@ -4407,7 +4405,7 @@ test("team merge_back reports parent dirty overlap before git apply index failur
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     ),
@@ -4528,7 +4526,7 @@ test("team uses an existing sibling git worktree mentioned in the task prompt", 
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     )
@@ -4650,7 +4648,7 @@ test("team merges changes from an existing .opencode worktree mentioned in the t
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     )
@@ -4775,7 +4773,7 @@ test("team rewrites invalid external worktree hints to the isolated worker workt
         directory: tmp.path,
         worktree: tmp.path,
         abort: new AbortController().signal,
-        ask: () => Effect.void,
+        ask: async () => undefined,
         metadata() {},
       },
     )
@@ -4862,7 +4860,7 @@ test("team rejects directories outside the project worktree and cleans provision
           directory: out,
           worktree: tmp.path,
           abort: new AbortController().signal,
-          ask: () => Effect.void,
+          ask: async () => undefined,
           metadata() {},
         },
       ),
