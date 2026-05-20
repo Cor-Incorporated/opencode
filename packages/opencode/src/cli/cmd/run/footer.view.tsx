@@ -463,6 +463,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                         block={block()}
                         diffStyle={props.diffStyle}
                         onReply={props.onPermissionReply}
+                        onExitRequest={props.onExitRequest}
                       />
                     </Match>
                     <Match when={active().type === "question"}>

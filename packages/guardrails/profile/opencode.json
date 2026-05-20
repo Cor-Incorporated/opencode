@@ -177,7 +177,7 @@
   "permission": {
     "edit": "ask",
     "task": "ask",
-    "webfetch": "ask",
+    "webfetch": "allow",
     "external_directory": "ask",
     "bash": {
       "*": "ask",

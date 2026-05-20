@@ -19,6 +19,7 @@ import {
   createPermissionBodyState,
   permissionAlwaysLines,
   permissionCancel,
+  permissionCtrlC,
   permissionEscape,
   permissionHover,
   permissionInfo,
@@ -71,6 +72,7 @@ function RejectField(props: {
   onChange: (text: string) => void
   onConfirm: () => void
   onCancel: () => void
+  onExitRequest?: () => boolean
 }) {
   let area: TextareaRenderable | undefined
 
@@ -114,6 +116,13 @@ function RejectField(props: {
         props.onChange(area.plainText)
       }}
       onKeyDown={(event) => {
+        if (permissionCtrlC(event)) {
+          if (props.onExitRequest?.()) {
+            event.preventDefault()
+          }
+          return
+        }
+
         if (event.name === "escape") {
           event.preventDefault()
           props.onCancel()
@@ -138,6 +147,7 @@ export function RunPermissionBody(props: {
   block: RunBlockTheme
   diffStyle?: RunDiffStyle
   onReply: (input: PermissionReply) => void | Promise<void>
+  onExitRequest?: () => boolean
 }) {
   const dims = useTerminalDimensions()
   const [state, setState] = createSignal(createPermissionBodyState(props.request.id))
@@ -215,6 +225,13 @@ export function RunPermissionBody(props: {
   }
 
   useKeyboard((event) => {
+    if (permissionCtrlC(event)) {
+      if (props.onExitRequest?.()) {
+        event.preventDefault()
+      }
+      return
+    }
+
     const cur = state()
     if (cur.stage === "reject") {
       return
@@ -324,6 +341,7 @@ export function RunPermissionBody(props: {
                   }}
                   onConfirm={reject}
                   onCancel={cancelReject}
+                  onExitRequest={props.onExitRequest}
                 />
               </box>
               <Show
