@@ -5,6 +5,43 @@ import { createGitHandlers } from "./guardrail-git"
 import { createReviewPipeline } from "./guardrail-review"
 import { flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
+const OPENCODE_IGNORE = ".opencode/"
+
+export function partID() {
+  return `prt_${crypto.randomUUID()}`
+}
+
+export function teamWorkerWorktree(worktree: string) {
+  return /(?:^|[\\/])\.opencode[\\/]team[\\/]/.test(worktree)
+}
+
+export async function ensureLocalOpencodeIgnored(worktree: string) {
+  if (teamWorkerWorktree(worktree)) return false
+  const projectIgnore = await Bun.file(path.join(worktree, ".gitignore")).text().catch(() => "")
+  if (projectIgnore.includes(".opencode")) return false
+
+  const target = await git(worktree, ["rev-parse", "--git-path", "info/exclude"]).catch(() => ({
+    stdout: "",
+    stderr: "",
+    code: 1,
+  }))
+  if (target.code !== 0) return false
+
+  const exclude = path.isAbsolute(target.stdout.trim())
+    ? target.stdout.trim()
+    : path.join(worktree, target.stdout.trim())
+  const current = await Bun.file(exclude).text().catch(() => "")
+  if (current.split(/\r?\n/).some((line) => line.trim() === OPENCODE_IGNORE || line.trim() === ".opencode")) {
+    return false
+  }
+
+  await Bun.write(
+    exclude,
+    `${current}${current && !current.endsWith("\n") ? "\n" : ""}# OpenCode local state\n${OPENCODE_IGNORE}\n`,
+  )
+  return true
+}
+
 export default async function guardrail(
   input: GuardrailInput,
   opts?: Record<string, unknown>,
@@ -94,15 +131,14 @@ export default async function guardrail(
           ci_green: false,
           detected_stacks: stacks,
           branch_warning: branchWarning,
+          gitignore_missing_opencode: false,
         })
         if (stacks.length > 0) {
           await ctx.seen("auto_init.stacks_detected", { stacks })
         }
         try {
-          const gitignore = await Bun.file(path.join(ctx.input.worktree, ".gitignore")).text()
-          if (!gitignore.includes(".opencode")) {
-            await ctx.mark({ gitignore_missing_opencode: true })
-            await ctx.seen("ignore_hygiene.missing", { pattern: ".opencode/" })
+          if (await ensureLocalOpencodeIgnored(ctx.input.worktree)) {
+            await ctx.seen("ignore_hygiene.local_exclude_added", { pattern: OPENCODE_IGNORE })
           }
         } catch {}
         if (branchWarning) {
@@ -158,7 +194,7 @@ export default async function guardrail(
       const pendingFreshness = str(data.git_freshness_advisory)
       if (pendingFreshness) {
         out.parts.push({
-          id: crypto.randomUUID(),
+          id: partID(),
           sessionID: out.message.sessionID,
           messageID: out.message.id,
           type: "text",
@@ -196,7 +232,7 @@ export default async function guardrail(
         const statusCheck = await git(ctx.input.worktree, ["status", "--porcelain"]).catch(() => ({ stdout: "", stderr: "", code: 1 }))
         const dirty = statusCheck.stdout.trim().length > 0 && !statusCheck.stderr.trim()
         out.parts.push({
-          id: crypto.randomUUID(),
+          id: partID(),
           sessionID: out.message.sessionID,
           messageID: out.message.id,
           type: "text",
@@ -205,16 +241,6 @@ export default async function guardrail(
             : branchWarn,
         })
         await ctx.mark({ branch_warning: "" })
-      }
-      if (data.gitignore_missing_opencode) {
-        out.parts.push({
-          id: crypto.randomUUID(),
-          sessionID: out.message.sessionID,
-          messageID: out.message.id,
-          type: "text",
-          text: "⚠️ `.opencode/` is not in `.gitignore`. Add it to reduce noise in `git status`.",
-        })
-        await ctx.mark({ gitignore_missing_opencode: false })
       }
     },
     "tool.execute.before": async (
