@@ -8,6 +8,7 @@ import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { Permission } from "@/permission"
 import type { SessionPrompt } from "../session/prompt"
 import { SessionStatus } from "@/session/status"
 import { Config } from "@/config/config"
@@ -149,24 +150,35 @@ export const TaskTool = Tool.define(
       const parentAgent = parent.agent
         ? yield* agent.get(parent.agent).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
+      const childPermission = [
+        ...deriveSubagentSessionPermission({
+          parentSessionPermission: parent.permission ?? [],
+          parentAgent,
+          subagent: next,
+        }),
+        ...(cfg.experimental?.primary_tools?.map((item) => ({
+          pattern: "*",
+          action: "allow" as const,
+          permission: item,
+        })) ?? []),
+      ]
+      const resumedPermission = session
+        ? Permission.merge(
+            childPermission,
+            (session.permission ?? []).filter((rule) => rule.action === "deny"),
+          )
+        : undefined
       const nextSession =
         session ??
         (yield* sessions.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
-          permission: [
-            ...deriveSubagentSessionPermission({
-              parentSessionPermission: parent.permission ?? [],
-              parentAgent,
-              subagent: next,
-            }),
-            ...(cfg.experimental?.primary_tools?.map((item) => ({
-              pattern: "*",
-              action: "allow" as const,
-              permission: item,
-            })) ?? []),
-          ],
+          permission: childPermission,
         }))
+      if (session && resumedPermission) {
+        yield* sessions.setPermission({ sessionID: session.id, permission: resumedPermission })
+        nextSession.permission = resumedPermission
+      }
 
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(Effect.orDie)
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
@@ -205,8 +217,12 @@ export const TaskTool = Tool.define(
             question: false,
             plan_enter: false,
             plan_exit: false,
-            ...(next.permission.some((rule) => rule.permission === "todowrite") ? {} : { todowrite: false }),
-            ...(next.permission.some((rule) => rule.permission === id) ? {} : { task: false }),
+            ...(next.permission.some((rule) => rule.permission === "todowrite" && rule.action === "allow")
+              ? {}
+              : { todowrite: false }),
+            ...(next.permission.some((rule) => rule.permission === id && rule.action === "allow")
+              ? {}
+              : { task: false }),
             ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
           },
           parts,

@@ -209,7 +209,17 @@ describe("tool.task", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
-      const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
+      const child = yield* sessions.create({
+        parentID: chat.id,
+        title: "Existing child",
+        permission: [
+          { permission: "edit", pattern: "*", action: "ask" },
+          { permission: "external_directory", pattern: "*", action: "ask" },
+          { permission: "workflow_tool_approval", pattern: "*", action: "ask" },
+          { permission: "doom_loop", pattern: "*", action: "ask" },
+          { permission: "bash", pattern: "*", action: "deny" },
+        ],
+      })
       const tool = yield* TaskTool
       const def = yield* tool.init()
       let seen: SessionPrompt.PromptInput | undefined
@@ -240,6 +250,26 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).toBe(child.id)
       expect(result.output).toContain(`task_id: ${child.id}`)
       expect(seen?.sessionID).toBe(child.id)
+      const updated = yield* sessions.get(child.id)
+      expect(Permission.evaluate("edit", "docs/task.md", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("external_directory", "/tmp/outside.txt", updated.permission ?? []).action).toBe(
+        "allow",
+      )
+      expect(Permission.evaluate("workflow_tool_approval", "bash: git status", updated.permission ?? []).action).toBe(
+        "allow",
+      )
+      expect(Permission.evaluate("doom_loop", "bash", updated.permission ?? []).action).toBe("allow")
+      expect(Permission.evaluate("bash", "git status", updated.permission ?? []).action).toBe("deny")
+      expect(seen?.tools).toEqual({
+        question: false,
+        plan_enter: false,
+        plan_exit: false,
+        todowrite: false,
+        task: false,
+      })
+      expect(seen?.tools?.edit).toBeUndefined()
+      expect(seen?.tools?.write).toBeUndefined()
+      expect(seen?.tools?.apply_patch).toBeUndefined()
     }),
   )
 
@@ -439,6 +469,61 @@ describe("tool.task", () => {
         },
         experimental: {
           primary_tools: ["bash", "read"],
+        },
+      },
+    },
+  )
+
+  it.instance(
+    "execute treats explicit subagent denies as disabled child tools",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        const result = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "limited",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        const child = yield* sessions.get(result.metadata.sessionId)
+        expect(Permission.evaluate("todowrite", "*", child.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("task", "*", child.permission ?? []).action).toBe("deny")
+        expect(seen?.tools).toMatchObject({
+          question: false,
+          plan_enter: false,
+          plan_exit: false,
+          todowrite: false,
+          task: false,
+        })
+      }),
+    {
+      config: {
+        agent: {
+          limited: {
+            mode: "subagent",
+            permission: {
+              task: "deny",
+              todowrite: "deny",
+            },
+          },
         },
       },
     },

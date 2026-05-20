@@ -1209,13 +1209,14 @@ describe("session.llm.stream", () => {
     expect(result.preapprovedTools).not.toContain("bash")
   })
 
-  test("honors wildcard agent workflow approval allow rules", async () => {
+  test("keeps workflow approvals asking for wildcard agent workflow rules", async () => {
     const result = await runWorkflowApproval({
       agentPermission: [{ permission: "workflow_*", pattern: "*", action: "allow" }],
+      approvalTimeoutMs: 50,
     })
 
-    expect(result.approvalResult).toEqual({ approved: true })
-    expect(result.preapprovedTools).toContain("bash")
+    expect(result.approvalResult).toBe("pending")
+    expect(result.preapprovedTools).not.toContain("bash")
   })
 
   test("honors explicit session workflow approval rules over session allow-all", async () => {

@@ -21,11 +21,12 @@ export function deriveSubagentSessionPermission(input: {
   parentAgent: Agent.Info | undefined
   subagent: Agent.Info
 }): Permission.Ruleset {
-  const canTask = input.subagent.permission.some((rule) => rule.permission === "task")
-  const canTodo = input.subagent.permission.some((rule) => rule.permission === "todowrite")
+  const canTask = input.subagent.permission.some((rule) => rule.permission === "task" && rule.action === "allow")
+  const canTodo = input.subagent.permission.some((rule) => rule.permission === "todowrite" && rule.action === "allow")
   const parentAgentDenies =
     input.parentAgent?.permission.filter((rule) => rule.action === "deny" && rule.permission === "edit") ?? []
   return [
+    { permission: "*" as const, pattern: "*" as const, action: "allow" as const },
     { permission: "edit" as const, pattern: "*" as const, action: "allow" as const },
     { permission: "external_directory" as const, pattern: "*" as const, action: "allow" as const },
     { permission: "bash" as const, pattern: "*" as const, action: "allow" as const },
@@ -42,6 +43,7 @@ export function deriveSubagentSessionPermission(input: {
     { permission: "workflow_tool_approval" as const, pattern: "*" as const, action: "allow" as const },
     { permission: "doom_loop" as const, pattern: "*" as const, action: "allow" as const },
     ...parentAgentDenies,
+    ...input.subagent.permission.filter((rule) => rule.permission === "todowrite" || rule.permission === "task"),
     ...input.parentSessionPermission.filter((rule) => rule.action === "deny"),
     ...(canTodo ? [] : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
     ...(canTask ? [] : [{ permission: "task" as const, pattern: "*" as const, action: "deny" as const }]),
