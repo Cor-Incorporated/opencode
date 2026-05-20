@@ -14,7 +14,6 @@ const seen = new WeakMap<object, Seen>()
 const sweeping = new Map<string, Promise<void>>()
 const models = new Map<string, Lane>()
 const sweepWait = 1000
-const rulesWait = 2000
 const defaultIdleTimeout = 10 * 60 * 1000
 
 function partID() {
@@ -417,15 +416,11 @@ function workerTools(push: boolean) {
   }
 }
 
-function workerWriteRule(rule: Rule) {
-  if (rule.action === "deny") return true
-  return rule.permission !== "edit" && rule.permission !== "*"
-}
-
-function permit(base: Rule[], isolatedWrite = false) {
+function permit() {
   return [
-    ...(isolatedWrite ? [{ permission: "edit", pattern: "*", action: "allow" as const }] : []),
-    ...(isolatedWrite ? base.filter(workerWriteRule) : base),
+    { permission: "*", pattern: "*", action: "allow" as const },
+    { permission: "edit", pattern: "*", action: "allow" as const },
+    { permission: "external_directory", pattern: "*", action: "allow" as const },
     { permission: "bash", pattern: "*", action: "allow" as const },
     { permission: "bash", pattern: "pwd", action: "allow" as const },
     { permission: "bash", pattern: "ls", action: "allow" as const },
@@ -461,6 +456,7 @@ function permit(base: Rule[], isolatedWrite = false) {
     { permission: "bash", pattern: "sudo *", action: "deny" as const },
     { permission: "bash", pattern: "git reset --hard*", action: "deny" as const },
     { permission: "bash", pattern: "git merge *", action: "deny" as const },
+    { permission: "bash", pattern: "gh pr merge *", action: "deny" as const },
     { permission: "bash", pattern: "curl * | sh*", action: "deny" as const },
     { permission: "bash", pattern: "curl * | bash*", action: "deny" as const },
     { permission: "bash", pattern: "opencode *", action: "deny" as const },
@@ -547,6 +543,62 @@ function worktreeHint(text: string) {
     const hit = cleanHint(match?.[1] ?? "")
     if (hit && path.isAbsolute(hit)) return hit
   }
+}
+
+function expandHome(text: string) {
+  if (text === "~") return process.env.HOME || text
+  if (text.startsWith("~/")) return path.join(process.env.HOME || "", text.slice(2))
+  return text
+}
+
+function pathHints(text: string) {
+  const direct = worktreeHint(text)
+  const matches = Array.from(
+    text.matchAll(/(?:~\/|\/Users\/|\/Volumes\/|\/private\/|\/tmp\/|\/var\/|\/)[^\s`'")\]}]+/g),
+    (item) => item[0],
+  )
+  return [...(direct ? [direct] : []), ...matches].map((item) =>
+    expandHome(cleanHint(item).replace(/[?*].*$/, "")),
+  )
+}
+
+async function existingAncestor(input: string): Promise<string | undefined> {
+  for (let cur = path.resolve(input); ; cur = path.dirname(cur)) {
+    if (await has(cur)) return cur
+    if (path.dirname(cur) === cur) return undefined
+  }
+}
+
+async function gitRootsFromText(text: string) {
+  const roots: string[] = []
+  for (const item of pathHints(text)) {
+    const existing = await existingAncestor(item)
+    if (!existing) continue
+    const top = await gitTop(existing)
+    if (top && !roots.includes(top)) roots.push(top)
+  }
+  return roots
+}
+
+async function routedProjectRoot(ctx: Pick<Ctx, "directory" | "worktree">, text: string): Promise<string | undefined> {
+  const current = projectRoot(ctx.directory, ctx.worktree)
+  const currentCommon = await gitCommon(current)
+  const candidates: { root: string; common: string }[] = []
+  for (const root of await gitRootsFromText(text)) {
+    if (within(current, root)) continue
+    const common = await gitCommon(root)
+    if (!common || common === currentCommon) continue
+    if (!candidates.some((item) => item.root === root)) candidates.push({ root, common })
+  }
+  const commons = new Set(candidates.map((item) => item.common))
+  if (commons.size !== 1) return undefined
+  const hinted = worktreeHint(text)
+  if (hinted) {
+    const top = await gitTop(hinted)
+    const hit = candidates.find((item) => item.root === top)
+    if (hit) return hit.root
+  }
+  return candidates[0]?.root
 }
 
 function projectRoot(directory: string, worktree: string) {
@@ -709,16 +761,6 @@ async function carry(root: string, dir: string, next: string) {
 
     if (cur === root || path.dirname(cur) === cur) return kept
   }
-}
-
-async function rules(client: Client, ctx: Pick<Ctx, "sessionID" | "directory">) {
-  const out = await client.session
-    .get({
-      path: { id: ctx.sessionID },
-      query: { directory: ctx.directory },
-    })
-    .catch(() => undefined)
-  return Array.isArray(out?.data?.permission) ? out.data.permission : []
 }
 
 function isRun(data: unknown): data is Run {
@@ -1125,10 +1167,6 @@ async function presweep(client: Client, dir: string) {
   await bounded(sweep(client, dir), sweepWait)
 }
 
-async function parentRules(client: Client, ctx: Pick<Ctx, "sessionID" | "directory">) {
-  return (await bounded(rules(client, ctx), rulesWait)) ?? []
-}
-
 function note(run: Run) {
   const head = [`run_id: ${run.id}`, `type: ${run.kind}`, `state: ${run.state}`]
   const list = run.tasks.map((item) =>
@@ -1333,7 +1371,6 @@ export default async function team(input: { client: Client; worktree: string; di
         mergeWorktree && repoRoot ? rebaseForWorktree(item.prompt, repoRoot, box) : item.prompt,
         push,
       )
-      const isolatedWrite = push && mergeWorktree && box !== ctx.directory
 
       if (process.env.DEBUG_TEAM) console.log("job.start", run.id, item.id)
       todo(run, item.id, {
@@ -1347,7 +1384,7 @@ export default async function team(input: { client: Client; worktree: string; di
         body: {
           parentID: ctx.sessionID,
           title: item.description,
-          permission: permit(ctx.permission, isolatedWrite),
+          permission: ctx.permission,
         },
         query: {
           directory: box,
@@ -1459,8 +1496,13 @@ export default async function team(input: { client: Client; worktree: string; di
       ),
     },
     async execute(args, ctx) {
-      const runRoot = projectRoot(ctx.directory, ctx.worktree)
-      const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
+      const route = await routedProjectRoot(
+        ctx,
+        args.tasks.map((item) => `${item.description ?? item.id}\n${item.prompt}`).join("\n"),
+      )
+      const exec = route ? { ...ctx, directory: route, worktree: route } : ctx
+      const runRoot = projectRoot(exec.directory, exec.worktree)
+      const canIsolate = Boolean(exec.worktree && exec.worktree !== "/")
       const strategy = args.strategy ?? "parallel"
       const limit = args.limit ?? cap
       const runAbort = new AbortController()
@@ -1471,7 +1513,7 @@ export default async function team(input: { client: Client; worktree: string; di
         kind: "team",
         state: "running",
         session: ctx.sessionID,
-        directory: ctx.directory,
+        directory: exec.directory,
         created_at: now(),
         updated_at: now(),
         tasks: args.tasks.map((item) => {
@@ -1514,13 +1556,14 @@ export default async function team(input: { client: Client; worktree: string; di
           run_id: run.id,
           tasks: args.tasks.length,
           strategy,
+          ...(route ? { routed_project: route } : {}),
         },
       })
       await presweep(input.client, runRoot)
       const req = {
-        ...ctx,
+        ...exec,
         abort: runAbort.signal,
-        permission: await parentRules(input.client, ctx),
+        permission: permit(),
       }
 
       const done = new Set<string>()
@@ -1599,8 +1642,10 @@ export default async function team(input: { client: Client; worktree: string; di
       notify: z.boolean().optional().default(true),
     },
     async execute(args, ctx) {
-      const runRoot = projectRoot(ctx.directory, ctx.worktree)
-      const canIsolate = Boolean(ctx.worktree && ctx.worktree !== "/")
+      const route = await routedProjectRoot(ctx, `${args.description ?? ""}\n${args.prompt}`)
+      const exec = route ? { ...ctx, directory: route, worktree: route } : ctx
+      const runRoot = projectRoot(exec.directory, exec.worktree)
+      const canIsolate = Boolean(exec.worktree && exec.worktree !== "/")
       const detachedAbort = new AbortController()
       const step: Step = {
         id: slug(args.description || args.agent || "worker") || "worker",
@@ -1634,7 +1679,7 @@ export default async function team(input: { client: Client; worktree: string; di
         kind: "background",
         state: "running",
         session: ctx.sessionID,
-        directory: ctx.directory,
+        directory: exec.directory,
         created_at: now(),
         updated_at: now(),
         tasks: [step],
@@ -1644,13 +1689,14 @@ export default async function team(input: { client: Client; worktree: string; di
         title: args.description || "background run",
         metadata: {
           run_id: run.id,
+          ...(route ? { routed_project: route } : {}),
         },
       })
       await presweep(input.client, runRoot)
       const req = {
-        ...ctx,
+        ...exec,
         abort: detachedAbort.signal,
-        permission: await parentRules(input.client, ctx),
+        permission: permit(),
       }
 
       const task = job(req, run, step)
@@ -1662,7 +1708,7 @@ export default async function team(input: { client: Client; worktree: string; di
           await input.client.session.prompt({
             path: { id: req.sessionID },
             query: {
-              directory: req.directory,
+              directory: ctx.directory,
             },
             body: {
               noReply: true,
@@ -1685,7 +1731,7 @@ export default async function team(input: { client: Client; worktree: string; di
           await input.client.session.prompt({
             path: { id: req.sessionID },
             query: {
-              directory: req.directory,
+              directory: ctx.directory,
             },
             body: {
               noReply: true,
@@ -1698,7 +1744,7 @@ export default async function team(input: { client: Client; worktree: string; di
             },
           })
         })
-      Background.add(req.directory, task)
+      Background.add(ctx.directory, task)
       await Promise.race([task.catch(() => {}), new Promise((ok) => setTimeout(ok, gap))])
 
       return note(run)

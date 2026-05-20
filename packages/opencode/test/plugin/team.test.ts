@@ -377,7 +377,7 @@ test("team worker model inherits the parent session model", async () => {
   })
 })
 
-test("team carries local .opencode files into worker worktrees and inherits parent permission", async () => {
+test("team carries local .opencode files into worker worktrees and uses permissive child permissions", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -578,9 +578,8 @@ alwaysApply: true
 
   expect(out).toContain("run_id:")
   expect(body?.parentID).toBe("ses_parent")
-  expect(body?.permission).toContainEqual(perm[0])
-  expect(body?.permission).toContainEqual(perm[1])
   expect(body?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
+  expect(body?.permission).toContainEqual({ permission: "*", pattern: "*", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "rg *", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git ls-tree*", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git worktree list*", action: "allow" })
@@ -590,13 +589,15 @@ alwaysApply: true
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git cherry-pick *", action: "allow" })
   expect(evaluate("bash", "git worktree list", body?.permission ?? []).action).toBe("allow")
   expect(evaluate("bash", "git checkout feat/alpha-quality-gates", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("bash", "gh pr merge 150", body?.permission ?? []).action).toBe("deny")
   expect(evaluate("bash", "opencode run /init", body?.permission ?? []).action).toBe("deny")
   expect(evaluate("bash", "rm -rf .opencode", body?.permission ?? []).action).toBe("deny")
+  expect(evaluate("external_directory", "/Users/test/project/*", body?.permission ?? []).action).toBe("allow")
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "opencode *", action: "deny" })
   expect(box).toContain(path.join(".opencode", "team"))
 })
 
-test("team allows isolated write workers to edit their worktree without prompting", async () => {
+test("team allows isolated write workers without inheriting parent edit prompts", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -717,8 +718,8 @@ test("team allows isolated write workers to edit their worktree without promptin
 
   expect(out).toContain("write-doc: done")
   expect(evaluate("edit", "docs/spikes/worker.md", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("edit", "secrets/key.txt", body?.permission ?? []).action).toBe("deny")
-  expect(evaluate("external_directory", "../outside.txt", body?.permission ?? []).action).toBe("ask")
+  expect(evaluate("edit", "secrets/key.txt", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("external_directory", "../outside.txt", body?.permission ?? []).action).toBe("allow")
 })
 
 test("team carries local .opencode config even when the project gitignore ignores .opencode", async () => {
@@ -4790,6 +4791,143 @@ test("team merges changes from an existing .opencode worktree mentioned in the t
       .catch(() => {})
     await fs.rm(path.dirname(target), { recursive: true, force: true }).catch(() => {})
   }
+})
+
+test("team routes prompts for another git project into that project root", async () => {
+  await using parent = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# parent\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed parent"`.cwd(dir).quiet()
+    },
+  })
+  await using target = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# target\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed target"`.cwd(dir).quiet()
+    },
+  })
+
+  const realTarget = await fs.realpath(target.path)
+  let box = ""
+  let body:
+    | {
+        permission?: {
+          permission: string
+          pattern: string
+          action: "allow" | "ask" | "deny"
+        }[]
+      }
+    | undefined
+  const metadata: Record<string, unknown>[] = []
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return { data: { permission: [] } }
+        },
+        async create(input) {
+          box = input.query.directory
+          body = input.body
+          return {
+            data: {
+              id: "ses_external_project",
+            },
+          }
+        },
+        async promptAsync(input) {
+          expect(input.query.directory).toContain(path.join(realTarget, ".opencode", "team"))
+          await Bun.write(path.join(input.query.directory, "worker.txt"), "worker output\n")
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_external_project: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                  time: {
+                    completed: Date.now(),
+                  },
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: parent.path,
+    directory: parent.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "external-project",
+          prompt: `Create ${path.join(realTarget, "docs", "spikes", "hermes-direct-dependency.md")} for the target project.`,
+          write: true,
+          worktree: true,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: parent.path,
+      worktree: parent.path,
+      abort: new AbortController().signal,
+      ask: async () => undefined,
+      metadata(input) {
+        if (input.metadata) metadata.push(input.metadata)
+      },
+    },
+  )
+
+  expect(box).toContain(path.join(realTarget, ".opencode", "team"))
+  expect(out).toContain("external-project: done")
+  expect(await Bun.file(path.join(realTarget, "worker.txt")).text()).toBe("worker output\n")
+  expect(await Bun.file(path.join(parent.path, "worker.txt")).exists()).toBe(false)
+  expect(evaluate("external_directory", `${realTarget}/*`, body?.permission ?? []).action).toBe("allow")
+  expect(metadata).toContainEqual(expect.objectContaining({ routed_project: realTarget }))
 })
 
 test("team rewrites invalid external worktree hints to the isolated worker worktree", async () => {
