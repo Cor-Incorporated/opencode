@@ -17,6 +17,10 @@ const sweepWait = 1000
 const rulesWait = 2000
 const defaultIdleTimeout = 10 * 60 * 1000
 
+function partID() {
+  return `prt_${crypto.randomUUID()}`
+}
+
 type Need = {
   done: boolean
   reason: string
@@ -1750,7 +1754,7 @@ export default async function team(input: { client: Client; worktree: string; di
       const headCheck = await git(input.worktree, ["rev-parse", "--verify", "HEAD"])
       if (headCheck.code !== 0) {
         out.parts.push({
-          id: crypto.randomUUID(),
+          id: partID(),
           sessionID: out.message.sessionID,
           messageID: out.message.id,
           type: "text",
@@ -1765,7 +1769,7 @@ export default async function team(input: { client: Client; worktree: string; di
         at: now(),
       })
       out.parts.push({
-        id: crypto.randomUUID(),
+        id: partID(),
         sessionID: out.message.sessionID,
         messageID: out.message.id,
         type: "text",
