@@ -578,7 +578,9 @@ alwaysApply: true
 
   expect(out).toContain("run_id:")
   expect(body?.parentID).toBe("ses_parent")
-  expect(body?.permission?.slice(0, perm.length)).toEqual(perm)
+  expect(body?.permission).toContainEqual(perm[0])
+  expect(body?.permission).toContainEqual(perm[1])
+  expect(body?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "rg *", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git ls-tree*", action: "allow" })
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git worktree list*", action: "allow" })
@@ -592,6 +594,131 @@ alwaysApply: true
   expect(evaluate("bash", "rm -rf .opencode", body?.permission ?? []).action).toBe("deny")
   expect(body?.permission).toContainEqual({ permission: "bash", pattern: "opencode *", action: "deny" })
   expect(box).toContain(path.join(".opencode", "team"))
+})
+
+test("team allows isolated write workers to edit their worktree without prompting", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      await Bun.write(path.join(dir, "README.md"), "# test\n")
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m "seed"`.cwd(dir).quiet()
+    },
+  })
+
+  let body:
+    | {
+        permission?: {
+          permission: string
+          pattern: string
+          action: "allow" | "ask" | "deny"
+        }[]
+      }
+    | undefined
+
+  const plugin = await team({
+    client: {
+      permission: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      question: {
+        async list() {
+          return { data: [] }
+        },
+      },
+      session: {
+        async get() {
+          return {
+            data: {
+              permission: [
+                { permission: "edit", pattern: "*", action: "ask" as const },
+                { permission: "edit", pattern: "secrets/*", action: "deny" as const },
+                { permission: "external_directory", pattern: "*", action: "ask" as const },
+              ],
+            },
+          }
+        },
+        async create(input) {
+          body = input.body
+          return {
+            data: {
+              id: "ses_child",
+            },
+          }
+        },
+        async promptAsync(input) {
+          await fs.mkdir(path.join(input.query.directory, "docs", "spikes"), { recursive: true })
+          await Bun.write(path.join(input.query.directory, "docs", "spikes", "worker.md"), "# worker\n")
+          return {}
+        },
+        async prompt() {
+          return {}
+        },
+        async status() {
+          return {
+            data: {
+              ses_child: {
+                type: "idle",
+              },
+            },
+          }
+        },
+        async messages() {
+          return {
+            data: [
+              {
+                info: {
+                  role: "assistant",
+                },
+                parts: [
+                  {
+                    type: "text",
+                    text: "done",
+                  },
+                ],
+              },
+            ],
+          }
+        },
+        async abort() {
+          return {}
+        },
+      },
+    },
+    worktree: tmp.path,
+    directory: tmp.path,
+  })
+
+  const out = await plugin.tool.team.execute(
+    {
+      strategy: "parallel",
+      limit: 1,
+      tasks: [
+        {
+          id: "write-doc",
+          prompt: "write docs/spikes/worker.md",
+          write: true,
+        },
+      ],
+    },
+    {
+      sessionID: "ses_parent",
+      messageID: "msg_parent",
+      agent: "implement",
+      directory: tmp.path,
+      worktree: tmp.path,
+      abort: new AbortController().signal,
+      ask: async () => undefined,
+      metadata() {},
+    },
+  )
+
+  expect(out).toContain("write-doc: done")
+  expect(evaluate("edit", "docs/spikes/worker.md", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("edit", "secrets/key.txt", body?.permission ?? []).action).toBe("deny")
+  expect(evaluate("external_directory", "../outside.txt", body?.permission ?? []).action).toBe("ask")
 })
 
 test("team carries local .opencode config even when the project gitignore ignores .opencode", async () => {
