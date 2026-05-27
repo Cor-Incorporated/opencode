@@ -15,7 +15,10 @@ export interface SearchToolResult {
   error?: string
 }
 
-export async function runAstGrepSearch(opts: SearchOpts, cliOptions: AstGrepCliOptions = {}): Promise<SearchToolResult> {
+export async function runAstGrepSearch(
+  opts: SearchOpts,
+  cliOptions: AstGrepCliOptions = {},
+): Promise<SearchToolResult> {
   if (!isSupportedLang(opts.lang)) {
     return { ok: false, error: `Unsupported language: ${opts.lang}. Supported: ${SUPPORTED_LANGS.join(", ")}` }
   }
@@ -42,8 +45,8 @@ export const astGrepSearchTool: ToolDefinition = tool({
     globs: tool.schema.array(tool.schema.string()).optional().describe("File globs to filter the search"),
     context: tool.schema.number().int().nonnegative().optional().describe("Lines of context before/after each match"),
   },
-  async execute(args) {
-    const result = await runAstGrepSearch(args)
+  async execute(args, ctx) {
+    const result = await runAstGrepSearch(args, { cwd: ctx.directory })
     return {
       output: JSON.stringify(result, null, 2),
       metadata: {

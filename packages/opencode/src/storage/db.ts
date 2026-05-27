@@ -14,6 +14,7 @@ import { InstallationChannel } from "@opencode-ai/core/installation/version"
 import { EffectBridge } from "@/effect/bridge"
 import { init } from "#db"
 import { Effect, Schema } from "effect"
+import { configureJournalMode } from "./journal-mode"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
 
@@ -101,7 +102,7 @@ export const Client = Object.assign(
 
     const db = init(dbPath)
 
-    db.run("PRAGMA journal_mode = WAL")
+    configureJournalMode(db)
     db.run("PRAGMA synchronous = NORMAL")
     db.run("PRAGMA busy_timeout = 5000")
     db.run("PRAGMA cache_size = -64000")

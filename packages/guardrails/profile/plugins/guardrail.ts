@@ -2,6 +2,7 @@ import path from "path"
 import { createAccessHandlers } from "./guardrail-access"
 import { createContext, type GuardrailInput } from "./guardrail-context"
 import { createGitHandlers } from "./guardrail-git"
+import { createInstrumentationHandlers } from "./guardrail-instrumentation"
 import { createReviewPipeline } from "./guardrail-review"
 import { flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
@@ -49,6 +50,7 @@ export async function ensureLocalOpencodeIgnored(worktree: string) {
 export default async function guardrail(input: GuardrailInput, opts?: Record<string, unknown>) {
   const ctx = await createContext(input, opts)
   const access = createAccessHandlers(ctx)
+  const instrumentation = createInstrumentationHandlers(ctx)
   const review = createReviewPipeline(ctx)
   const gitHandlers = createGitHandlers(ctx, review)
 
@@ -140,6 +142,10 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           detected_stacks: stacks,
           branch_warning: branchWarning,
           gitignore_missing_opencode: false,
+          instrumentation_changes: false,
+          instrumentation_files: [],
+          instrumentation_quality_state: "",
+          instrumentation_quality_blockers: [],
         })
         if (stacks.length > 0) {
           await ctx.seen("auto_init.stacks_detected", { stacks })
@@ -275,10 +281,12 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         await access.toolBeforeAccess(item, out, bashData)
         const cmd = typeof out.args?.command === "string" ? out.args.command : ""
         if (cmd) {
+          await instrumentation.bashBeforeInstrumentation(cmd, bashData)
           await gitHandlers.bashBeforeGit(cmd, out, bashData)
         }
         return
       }
+      await instrumentation.toolBeforeInstrumentation(item, out)
       await access.toolBeforeAccess(item, out)
     },
     "tool.execute.after": async (
@@ -329,6 +337,7 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
       }
 
       await access.toolAfterAccess(item, out, data)
+      await instrumentation.toolAfterInstrumentation(item, out, data)
 
       if (item.tool === "bash" && /\bgh\s+pr\s+checks\b/i.test(str(item.args?.command))) {
         const criticalMatches = out.output.match(/CRITICAL[=:]?\s*(\d+)/i)
@@ -547,6 +556,25 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
             "4. Run /ship to merge\n" +
             "5. Create follow-up issues for out-of-scope problems\n" +
             "Do NOT stop until the pipeline completes or a hard blocker is hit."
+        }
+      }
+      if (
+        item.command === "implement" ||
+        item.command === "auto" ||
+        item.command === "review" ||
+        item.command === "ship"
+      ) {
+        const instrumentationPart = out.parts.find((part) => part.type === "subtask" && typeof part.prompt === "string")
+        if (instrumentationPart?.prompt) {
+          instrumentationPart.prompt =
+            instrumentationPart.prompt +
+            "\n\nInstrumentation quality gate:\n" +
+            "- AI agent instrumentation must use source-level hooks, not global monkey patches.\n" +
+            "- Instrumentation/cross-cutting PRs require an integration or smoke test.\n" +
+            "- Include a traceability matrix from acceptance criteria to implementation.\n" +
+            "- Document each metric's semantics and source code path.\n" +
+            "- Do not claim unmeasurable metrics; return an explicit unavailable reason instead of null.\n" +
+            "- Probe optional dependencies before use and clean up resources with finally/cleanup paths."
         }
       }
       if (!["review", "ship", "handoff", "implement", "auto"].includes(item.command)) return

@@ -11,14 +11,7 @@ import { readFile, writeFile, rename as renameFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import path from "node:path"
 
-import type {
-  AstGrepLang,
-  ReplaceOpts,
-  ReplaceResult,
-  ReplaceSample,
-  SearchOpts,
-  SearchResult,
-} from "./types.js"
+import type { AstGrepLang, ReplaceOpts, ReplaceResult, ReplaceSample, SearchOpts, SearchResult } from "./types.js"
 
 /**
  * `createRequire` lets us load `node:child_process` and resolve packages
@@ -42,6 +35,8 @@ export interface AstGrepCliOptions {
   spawn?: SpawnFn
   /** Override the path to the `sg` binary. */
   binary?: string
+  /** Working directory for ast-grep searches and rewrites. */
+  cwd?: string
 }
 
 interface AstGrepRawMatch {
@@ -85,10 +80,12 @@ export class AstGrepCliError extends Error {
 
 export class AstGrepCli {
   private readonly spawnFn: SpawnFn
+  private readonly cwd: string | undefined
   private resolvedBinary: string | null
 
   constructor(options: AstGrepCliOptions = {}) {
     this.spawnFn = options.spawn ?? defaultSpawn
+    this.cwd = options.cwd
     this.resolvedBinary = options.binary ?? null
   }
 
@@ -131,10 +128,8 @@ export class AstGrepCli {
     const args = this.buildSearchArgs(opts)
     // NOTE: do NOT pass opts.paths?.[0] as cwd. `paths` is the CLI search
     // target (positional args after the pattern). Misusing it as cwd makes
-    // a non-existent path hang the spawn and a file path crash with
-    // ENOTDIR. The CLI receives paths through `args` already; rely on the
-    // current working directory of this process for cwd.
-    const proc = this.spawnFn([binary, ...args], { cwd: defaultSpawnCwd() })
+    // a non-existent path hang the spawn and a file path crash with ENOTDIR.
+    const proc = this.spawnFn([binary, ...args], { cwd: this.cwd ?? defaultSpawnCwd() })
     const matches = await collectMatches(proc)
     const truncated = matches.length > SEARCH_RESULT_CAP
     const trimmed = truncated ? matches.slice(0, SEARCH_RESULT_CAP) : matches
@@ -151,31 +146,24 @@ export class AstGrepCli {
     if (dryRun) {
       // For dryRun we need both before/after — invoke once with --rewrite but no --update-all,
       // and ast-grep reports the proposed `replacement` per match without touching disk.
-      const proc = this.spawnFn(
-        [binary, ...this.buildSearchArgs(opts, opts.rewrite, true)],
-        { cwd: defaultSpawnCwd() },
-      )
+      const proc = this.spawnFn([binary, ...this.buildSearchArgs(opts, opts.rewrite, true)], {
+        cwd: this.cwd ?? defaultSpawnCwd(),
+      })
       const matches = await collectMatches(proc)
       return summarizeMatches(matches)
     }
     // Non-dry: capture the matches first (so we can return before/after samples),
     // then apply edits atomically by writing the new content per file ourselves.
-    const previewProc = this.spawnFn(
-      [binary, ...this.buildSearchArgs(opts, opts.rewrite, true)],
-      { cwd: defaultSpawnCwd() },
-    )
+    const previewProc = this.spawnFn([binary, ...this.buildSearchArgs(opts, opts.rewrite, true)], {
+      cwd: this.cwd ?? defaultSpawnCwd(),
+    })
     const matches = await collectMatches(previewProc)
     if (matches.length === 0) return { filesChanged: 0, totalEdits: 0, sample: [] }
-    await applyMatchesToDisk(matches)
+    await applyMatchesToDisk(matches, this.cwd)
     return summarizeMatches(matches)
   }
 }
 
-// FIXME(follow-up): plumb context.directory from ToolContext for correct workspace cwd.
-// `process.cwd()` happens to equal the session project directory in the common
-// `opencode` CLI launch path, but we should not rely on it — `ToolContext`
-// already carries an authoritative `directory`. Tracked separately to keep this
-// PR focused on the LSP/ast-grep surface.
 function defaultSpawnCwd(): string | undefined {
   return typeof process !== "undefined" ? process.cwd() : undefined
 }
@@ -413,13 +401,14 @@ function summarizeMatches(matches: AstGrepRawMatch[]): ReplaceResult {
   return { filesChanged: fileSet.size, totalEdits: matches.length, sample }
 }
 
-async function applyMatchesToDisk(matches: AstGrepRawMatch[]): Promise<void> {
+async function applyMatchesToDisk(matches: AstGrepRawMatch[], cwd?: string): Promise<void> {
   const byFile = new Map<string, AstGrepRawMatch[]>()
   for (const m of matches) {
     if (!m.file || m.replacement === undefined) continue
-    const list = byFile.get(m.file) ?? []
+    const file = cwd && !path.isAbsolute(m.file) ? path.join(cwd, m.file) : m.file
+    const list = byFile.get(file) ?? []
     list.push(m)
-    byFile.set(m.file, list)
+    byFile.set(file, list)
   }
   // Build all updated contents first, then write per file. Each write is
   // atomic at the file level (temp+rename); if the process is interrupted
@@ -538,9 +527,7 @@ async function readAllText(stream: ReadableStream<Uint8Array> | NodeJS.ReadableS
 
 function isWebStream(stream: unknown): stream is ReadableStream<Uint8Array> {
   return (
-    typeof stream === "object" &&
-    stream !== null &&
-    typeof (stream as { getReader?: unknown }).getReader === "function"
+    typeof stream === "object" && stream !== null && typeof (stream as { getReader?: unknown }).getReader === "function"
   )
 }
 

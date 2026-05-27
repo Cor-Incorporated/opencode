@@ -9,6 +9,7 @@ import path from "path"
 import { existsSync } from "fs"
 import { Filesystem } from "@/util/filesystem"
 import { Glob } from "@opencode-ai/core/util/glob"
+import { configureJournalMode } from "./journal-mode"
 
 const log = Log.create({ service: "json-migration" })
 
@@ -45,7 +46,7 @@ export async function run(db: SQLiteBunDatabase<any, any> | NodeSQLiteDatabase<a
   // const db = drizzle({ client: sqlite })
 
   // Optimize SQLite for bulk inserts
-  db.run("PRAGMA journal_mode = WAL")
+  configureJournalMode(db)
   db.run("PRAGMA synchronous = OFF")
   db.run("PRAGMA cache_size = 10000")
   db.run("PRAGMA temp_store = MEMORY")

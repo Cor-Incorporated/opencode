@@ -19,6 +19,7 @@ Execute the ship workflow for the current work:
      - low-risk: tests/fixtures/examples/generated files may merge with green CI, either review path, or CRITICAL=0 HIGH=0 review checks
      - full: source, guardrail profile, workflow, agent instruction, package, lockfile, and config diffs require both code-reviewer and Codex review
    - Do not try to approve your own PR. GitHub rejects self-approval; record review evidence as a comment or external review result instead.
+   - For AI agent instrumentation or metric changes, verify the guardrail instrumentation quality gate: source-level hooks only, no global monkey patches, traceability matrix, integration/smoke test, metric semantics/code path, dependency availability probe, cleanup/finally path, and explicit unavailable reason.
 
 3. If all gates pass:
    - Run `gh pr merge <PR_NUMBER> --merge`
