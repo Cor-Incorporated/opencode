@@ -262,6 +262,21 @@ guardrails_team_plugin_loads() {
   ' "$GUARDRAILS_PROFILE/opencode.json" "$GUARDRAILS_PROFILE" >/dev/null
 }
 
+entrypoint_guardrails_smoke() {
+  local dir output
+  dir="$(mktemp -d)"
+  printf 'TERM_PROGRAM=opencode-local-env-smoke\n' > "$dir/.env"
+  output="$(cd "$dir" && env -u OPENCODE_CONFIG -u OPENCODE_CONFIG_CONTENT -u OPENCODE_CONFIG_DIR -u OPENCODE_PURE -u TERM_PROGRAM -u TERM_PROGRAM_VERSION "$ENTRYPOINT" debug info)" || {
+    rm -rf "$dir"
+    return 1
+  }
+  rm -rf "$dir"
+
+  grep -Fq "terminal: opencode-local-env-smoke" <<<"$output" &&
+    grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail.ts" <<<"$output" &&
+    grep -Fq "$GUARDRAILS_PROFILE/plugins/team.ts" <<<"$output"
+}
+
 repair_links() {
   mkdir -p "$ALLOWED_WRITE_ROOT" "$PACKAGE/bin"
 
@@ -325,6 +340,7 @@ mark "$(grep -Fq "exec $guard_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok ||
 entry_version="$("$ENTRYPOINT" --version 2>/dev/null || true)"
 active_version="$("$ACTIVE_BINARY" --version 2>/dev/null || true)"
 mark "$([[ -n "$entry_version" && "$entry_version" == "$active_version" ]] && echo ok || echo fail)" "entrypoint version matches active binary: ${entry_version:-missing}"
+mark "$(entrypoint_guardrails_smoke && echo ok || echo fail)" "entrypoint runs read-only command through guardrails profile/env"
 
 if [[ "$failures" -gt 0 ]]; then
   printf '\n%s check(s) failed.\n' "$failures"

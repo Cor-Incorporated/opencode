@@ -19,6 +19,7 @@ import { PoeAuthPlugin } from "opencode-poe-auth"
 import { CloudflareAIGatewayAuthPlugin, CloudflareWorkersAuthPlugin } from "./cloudflare"
 import { AzureAuthPlugin } from "./azure"
 import { DigitalOceanAuthPlugin } from "./digitalocean"
+import { XaiAuthPlugin } from "./xai"
 import { Effect, Layer, Context, Stream } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
@@ -66,6 +67,7 @@ const INTERNAL_PLUGINS: PluginInstance[] = [
   CloudflareAIGatewayAuthPlugin,
   AzureAuthPlugin,
   DigitalOceanAuthPlugin,
+  XaiAuthPlugin,
 ]
 
 function isServerPlugin(value: unknown): value is PluginInstance {
@@ -241,6 +243,20 @@ export const layer = Layer.effect(
             },
           }).pipe(Effect.ignore)
         }
+
+        yield* Effect.addFinalizer(() =>
+          Effect.forEach(
+            hooks,
+            (hook) =>
+              Effect.tryPromise({
+                try: () => Promise.resolve(hook.dispose?.()),
+                catch: (error) => {
+                  log.error("plugin dispose hook failed", { error })
+                },
+              }).pipe(Effect.ignore),
+            { discard: true },
+          ),
+        )
 
         // Subscribe to bus events, fiber interrupted when scope closes
         yield* (yield* bus.subscribeAll()).pipe(

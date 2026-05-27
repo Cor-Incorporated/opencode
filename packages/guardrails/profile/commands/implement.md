@@ -11,5 +11,6 @@ Requirements:
 - prefer upstream-compatible extension points over core runtime patches
 - run the smallest relevant verification before claiming completion
 - if review, ship, or handoff gates are needed, use `/review`, `/ship`, or `/handoff`
+- for AI agent instrumentation or metric work, use source-level hooks only, add integration/smoke coverage, and include traceability from acceptance criteria to code paths
 
 $ARGUMENTS

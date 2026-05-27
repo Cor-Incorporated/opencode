@@ -38,9 +38,7 @@ export const astGrepReplaceTool: ToolDefinition = tool({
   args: {
     pattern: tool.schema.string().min(1).describe("ast-grep pattern to match"),
     rewrite: tool.schema.string().describe("Replacement template; may reference metavariables"),
-    lang: tool.schema
-      .enum(["ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "cpp"])
-      .describe("Source language"),
+    lang: tool.schema.enum(["ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "cpp"]).describe("Source language"),
     paths: tool.schema.array(tool.schema.string()).optional().describe("Search roots (default: current directory)"),
     globs: tool.schema.array(tool.schema.string()).optional().describe("File globs to filter"),
     context: tool.schema.number().int().nonnegative().optional().describe("Lines of context for sample output"),
@@ -49,11 +47,11 @@ export const astGrepReplaceTool: ToolDefinition = tool({
       .optional()
       .describe("If true (default), do not modify files; just return the planned edits"),
   },
-  async execute(args) {
+  async execute(args, ctx) {
     // Default to dryRun=true so a destructive structural rewrite never
     // happens implicitly. Callers must opt in to writing files.
     const dryRun = args.dryRun ?? true
-    const result = await runAstGrepReplace({ ...args, dryRun })
+    const result = await runAstGrepReplace({ ...args, dryRun }, { cwd: ctx.directory })
     return {
       output: JSON.stringify(result, null, 2),
       metadata: {

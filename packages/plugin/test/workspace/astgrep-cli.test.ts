@@ -10,11 +10,12 @@
  */
 
 import { describe, expect, it } from "bun:test"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { Readable } from "node:stream"
 
+import { astGrepSearchTool } from "../../src/tools/workspace/astgrep/search.js"
 import { AstGrepCli, isSupportedLang, type SpawnFn } from "../../src/tools/workspace/astgrep/cli.js"
 import type { ReplaceOpts, SearchOpts } from "../../src/tools/workspace/astgrep/types.js"
 
@@ -63,13 +64,19 @@ describe("isSupportedLang", () => {
 
 describe("AstGrepCli.buildSearchArgs", () => {
   it("builds a basic search command", () => {
-    const cli = new AstGrepCli({ binary: "/fake/sg", spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }) })
+    const cli = new AstGrepCli({
+      binary: "/fake/sg",
+      spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }),
+    })
     const args = cli.buildSearchArgs({ pattern: "console.log($MSG)", lang: "ts" })
     expect(args).toEqual(["run", "--pattern", "console.log($MSG)", "--lang", "ts", "--json=stream"])
   })
 
   it("includes context, globs, paths, rewrite, --update-all", () => {
-    const cli = new AstGrepCli({ binary: "/fake/sg", spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }) })
+    const cli = new AstGrepCli({
+      binary: "/fake/sg",
+      spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }),
+    })
     const opts: SearchOpts = {
       pattern: "p",
       lang: "ts",
@@ -89,7 +96,10 @@ describe("AstGrepCli.buildSearchArgs", () => {
   })
 
   it("omits --update-all when dryRun=true with rewrite", () => {
-    const cli = new AstGrepCli({ binary: "/fake/sg", spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }) })
+    const cli = new AstGrepCli({
+      binary: "/fake/sg",
+      spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }),
+    })
     const args = cli.buildSearchArgs({ pattern: "p", lang: "ts" }, "r", true)
     expect(args).toContain("--rewrite")
     expect(args).not.toContain("--update-all")
@@ -325,47 +335,57 @@ describe("AstGrepCli.replace (mocked)", () => {
       expect(cwd).not.toBe("/abs/path/to/file.ts")
     }
   })
+
+  it("uses the configured workspace cwd for cwd-relative search paths", async () => {
+    const seenCwds: Array<string | undefined> = []
+    const spawn: SpawnFn = (_cmd, opts) => {
+      seenCwds.push(opts.cwd)
+      return { stdout: Readable.from([]), stderr: null, exited: Promise.resolve(1) }
+    }
+    const cli = new AstGrepCli({ binary: "/fake/sg", spawn, cwd: "/workspace/project" })
+    await cli.search({ pattern: "x", lang: "ts", paths: ["src"] })
+    expect(seenCwds).toEqual(["/workspace/project"])
+  })
 })
 
 describe("AstGrepCli.ensureBinary (re-review NH4)", () => {
-  it(
-    "resolves the sg binary via the @ast-grep/cli package's bin field in a Bun workspace",
-    async () => {
-      // PR-B re-review (round 2, NH4): in a Bun workspace, the bin shim
-      // `node_modules/.bin/sg` only exists at the *package* level
-      // (e.g. packages/plugin/node_modules/.bin/sg), not at the workspace
-      // root. The previous implementation only probed `process.cwd() +
-      // node_modules/.bin/sg` and PATH, so when run from the workspace
-      // root it returned "ast-grep CLI not found". The fix resolves the
-      // binary by reading `@ast-grep/cli`'s `package.json#bin`.
-      //
-      // The repository ships `@ast-grep/cli` as a real dependency, so
-      // ensureBinary() with no overrides must succeed in this test
-      // environment without relying on PATH.
-      const cli = new AstGrepCli()
-      const resolved = await cli.ensureBinary()
-      expect(resolved).toBeTruthy()
-      // Resolved path should either be an absolute path that ends with
-      // `sg` / `ast-grep`, OR one of the bare names if PATH lookup wins.
-      // Either way, it must NOT be the empty string and the file must
-      // actually exist when it's an absolute path.
-      const isAbsolute = path.isAbsolute(resolved)
-      if (isAbsolute) {
-        const fs = await import("node:fs/promises")
-        // Asserts the file is reachable; access() rejects on missing/unreadable.
-        await fs.access(resolved)
-      }
-      // Sanity: the resolved value should reference the ast-grep binary
-      // by name.
-      expect(/sg$|ast-grep$/.test(resolved)).toBe(true)
-    },
-    10_000,
-  )
+  it("resolves the sg binary via the @ast-grep/cli package's bin field in a Bun workspace", async () => {
+    // PR-B re-review (round 2, NH4): in a Bun workspace, the bin shim
+    // `node_modules/.bin/sg` only exists at the *package* level
+    // (e.g. packages/plugin/node_modules/.bin/sg), not at the workspace
+    // root. The previous implementation only probed `process.cwd() +
+    // node_modules/.bin/sg` and PATH, so when run from the workspace
+    // root it returned "ast-grep CLI not found". The fix resolves the
+    // binary by reading `@ast-grep/cli`'s `package.json#bin`.
+    //
+    // The repository ships `@ast-grep/cli` as a real dependency, so
+    // ensureBinary() with no overrides must succeed in this test
+    // environment without relying on PATH.
+    const cli = new AstGrepCli()
+    const resolved = await cli.ensureBinary()
+    expect(resolved).toBeTruthy()
+    // Resolved path should either be an absolute path that ends with
+    // `sg` / `ast-grep`, OR one of the bare names if PATH lookup wins.
+    // Either way, it must NOT be the empty string and the file must
+    // actually exist when it's an absolute path.
+    const isAbsolute = path.isAbsolute(resolved)
+    if (isAbsolute) {
+      const fs = await import("node:fs/promises")
+      // Asserts the file is reachable; access() rejects on missing/unreadable.
+      await fs.access(resolved)
+    }
+    // Sanity: the resolved value should reference the ast-grep binary
+    // by name.
+    expect(/sg$|ast-grep$/.test(resolved)).toBe(true)
+  }, 10_000)
 })
 
 describe("AstGrepCli.ensureBinary", () => {
   it("returns the configured binary without probing", async () => {
-    const cli = new AstGrepCli({ binary: "/configured/sg", spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }) })
+    const cli = new AstGrepCli({
+      binary: "/configured/sg",
+      spawn: () => ({ stdout: Readable.from([]), stderr: null, exited: Promise.resolve(0) }),
+    })
     expect(await cli.ensureBinary()).toBe("/configured/sg")
   })
 
@@ -386,4 +406,32 @@ describe("AstGrepCli.ensureBinary", () => {
     const resolved = await cli.ensureBinary()
     expect(resolved === "sg" || resolved === "ast-grep" || resolved.endsWith("/sg")).toBe(true)
   })
+})
+
+describe("ast_grep_search tool context", () => {
+  it("uses ToolContext.directory for relative paths", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "ag-tool-cwd-"))
+    await mkdir(path.join(dir, "src"))
+    await writeFile(path.join(dir, "src", "a.ts"), 'console.log("from context")\n')
+    try {
+      const result = await astGrepSearchTool.execute(
+        { pattern: "console.log($MSG)", lang: "ts", paths: ["src"] },
+        {
+          sessionID: "ses_test",
+          messageID: "msg_test",
+          agent: "test",
+          directory: dir,
+          worktree: dir,
+          abort: new AbortController().signal,
+          metadata: () => {},
+          ask: async () => {},
+        },
+      )
+      const output = typeof result === "string" ? JSON.parse(result) : JSON.parse(result.output)
+      expect(output.ok).toBe(true)
+      expect(output.total).toBe(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 10_000)
 })
