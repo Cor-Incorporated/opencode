@@ -317,9 +317,11 @@ describe("LSP connection factory (Bun-spawn regression)", () => {
       const client = new LspClient(conn, stubSpec, dir, { timeoutMs: 5_000 })
       await client.initialize(pathToUri(dir))
       // The regression guard is the real initialize handshake completing.
-      // Windows runners may observe process close immediately after the reply.
+      // Windows runners can release the child process file handles shortly
+      // after shutdown returns, so give recursive cleanup a wider retry window.
       await client.shutdown()
-      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      await rm(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 })
     },
     15_000,
   )
