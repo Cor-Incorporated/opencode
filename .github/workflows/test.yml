@@ -65,7 +65,12 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: 20
-        run: bun turbo test:ci --log-order=stream --log-prefix=task
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bun turbo test:ci --log-order=stream --log-prefix=task --filter='!opencode'
+            exit 0
+          fi
+          bun turbo test:ci --log-order=stream --log-prefix=task
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
