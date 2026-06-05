@@ -376,7 +376,7 @@ describe("AstGrepCli.ensureBinary (re-review NH4)", () => {
     }
     // Sanity: the resolved value should reference the ast-grep binary
     // by name.
-    expect(/sg$|ast-grep$/.test(resolved)).toBe(true)
+    expect(/(?:sg|ast-grep)(?:\.(?:exe|cmd|ps1))?$/.test(resolved)).toBe(true)
   }, 10_000)
 })
 

@@ -73,16 +73,8 @@
             "output": 65536
           },
           "modalities": {
-            "input": [
-              "text",
-              "image",
-              "audio",
-              "video",
-              "pdf"
-            ],
-            "output": [
-              "text"
-            ]
+            "input": ["text", "image", "audio", "video", "pdf"],
+            "output": ["text"]
           }
         }
       }
@@ -93,9 +85,12 @@
       "packages/opencode/migration/*": "deny"
     }
   },
+  "reference": {
+    "effect": "github.com/Effect-TS/effect-smol",
+  },
   "mcp": {},
   "tools": {
     "github-triage": false,
-    "github-pr-search": false
-  }
+    "github-pr-search": false,
+  },
 }

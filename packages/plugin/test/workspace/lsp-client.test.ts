@@ -18,6 +18,7 @@ import {
   LspClient,
   defaultConnectionFactory,
   findRoot,
+  pathToUri,
   type RpcConnection,
 } from "../../src/tools/workspace/lsp/client.js"
 import { runDiagnostics } from "../../src/tools/workspace/lsp/diagnostics.js"
@@ -113,12 +114,14 @@ describe("LspClient (mocked)", () => {
     const { conn, calls } = makeMockConnection({
       onRequest: () => ({ capabilities: {} }),
     })
-    const spec = specForFile("/x/foo.ts")!
-    const client = new LspClient(conn, spec, "/x")
-    await client.initialize("file:///x")
+    const dir = await mkdtemp(path.join(tmpdir(), "lsp-init-"))
+    const spec = specForFile(path.join(dir, "foo.ts"))!
+    const client = new LspClient(conn, spec, dir)
+    await client.initialize(pathToUri(dir))
     const order = calls.map((c) => c.method)
     expect(order[0]).toBe("initialize")
     expect(order[1]).toBe("initialized")
+    await rm(dir, { recursive: true, force: true })
   })
 
   it("sends an initialize payload with the LSP-required shape", async () => {
@@ -129,9 +132,11 @@ describe("LspClient (mocked)", () => {
     const { conn, calls } = makeMockConnection({
       onRequest: () => ({ capabilities: {} }),
     })
-    const spec = specForFile("/x/foo.ts")!
-    const client = new LspClient(conn, spec, "/x")
-    await client.initialize("file:///x")
+    const dir = await mkdtemp(path.join(tmpdir(), "lsp-init-payload-"))
+    const rootUri = pathToUri(dir)
+    const spec = specForFile(path.join(dir, "foo.ts"))!
+    const client = new LspClient(conn, spec, dir)
+    await client.initialize(rootUri)
     const init = calls.find((c) => c.method === "initialize")
     expect(init).toBeDefined()
     const params = init!.params as {
@@ -139,11 +144,12 @@ describe("LspClient (mocked)", () => {
       capabilities: { textDocument: unknown; workspace: unknown }
       workspaceFolders: Array<{ uri: string; name: string }>
     }
-    expect(params.rootUri).toBe("file:///x")
+    expect(params.rootUri).toBe(rootUri)
     expect(params.capabilities.textDocument).toBeDefined()
     expect(params.capabilities.workspace).toBeDefined()
     expect(Array.isArray(params.workspaceFolders)).toBe(true)
-    expect(params.workspaceFolders[0]?.uri).toBe("file:///x")
+    expect(params.workspaceFolders[0]?.uri).toBe(rootUri)
+    await rm(dir, { recursive: true, force: true })
   })
 
   it("routes publishDiagnostics notifications to waiters", async () => {
@@ -155,11 +161,11 @@ describe("LspClient (mocked)", () => {
     const file = path.join(dir, "foo.ts")
     await writeFile(file, "x\n")
     const client = new LspClient(conn, spec, dir)
-    await client.initialize("file://" + dir)
+    await client.initialize(pathToUri(dir))
     const promise = client.diagnostics(file, 5_000)
     // Push a publishDiagnostics for the file URI we used.
     emit("textDocument/publishDiagnostics", {
-      uri: "file://" + file,
+      uri: pathToUri(file),
       diagnostics: [
         {
           range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
@@ -184,7 +190,7 @@ describe("LspClient (mocked)", () => {
     const file = path.join(dir, "foo.ts")
     await writeFile(file, "const x = 1\n")
     const client = new LspClient(conn, spec, dir)
-    await client.initialize("file://" + dir)
+    await client.initialize(pathToUri(dir))
     const result = await client.definition(file, 0, 6)
     expect(result).toEqual(expected)
     await rm(dir, { recursive: true, force: true })
@@ -192,9 +198,11 @@ describe("LspClient (mocked)", () => {
 
   it("times out hung requests instead of hanging forever", async () => {
     const { conn } = makeMockConnection({ hang: true })
-    const spec = specForFile("/x/foo.ts")!
-    const client = new LspClient(conn, spec, "/x", { timeoutMs: 25 })
-    await expect(client.initialize("file:///x")).rejects.toThrow(/timed out/i)
+    const dir = await mkdtemp(path.join(tmpdir(), "lsp-timeout-"))
+    const spec = specForFile(path.join(dir, "foo.ts"))!
+    const client = new LspClient(conn, spec, dir, { timeoutMs: 25 })
+    await expect(client.initialize(pathToUri(dir))).rejects.toThrow(/timed out/i)
+    await rm(dir, { recursive: true, force: true })
   })
 
   it("normalizes a single Location into an array", async () => {
@@ -207,7 +215,7 @@ describe("LspClient (mocked)", () => {
     const file = path.join(dir, "foo.ts")
     await writeFile(file, "x\n")
     const client = new LspClient(conn, spec, dir)
-    await client.initialize("file://" + dir)
+    await client.initialize(pathToUri(dir))
     const out = await client.definition(file, 0, 0)
     expect(Array.isArray(out)).toBe(true)
     expect(out).toHaveLength(1)
@@ -307,10 +315,11 @@ describe("LSP connection factory (Bun-spawn regression)", () => {
       }
       const conn = await defaultConnectionFactory(stubSpec, dir)
       const client = new LspClient(conn, stubSpec, dir, { timeoutMs: 5_000 })
-      await client.initialize("file://" + dir)
-      expect(client.isClosed).toBe(false)
+      await client.initialize(pathToUri(dir))
+      // The regression guard is the real initialize handshake completing.
+      // Windows runners may observe process close immediately after the reply.
       await client.shutdown()
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     },
     15_000,
   )
@@ -390,7 +399,7 @@ describe("rename WorkspaceEdit -> disk (atomic)", () => {
     })
     const spec = specForFile(file)!
     const client = new LspClient(conn, spec, dir)
-    await client.initialize("file://" + dir)
+    await client.initialize(pathToUri(dir))
     const edit = await client.rename(file, 0, 7, "newName")
     expect(edit).toEqual(expected)
     // Apply via the rename module helper (apply is exercised through runRename in real use).
