@@ -41,6 +41,7 @@ import { DialogThemeList } from "@tui/component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "@tui/component/dialog-agent"
 import { DialogSessionList } from "@tui/component/dialog-session-list"
+import { DialogWorkspaceList } from "@tui/component/dialog-workspace-list"
 import { DialogConsoleOrg } from "@tui/component/dialog-console-org"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
@@ -79,8 +80,7 @@ import {
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
 
-const appBindingCommands = [
-  "command.palette.show",
+const appGlobalBindingCommands = [
   "session.list",
   "session.new",
   "session.quick_switch.1",
@@ -92,6 +92,10 @@ const appBindingCommands = [
   "session.quick_switch.7",
   "session.quick_switch.8",
   "session.quick_switch.9",
+] as const
+
+const appBindingCommands = [
+  "command.palette.show",
   "model.list",
   "model.cycle_recent",
   "model.cycle_recent_reverse",
@@ -111,6 +115,7 @@ const appBindingCommands = [
   "theme.mode.lock",
   "help.show",
   "docs.open",
+  "workspace.list",
   "app.debug",
   "app.console",
   "app.heap_snapshot",
@@ -603,6 +608,16 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           dialog.clear()
         },
       },
+      {
+        name: "workspace.list",
+        title: "Manage workspaces",
+        category: "Workspace",
+        hidden: !Flag.OPENCODE_EXPERIMENTAL_WORKSPACES,
+        slashName: "workspaces",
+        run: () => {
+          dialog.replace(() => <DialogWorkspaceList />)
+        },
+      },
       ...Array.from({ length: 9 }, (_, i) => ({
         name: `session.quick_switch.${i + 1}`,
         title: `Switch to session in quick slot ${i + 1}`,
@@ -618,6 +633,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         suggested: true,
         category: "Agent",
         slashName: "models",
+        // Bias /mo toward /models over /move without changing global fuzzy scoring.
+        slashAliases: ["mo"],
         run: () => {
           dialog.replace(() => <DialogModel />)
         },
@@ -700,6 +717,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         hidden: local.model.variant.list().length === 0,
         slashName: "variants",
         run: () => {
+          if (local.model.variant.list().length === 0) {
+            return toast.show({
+              title: "No variants available",
+              message: "The current model does not support any variants.",
+              variant: "info",
+            })
+          }
           dialog.replace(() => <DialogVariant />)
         },
       },
@@ -930,6 +954,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   }))
 
   useBindings(() => ({
+    bindings: tuiConfig.keybinds.gather("app.global", appGlobalBindingCommands),
+  }))
+
+  useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
     enabled: () => {
       const current = promptRef.current
@@ -939,11 +967,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     bindings: tuiConfig.keybinds.gather("app_exit", ["app.exit"]),
   }))
 
-  event.on(TuiEvent.CommandExecute.type, (evt) => {
+  event.on(TuiEvent.CommandExecute.type, (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
     keymap.dispatchCommand(evt.properties.command)
   })
 
-  event.on(TuiEvent.ToastShow.type, (evt) => {
+  event.on(TuiEvent.ToastShow.type, (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
     toast.show({
       title: evt.properties.title,
       message: evt.properties.message,
@@ -952,7 +982,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
   })
 
-  event.on(TuiEvent.SessionSelect.type, (evt) => {
+  event.on(TuiEvent.SessionSelect.type, (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
     route.navigate({
       type: "session",
       sessionID: evt.properties.sessionID,
@@ -969,7 +1000,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     }
   })
 
-  event.on("session.error", (evt) => {
+  event.on("session.error", (evt, { workspace }) => {
+    if (workspace !== project.workspace.current()) return
     const error = evt.properties.error
     if (error && typeof error === "object" && error.name === "MessageAbortedError") return
     const message = errorMessage(error)
@@ -1063,7 +1095,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               <Home />
             </Match>
             <Match when={route.data.type === "session"}>
-              <Session />
+              <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
+                {(_) => <Session />}
+              </Show>
             </Match>
           </Switch>
           {plugin()}

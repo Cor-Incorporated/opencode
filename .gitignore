@@ -7,6 +7,8 @@ node_modules
 .idea
 .vscode
 .codex
+.claude/state/
+.opencode/guardrails/
 *~
 playground
 tmp
@@ -15,6 +17,8 @@ ts-dist
 .turbo
 **/.serena
 .serena/
+**/.omo
+.omo/
 /result
 refs
 Session.vim
@@ -30,3 +34,5 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+packages/opencode/.opencode/
+packages/opencode/src/provider/models-snapshot.*
