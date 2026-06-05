@@ -8,6 +8,7 @@ const command = `bun run dev -- --host 0.0.0.0 --port ${port}`
 const reuse = !process.env.CI
 const workers = Number(process.env.PLAYWRIGHT_WORKERS ?? (process.env.CI ? 5 : 0)) || undefined
 const reporter = [["html", { outputFolder: "e2e/playwright-report", open: "never" }], ["line"]] as const
+const browserChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL === "chrome" ? "chrome" : undefined
 
 if (process.env.PLAYWRIGHT_JUNIT_OUTPUT) {
   reporter.push(["junit", { outputFile: process.env.PLAYWRIGHT_JUNIT_OUTPUT }])
@@ -44,7 +45,9 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: browserChannel
+        ? { ...devices["Desktop Chrome"], channel: browserChannel }
+        : { ...devices["Desktop Chrome"] },
     },
   ],
 })
