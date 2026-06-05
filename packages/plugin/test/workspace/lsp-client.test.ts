@@ -319,7 +319,7 @@ describe("LSP connection factory (Bun-spawn regression)", () => {
       // The regression guard is the real initialize handshake completing.
       // Windows runners may observe process close immediately after the reply.
       await client.shutdown()
-      await rm(dir, { recursive: true, force: true })
+      await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     },
     15_000,
   )
