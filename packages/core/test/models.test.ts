@@ -174,7 +174,10 @@ describe("ModelsDev Service", () => {
       expect(result).toEqual(fixture2)
       expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture2))
       const final = yield* Ref.get(state)
-      expect(final.calls.length).toBe(1)
+      // Enabling fetch for this test can also start the layer's eager refresh
+      // fork; Windows runners may observe that background fetch before the
+      // assertion. The recovery behavior only requires at least one fresh fetch.
+      expect(final.calls.length).toBeGreaterThanOrEqual(1)
     }),
   )
 

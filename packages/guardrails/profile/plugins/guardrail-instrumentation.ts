@@ -305,11 +305,7 @@ function traceabilityEvidence(text: string) {
 function integrationTestEvidence(contents: { file: string; text: string }[], instrumentationFiles: string[]) {
   const targets = instrumentationFiles.map((file) => path.basename(file).replace(/\.[^.]+$/, ""))
   return contents
-    .filter((item) =>
-      /(^|\/)(test|tests|__tests__)\/.*(?:integration|e2e|smoke|instrument|metric).*\.test\.(ts|tsx|js|jsx)$|(?:integration|e2e|smoke)\.test\.(ts|tsx|js|jsx)$/i.test(
-        item.file,
-      ),
-    )
+    .filter((item) => integrationEvidenceTestFile(item.file))
     .some((item) => {
       if (/\bexpect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)/.test(item.text)) return false
       if (
@@ -320,6 +316,16 @@ function integrationTestEvidence(contents: { file: string; text: string }[], ins
         return true
       return targets.some((target) => target && item.text.includes(target))
     })
+}
+
+function integrationEvidenceTestFile(file: string) {
+  const normalized = file.replaceAll("\\", "/")
+  const evidencePath = /(?:^|\/)(test|tests|__tests__)\/.*(?:integration|e2e|smoke|instrument|metric)/i.test(
+    normalized,
+  )
+  if (evidencePath && /\.(?:test)\.(?:ts|tsx|js|jsx)$/i.test(normalized)) return true
+  if (evidencePath && /(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$/i.test(normalized)) return true
+  return /(?:integration|e2e|smoke)\.test\.(?:ts|tsx|js|jsx)$/i.test(normalized)
 }
 
 function metricSemanticsEvidence(text: string) {
