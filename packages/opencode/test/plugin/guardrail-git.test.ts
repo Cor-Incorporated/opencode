@@ -544,6 +544,14 @@ describe("guardrail-git", () => {
 
     await expect(
       git.bashBeforeGit(
+        "gh pr create -R Cor-Incorporated/opencode -B dev --head=other-owner:feature --title 'fix: guard' --body 'Closes #1'",
+        {},
+        data,
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
         "gh pr create -R Cor-Incorporated/opencode -B dev --head feature --title 'fix: guard' --body 'Closes #1'",
         {},
         data,
@@ -569,7 +577,7 @@ describe("guardrail-git", () => {
         {},
         {},
       ),
-    ).rejects.toThrow("opencode PR creation blocked")
+    ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
       git.bashBeforeGit(
@@ -577,7 +585,7 @@ describe("guardrail-git", () => {
         {},
         {},
       ),
-    ).rejects.toThrow("opencode PR creation blocked")
+    ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
       git.bashBeforeGit(
@@ -585,7 +593,7 @@ describe("guardrail-git", () => {
         {},
         {},
       ),
-    ).rejects.toThrow("opencode PR creation blocked")
+    ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
       git.bashBeforeGit(
@@ -593,7 +601,7 @@ describe("guardrail-git", () => {
         {},
         {},
       ),
-    ).rejects.toThrow("opencode PR creation blocked")
+    ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
       git.bashBeforeGit(
@@ -601,7 +609,7 @@ describe("guardrail-git", () => {
         {},
         {},
       ),
-    ).rejects.toThrow("opencode PR creation blocked")
+    ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
       git.bashBeforeGit(
@@ -609,7 +617,7 @@ describe("guardrail-git", () => {
         {},
         {},
       ),
-    ).resolves.toBeUndefined()
+    ).rejects.toThrow("REST pull request creation blocked")
   })
 
   test("allows read-only opencode GitHub API PR listing", async () => {

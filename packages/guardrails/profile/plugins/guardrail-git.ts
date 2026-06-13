@@ -22,6 +22,7 @@ type Review = {
 export function createGitHandlers(ctx: GuardrailContext, review: Review) {
   const protectedBranchNames = ["main", "master", "develop", "dev"]
   const opencodeForkRepo = "Cor-Incorporated/opencode"
+  const opencodeForkOwner = "Cor-Incorporated"
   const opencodeUpstreamRepo = "anomalyco/opencode"
   const opencodeBaseBranch = "dev"
   let opencodeWorktree: boolean | undefined
@@ -324,7 +325,15 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
         )
       }
 
-      const target = ghPrCreate(tokens) ?? ghApiPrCreate(tokens)
+      if (ghApiPrCreate(tokens)) {
+        const reason = "opencode REST pull request creation blocked"
+        await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: reason })
+        throw new Error(
+          `Guardrail policy blocked this action: opencode REST pull request creation blocked. Use gh pr create --repo ${opencodeForkRepo} --base ${opencodeBaseBranch} instead.`,
+        )
+      }
+
+      const target = ghPrCreate(tokens)
       if (!target) continue
 
       const reason =
@@ -332,8 +341,8 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
           ? `opencode PR target repo must be ${opencodeForkRepo}`
           : target.base !== opencodeBaseBranch
             ? `opencode PR base must be ${opencodeBaseBranch}`
-            : target.head.toLowerCase().startsWith("anomalyco:")
-              ? `opencode PR head cannot use ${opencodeUpstreamRepo}`
+            : target.head.includes(":") && !target.head.toLowerCase().startsWith(`${opencodeForkOwner.toLowerCase()}:`)
+              ? `opencode PR head owner must be ${opencodeForkOwner}`
               : ""
       if (!reason) continue
 
