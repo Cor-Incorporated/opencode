@@ -9,7 +9,32 @@
     "id": "local",
     "name": "Local",
     "env": [],
-    "models": {}
+    "models": {
+      "native-effort": {
+        "id": "native-effort",
+        "name": "Native Effort",
+        "family": "local",
+        "release_date": "2026-06-13",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["high"]
+          }
+        ],
+        "temperature": true,
+        "tool_call": true,
+        "limit": {
+          "context": 100000,
+          "output": 4096
+        },
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        }
+      }
+    }
   },
   "zai-coding-plan": {
     "id": "zai-coding-plan",
@@ -29,6 +54,14 @@
           {
             "type": "effort",
             "values": ["high", "max"]
+          },
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "budget_tokens",
+            "min": 1024,
+            "max": 131072
           }
         ],
         "temperature": true,
@@ -74,6 +107,37 @@
         "limit": {
           "context": 1000000,
           "output": 131072
+        },
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        }
+      },
+      "empty-modes": {
+        "id": "empty-modes",
+        "name": "Empty Modes",
+        "family": "glm",
+        "release_date": "2026-06-13",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": ["high", "max"]
+          }
+        ],
+        "temperature": true,
+        "tool_call": true,
+        "experimental": {
+          "modes": {}
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 131072
+        },
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
         }
       }
     }

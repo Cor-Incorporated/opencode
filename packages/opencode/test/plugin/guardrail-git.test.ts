@@ -123,6 +123,12 @@ async function branchFixture(branch: string) {
   return fixture
 }
 
+async function opencodeFixture() {
+  const fixture = await diffFixture("docs/placeholder.md")
+  await Bun.$`git remote add origin git@github.com:Cor-Incorporated/opencode.git`.cwd(fixture.ctx.input.worktree).quiet()
+  return fixture
+}
+
 function fakeGh(handler: (args: string[]) => { stdout?: string; stderr?: string; code?: number }) {
   const original = Bun.spawn
   Bun.spawn = ((command: string[] | { cmd: string[] }, options?: object) => {
@@ -505,6 +511,186 @@ describe("guardrail-git", () => {
     } finally {
       restore()
     }
+  })
+
+  test("blocks opencode PR creation unless it targets fork dev", async () => {
+    await using fixture = await opencodeFixture()
+    const git = createGitHandlers(fixture.ctx, review())
+    const data = { tests_executed: true, type_checked: true }
+
+    await expect(
+      git.bashBeforeGit(
+        "gh pr create --repo=anomalyco/opencode --base=dev --title 'fix: guard' --body 'Closes #1'",
+        {},
+        data,
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh pr create -RCor-Incorporated/opencode --base=main --title 'fix: guard' --body 'Closes #1'",
+        {},
+        data,
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh pr create -R Cor-Incorporated/opencode -B dev --head=anomalyco:feature --title 'fix: guard' --body 'Closes #1'",
+        {},
+        data,
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh pr create -R Cor-Incorporated/opencode -B dev --head feature --title 'fix: guard' --body 'Closes #1'",
+        {},
+        data,
+      ),
+    ).resolves.toBeUndefined()
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api repos/Cor-Incorporated/opencode/pulls --method GET&&gh pr create -R anomalyco/opencode -B dev --title 'fix: guard' --body 'Closes #1'",
+        {},
+        data,
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+  })
+
+  test("blocks opencode GitHub API PR creation bypasses", async () => {
+    await using fixture = await opencodeFixture()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api https://api.github.com/repos/anomalyco/opencode/pulls -f title='fix: guard' -f head=feature -f base=dev",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api repos/anomalyco/opencode/pulls/ -f title='fix: guard' -f head=feature -f base=dev",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api /repos/Cor-Incorporated/opencode/pulls -F title='fix: guard' -F head=feature -F base=main",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api repos/Cor-Incorporated/opencode/pulls --raw-field title='fix: guard' --field head=anomalyco:feature --field base=dev",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api repos/Cor-Incorporated/opencode/pulls --input payload.json",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("opencode PR creation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api repos/Cor-Incorporated/opencode/pulls -f title='fix: guard' -f head=feature -f base=dev",
+        {},
+        {},
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  test("allows read-only opencode GitHub API PR listing", async () => {
+    await using fixture = await opencodeFixture()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit("gh api repos/anomalyco/opencode/pulls --method GET", {}, {}),
+    ).resolves.toBeUndefined()
+
+    await expect(
+      git.bashBeforeGit("gh api repos/anomalyco/opencode/pulls --method GET --input payload.json", {}, {}),
+    ).resolves.toBeUndefined()
+  })
+
+  test("blocks opencode GraphQL createPullRequest mutations", async () => {
+    await using fixture = await opencodeFixture()
+    const git = createGitHandlers(fixture.ctx, review())
+    await Bun.write(
+      path.join(fixture.ctx.input.worktree, "create-pr.graphql"),
+      'mutation Create { createPullRequest(input: { repositoryId: "repo", baseRefName: "main", headRefName: "feature", title: "x" }) { pullRequest { number } } }',
+    )
+    await Bun.write(
+      path.join(fixture.ctx.input.worktree, "create-pr.json"),
+      '{"query":"mutation Create { createPullRequest(input: { repositoryId: \\"repo\\" }) { clientMutationId } }"}',
+    )
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api https://api.github.com/graphql/ -f query='mutation { createPullRequest(input: { repositoryId: \"repo\" }) { pullRequest { number } } }'",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
+
+    await expect(
+      git.bashBeforeGit(
+        "gh api graphql --method POST --field query='mutation Create { createPullRequest(input: { repositoryId: \"repo\" }) { clientMutationId } }'",
+        {},
+        {},
+      ),
+    ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
+
+    await expect(
+      git.bashBeforeGit("gh api graphql -F query=@create-pr.graphql", {}, {}),
+    ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
+
+    await expect(
+      git.bashBeforeGit("gh api graphql --input create-pr.json", {}, {}),
+    ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
+
+    await expect(git.bashBeforeGit("gh api graphql -F query=@-", {}, {})).rejects.toThrow(
+      "GraphQL createPullRequest mutation blocked",
+    )
+
+    await expect(git.bashBeforeGit("gh api graphql -f query=$QUERY", {}, {})).rejects.toThrow(
+      "GraphQL createPullRequest mutation blocked",
+    )
+
+    await expect(git.bashBeforeGit('gh api graphql -f query="$(cat create-pr.graphql)"', {}, {})).rejects.toThrow(
+      "GraphQL createPullRequest mutation blocked",
+    )
+  })
+
+  test("allows read-only opencode GraphQL queries", async () => {
+    await using fixture = await opencodeFixture()
+    const git = createGitHandlers(fixture.ctx, review())
+    await Bun.write(path.join(fixture.ctx.input.worktree, "viewer.graphql"), "query Viewer { viewer { login } }")
+    await Bun.write(path.join(fixture.ctx.input.worktree, "viewer.json"), '{"query":"query Viewer { viewer { login } }"}')
+
+    await expect(
+      git.bashBeforeGit("gh api graphql -f query='query Viewer { viewer { login } }'", {}, {}),
+    ).resolves.toBeUndefined()
+
+    await expect(
+      git.bashBeforeGit("gh api graphql -f query='query Viewer($login: String!) { user(login: $login) { id } }'", {}, {}),
+    ).resolves.toBeUndefined()
+
+    await expect(git.bashBeforeGit("gh api graphql -F query=@viewer.graphql", {}, {})).resolves.toBeUndefined()
+
+    await expect(git.bashBeforeGit("gh api graphql --input viewer.json", {}, {})).resolves.toBeUndefined()
   })
 
   test("uses dev branch for PR deploy verification and main-base blocking", async () => {

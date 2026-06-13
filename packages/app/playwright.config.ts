@@ -7,7 +7,10 @@ const serverPort = process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"
 const command = `bun run dev -- --host 0.0.0.0 --port ${port}`
 const reuse = !process.env.CI
 const workers = Number(process.env.PLAYWRIGHT_WORKERS ?? (process.env.CI ? 5 : 0)) || undefined
-const reporter = [["html", { outputFolder: "e2e/playwright-report", open: "never" }], ["line"]] as const
+const reporter: Array<["html", { outputFolder: string; open: "never" }] | ["line"] | ["junit", { outputFile: string }]> = [
+  ["html", { outputFolder: "e2e/playwright-report", open: "never" }],
+  ["line"],
+]
 const browserChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL === "chrome" ? "chrome" : undefined
 const video = browserChannel ? "off" : "retain-on-failure"
 

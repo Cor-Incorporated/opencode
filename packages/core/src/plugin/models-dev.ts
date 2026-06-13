@@ -1,7 +1,9 @@
 import { DateTime, Effect, Scope, Stream } from "effect"
 import { Catalog } from "../catalog"
+import { Integration } from "../integration"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
+import { ModelRequest } from "../model-request"
 import { ModelsDev } from "../models-dev"
 import { PluginV2 } from "../plugin"
 import { ProviderV2 } from "../provider"
@@ -39,25 +41,29 @@ function cost(input: ModelsDev.Model["cost"]) {
 }
 
 function variants(model: ModelsDev.Model, packageName?: string) {
-  const modes = Object.entries(model.experimental?.modes ?? {})
-  if (modes.length === 0) return reasoningOptionVariants(model, packageName)
-  return modes.map(([id, item]) => ({
-    id: ModelV2.VariantID.make(id),
-    headers: { ...(item.provider?.headers ?? {}) },
-    body: { ...(item.provider?.body ?? {}) },
-  }))
+  if (model.experimental?.modes === undefined) return reasoningOptionVariants(model, packageName)
+  return Object.entries(model.experimental.modes).map(([id, item]) => {
+    const request = ModelRequest.normalizeAiSdkOptions(packageName, item.provider?.body ?? {})
+    return {
+      id: ModelV2.VariantID.make(id),
+      headers: { ...(item.provider?.headers ?? {}) },
+      ...request,
+    }
+  })
 }
 
 function reasoningOptionVariants(model: ModelsDev.Model, packageName?: string) {
   const effort = model.reasoning_options?.find((item) => item.type === "effort")
-  if (!effort || packageName !== "@ai-sdk/openai-compatible") return []
+  if (!effort) return []
   return effort.values.flatMap((value) => {
     if (typeof value !== "string") return []
+    const request = ModelRequest.normalizeAiSdkOptions(packageName, { reasoningEffort: value })
+    if (request.options.reasoningEffort !== value) return []
     return [
       {
         id: ModelV2.VariantID.make(value),
         headers: {},
-        body: { reasoningEffort: value },
+        ...request,
       },
     ]
   })
@@ -67,12 +73,34 @@ export const ModelsDevPlugin = PluginV2.define({
   id: PluginV2.ID.make("models-dev"),
   effect: Effect.gen(function* () {
     const catalog = yield* Catalog.Service
+    const integrations = yield* Integration.Service
     const modelsDev = yield* ModelsDev.Service
     const events = yield* EventV2.Service
     const scope = yield* Scope.Scope
     const transform = yield* catalog.transform()
+    const integrationTransform = yield* integrations.transform()
     const refresh = Effect.fn("ModelsDevPlugin.refresh")(function* () {
       const data = yield* modelsDev.get()
+      yield* integrationTransform((integrations) => {
+        for (const item of Object.values(data)) {
+          if (item.env.length === 0) continue
+          const integrationID = Integration.ID.make(item.id)
+          integrations.update(integrationID, (integration) => (integration.name = item.name))
+          integrations.method.update({
+            integrationID,
+            method: new Integration.KeyMethod({
+              type: "key",
+            }),
+          })
+          integrations.method.update({
+            integrationID,
+            method: new Integration.EnvMethod({
+              type: "env",
+              names: [...item.env],
+            }),
+          })
+        }
+      })
       yield* transform((catalog) => {
         for (const item of Object.values(data)) {
           const providerID = ProviderV2.ID.make(item.id)

@@ -45,7 +45,7 @@ load(process.cwd())
 process.env.OPENCODE_CONFIG_DIR ||= dir
 process.env.OPENCODE_EXPERIMENTAL_PLAN_MODE ||= "true"
 
-const out = spawnSync(bin(), process.argv.slice(2), {
+const out = spawnSync(process.env.OPENCODE_BIN_PATH || bin(), process.argv.slice(2), {
   stdio: "inherit",
   env: process.env,
 })
