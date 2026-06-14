@@ -13,6 +13,12 @@ afterEach(async () => {
 test("team uses default limit when caller omits limit", async () => {
   await using tmp = await tmpdir({ git: true })
   let prompted = false
+  let model:
+    | {
+        providerID: string
+        modelID: string
+      }
+    | undefined
 
   const plugin = await team({
     client: {
@@ -33,8 +39,9 @@ test("team uses default limit when caller omits limit", async () => {
         async create() {
           return { data: { id: "ses_child" } }
         },
-        async promptAsync() {
+        async promptAsync(input) {
           prompted = true
+          model = input.body.model
           return {}
         },
         async prompt() {
@@ -98,6 +105,11 @@ test("team uses default limit when caller omits limit", async () => {
   )
 
   expect(prompted).toBe(true)
+  expect(model).toEqual({
+    providerID: "zai-coding-plan",
+    modelID: "glm-5.2",
+  })
+  expect(out).toContain("model=zai-coding-plan/glm-5.2")
   expect(out).toContain("default-limit: done")
 })
 
@@ -330,7 +342,7 @@ test("team worker model inherits the parent session model", async () => {
       agent: "implement",
       model: {
         providerID: "zai-coding-plan",
-        modelID: "glm-5.1",
+        modelID: "glm-5.2",
       },
     },
     {
@@ -370,10 +382,10 @@ test("team worker model inherits the parent session model", async () => {
     },
   )
 
-  expect(out).toContain("model=zai-coding-plan/glm-5.1")
+  expect(out).toContain("model=zai-coding-plan/glm-5.2")
   expect(model).toEqual({
     providerID: "zai-coding-plan",
-    modelID: "glm-5.1",
+    modelID: "glm-5.2",
   })
 })
 

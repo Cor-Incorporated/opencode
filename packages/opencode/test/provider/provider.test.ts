@@ -1310,6 +1310,75 @@ test("models.dev normalization fills required response fields", () => {
   expect(model.release_date).toBe("")
 })
 
+test("models.dev reasoning effort options synthesize legacy provider variants", () => {
+  const provider = {
+    id: "zai-coding-plan",
+    name: "Z.AI Coding Plan",
+    env: [],
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "glm-5.2": {
+        id: "glm-5.2",
+        name: "GLM-5.2",
+        release_date: "2026-06-01",
+        attachment: false,
+        reasoning: true,
+        temperature: true,
+        tool_call: true,
+        reasoning_options: [{ type: "effort", values: ["high", "max"] }],
+        limit: { context: 1_000_000, output: 131_072 },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  const model = Provider.fromModelsDevProvider(provider).models["glm-5.2"]
+  expect(model.variants).toEqual({
+    high: { reasoningEffort: "high" },
+    max: { reasoningEffort: "max" },
+  })
+})
+
+test("models.dev experimental modes stay higher priority than reasoning option variants", () => {
+  const provider = {
+    id: "zai-coding-plan",
+    name: "Z.AI Coding Plan",
+    env: [],
+    npm: "@ai-sdk/openai-compatible",
+    models: {
+      "mode-priority": {
+        id: "mode-priority",
+        name: "Mode Priority",
+        release_date: "2026-06-01",
+        attachment: false,
+        reasoning: true,
+        temperature: true,
+        tool_call: true,
+        reasoning_options: [{ type: "effort", values: ["high", "max"] }],
+        experimental: {
+          modes: {
+            high: {
+              provider: {
+                body: {
+                  reasoningEffort: "high",
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+        limit: { context: 1_000_000, output: 131_072 },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  const providerInfo = Provider.fromModelsDevProvider(provider)
+  expect(providerInfo.models["mode-priority"].variants).toEqual({})
+  expect(providerInfo.models["mode-priority-high"].options).toEqual({
+    reasoningEffort: "high",
+    serviceTier: "priority",
+  })
+})
+
 it.instance("model variants are generated for reasoning models", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")
