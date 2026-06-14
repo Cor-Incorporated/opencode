@@ -57,6 +57,11 @@ esac
 ACTIVE_BINARY="$PACKAGE/dist/opencode-$platform-$arch/bin/opencode"
 CACHED_BUNDLE="$PACKAGE/bin/.opencode"
 CACHED_TARGET="../dist/opencode-$platform-$arch/bin/opencode"
+ZAI_CODING_PLAN_PROVIDER="zai-coding-plan"
+ZAI_CODING_PLAN_MODEL="glm-5.2"
+ZAI_CODING_PLAN_MODEL_REF="$ZAI_CODING_PLAN_PROVIDER/$ZAI_CODING_PLAN_MODEL"
+ZAI_CODING_PLAN_STALE_DEFAULT="$ZAI_CODING_PLAN_PROVIDER/glm-5.1"
+MANAGED_PROFILE="$ROOT/packages/guardrails/managed/opencode.json"
 
 usage() {
   cat <<'EOF'
@@ -64,7 +69,7 @@ Usage:
   bun run local:deploy
   bun run local:check
   bun run local:fix
-  bash scripts/local-dev-deploy.sh [--check|--fix|--no-build]
+  bash scripts/local-dev-deploy.sh [--check|--fix|--no-build|--check-zai-coding-plan|--check-openrouter-catalog]
 
 Deploy the local opencode development build into the fixed local runtime path.
 
@@ -78,6 +83,10 @@ Modes:
   --check     validate only
   --fix       repair wrappers and symlinks without rebuilding
   --no-build  alias for --fix
+  --check-zai-coding-plan
+              validate only the local Z.AI Coding Plan catalog/default scenario
+  --check-openrouter-catalog
+              validate OpenRouter whitelist freshness against live official catalogs
 EOF
 }
 
@@ -86,6 +95,8 @@ case "${1:-}" in
   "") ;;
   --check) mode="check" ;;
   --fix|--no-build) mode="fix" ;;
+  --check-zai-coding-plan) mode="check-zai-coding-plan" ;;
+  --check-openrouter-catalog) mode="check-openrouter-catalog" ;;
   -h|--help) usage; exit 0 ;;
   *) usage; exit 2 ;;
 esac
@@ -262,6 +273,91 @@ guardrails_team_plugin_loads() {
   ' "$GUARDRAILS_PROFILE/opencode.json" "$GUARDRAILS_PROFILE" >/dev/null
 }
 
+guardrails_team_fallback_smoke() {
+  "$BUN_BIN" --conditions=browser --eval '
+    const { mkdtemp, rm } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { pathToFileURL } = await import("node:url")
+
+    const dir = await mkdtemp(join(tmpdir(), "opencode-local-team-fallback-"))
+    try {
+      await Bun.write(join(dir, "README.md"), "# local team fallback smoke\n")
+      await Bun.$`git init`.cwd(dir).quiet()
+      await Bun.$`git config core.fsmonitor false`.cwd(dir).quiet()
+      await Bun.$`git config commit.gpgsign false`.cwd(dir).quiet()
+      await Bun.$`git config user.email "local-check@opencode.test"`.cwd(dir).quiet()
+      await Bun.$`git config user.name "OpenCode Local Check"`.cwd(dir).quiet()
+      await Bun.$`git add README.md`.cwd(dir).quiet()
+      await Bun.$`git commit -m seed`.cwd(dir).quiet()
+
+      const mod = await import(pathToFileURL(join(process.argv[1], "plugins/team.ts")).href)
+      let model
+      const plugin = await mod.default({
+        client: {
+          permission: { list: async () => ({ data: [] }) },
+          question: { list: async () => ({ data: [] }) },
+          session: {
+            get: async () => ({ data: { permission: [] } }),
+            create: async () => ({ data: { id: "ses_child_fallback_model" } }),
+            promptAsync: async (input) => {
+              model = input.body.model
+              return {}
+            },
+            prompt: async () => ({}),
+            status: async () => ({ data: { ses_child_fallback_model: { type: "idle" } } }),
+            messages: async () => ({
+              data: [
+                {
+                  info: { role: "assistant", time: { completed: Date.now() } },
+                  parts: [{ type: "text", text: "done" }],
+                },
+              ],
+            }),
+            abort: async () => ({}),
+          },
+        },
+        worktree: dir,
+        directory: dir,
+      })
+
+      const output = await plugin.tool.team.execute(
+        {
+          tasks: [
+            {
+              id: "fallback-model",
+              prompt: "Inspect the local runtime fallback model without a recorded parent model.",
+              write: false,
+              worktree: false,
+            },
+          ],
+        },
+        {
+          sessionID: "ses_parent_without_model",
+          messageID: "msg_parent_without_model",
+          agent: "implement",
+          directory: dir,
+          worktree: dir,
+          abort: new AbortController().signal,
+          ask: async () => undefined,
+          metadata() {},
+        },
+      )
+
+      if (!output.includes("model=zai-coding-plan/glm-5.2")) {
+        console.error(`team fallback output did not expose GLM-5.2: ${output}`)
+        process.exit(1)
+      }
+      if (model?.providerID !== "zai-coding-plan" || model?.modelID !== "glm-5.2") {
+        console.error(`team fallback model was ${JSON.stringify(model)}, expected zai-coding-plan/glm-5.2`)
+        process.exit(1)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  ' "$GUARDRAILS_PROFILE" >/dev/null
+}
+
 entrypoint_guardrails_smoke() {
   local dir output
   dir="$(mktemp -d)"
@@ -275,6 +371,193 @@ entrypoint_guardrails_smoke() {
   grep -Fq "terminal: opencode-local-env-smoke" <<<"$output" &&
     grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail.ts" <<<"$output" &&
     grep -Fq "$GUARDRAILS_PROFILE/plugins/team.ts" <<<"$output"
+}
+
+zai_coding_plan_catalog_smoke() {
+  local dir output
+  dir="$(mktemp -d)"
+  if ! output="$(
+    cd "$dir" &&
+      env \
+        -u OPENCODE_CONFIG \
+        -u OPENCODE_CONFIG_CONTENT \
+        -u OPENCODE_CONFIG_DIR \
+        -u OPENCODE_PURE \
+        -u TERM_PROGRAM \
+        -u TERM_PROGRAM_VERSION \
+        HOME="$dir/home" \
+        OPENCODE_DISABLE_MODELS_FETCH=1 \
+        OPENCODE_TEST_HOME="$dir/home" \
+        XDG_CACHE_HOME="$dir/cache" \
+        XDG_CONFIG_HOME="$dir/config" \
+        XDG_DATA_HOME="$dir/data" \
+        XDG_STATE_HOME="$dir/state" \
+        "$ENTRYPOINT" models "$ZAI_CODING_PLAN_PROVIDER"
+  )"; then
+    rm -rf "$dir"
+    printf 'failed to query local runtime model catalog\n' >&2
+    return 1
+  fi
+  rm -rf "$dir"
+
+  if ! grep -Fxq "$ZAI_CODING_PLAN_MODEL_REF" <<<"$output"; then
+    printf 'missing local runtime model: %s\n' "$ZAI_CODING_PLAN_MODEL_REF" >&2
+    return 1
+  fi
+}
+
+zai_coding_plan_variant_smoke() {
+  local dir output model_json
+  dir="$(mktemp -d)"
+  if ! output="$(
+    cd "$dir" &&
+      env \
+        -u OPENCODE_CONFIG \
+        -u OPENCODE_CONFIG_CONTENT \
+        -u OPENCODE_CONFIG_DIR \
+        -u OPENCODE_PURE \
+        -u TERM_PROGRAM \
+        -u TERM_PROGRAM_VERSION \
+        HOME="$dir/home" \
+        OPENCODE_DISABLE_MODELS_FETCH=1 \
+        OPENCODE_TEST_HOME="$dir/home" \
+        XDG_CACHE_HOME="$dir/cache" \
+        XDG_CONFIG_HOME="$dir/config" \
+        XDG_DATA_HOME="$dir/data" \
+        XDG_STATE_HOME="$dir/state" \
+        "$ENTRYPOINT" models "$ZAI_CODING_PLAN_PROVIDER" --verbose
+  )"; then
+    rm -rf "$dir"
+    printf 'failed to query local runtime verbose model catalog\n' >&2
+    return 1
+  fi
+  rm -rf "$dir"
+
+  model_json="$(awk -v model="$ZAI_CODING_PLAN_MODEL_REF" '
+    $0 == model { capture = 1; next }
+    capture && /^zai-coding-plan\// { exit }
+    capture { print }
+  ' <<<"$output")"
+  if [[ -z "$model_json" ]]; then
+    printf 'missing verbose model metadata: %s\n' "$ZAI_CODING_PLAN_MODEL_REF" >&2
+    return 1
+  fi
+  if ! grep -Fq '"high"' <<<"$model_json" || ! grep -Fq '"reasoningEffort": "high"' <<<"$model_json"; then
+    printf 'missing high reasoning variant for %s\n' "$ZAI_CODING_PLAN_MODEL_REF" >&2
+    return 1
+  fi
+  if ! grep -Fq '"max"' <<<"$model_json" || ! grep -Fq '"reasoningEffort": "max"' <<<"$model_json"; then
+    printf 'missing max reasoning variant for %s\n' "$ZAI_CODING_PLAN_MODEL_REF" >&2
+    return 1
+  fi
+}
+
+zai_coding_plan_default_smoke() {
+  "$BUN_BIN" --eval '
+    const config = await Bun.file(process.argv[1]).json()
+    const expected = process.argv[2]
+    const stale = process.argv[3]
+    const provider = process.argv[4]
+    const model = process.argv[5]
+    if (config.model !== expected) {
+      console.error(`guardrails profile default model is ${config.model ?? "missing"}, expected ${expected}`)
+      process.exit(1)
+    }
+    if (config.model === stale) {
+      console.error(`guardrails profile keeps stale default model: ${stale}`)
+      process.exit(1)
+    }
+    const models = config.provider?.[provider]?.whitelist
+    if (!Array.isArray(models) || !models.includes(model)) {
+      console.error(`guardrails profile does not allow ${expected}`)
+      process.exit(1)
+    }
+  ' "$GUARDRAILS_PROFILE/opencode.json" "$ZAI_CODING_PLAN_MODEL_REF" "$ZAI_CODING_PLAN_STALE_DEFAULT" "$ZAI_CODING_PLAN_PROVIDER" "$ZAI_CODING_PLAN_MODEL" >/dev/null
+}
+
+openrouter_catalog_smoke() {
+  "$BUN_BIN" --eval '
+    const [profile, managed, officialResponse, modelsDevResponse] = await Promise.all([
+      Bun.file(process.argv[1]).json(),
+      Bun.file(process.argv[2]).json(),
+      fetch("https://openrouter.ai/api/v1/models"),
+      fetch("https://models.dev/api.json"),
+    ])
+
+    if (!officialResponse.ok) {
+      console.error(`OpenRouter models API returned HTTP ${officialResponse.status}`)
+      process.exit(1)
+    }
+    if (!modelsDevResponse.ok) {
+      console.error(`models.dev API returned HTTP ${modelsDevResponse.status}`)
+      process.exit(1)
+    }
+
+    const official = await officialResponse.json()
+    const modelsDev = await modelsDevResponse.json()
+    const officialByID = new Map(official.data.map((item) => [item.id, item]))
+    const modelsDevOpenRouter = modelsDev.openrouter?.models ?? {}
+    const profileWhitelist = profile.provider?.openrouter?.whitelist
+    const managedWhitelist = managed.provider?.openrouter?.whitelist
+    if (!Array.isArray(profileWhitelist) || !Array.isArray(managedWhitelist)) {
+      console.error("missing OpenRouter whitelist in guardrails profile or managed config")
+      process.exit(1)
+    }
+    if (JSON.stringify(profileWhitelist) !== JSON.stringify(managedWhitelist)) {
+      console.error("guardrails profile and managed OpenRouter whitelists differ")
+      process.exit(1)
+    }
+
+    const missingOfficial = profileWhitelist.filter((id) => !officialByID.has(id))
+    const missingModelsDev = profileWhitelist.filter((id) => modelsDevOpenRouter[id] === undefined)
+    if (missingOfficial.length || missingModelsDev.length) {
+      console.error(
+        JSON.stringify(
+          {
+            missingOfficial,
+            missingModelsDev,
+          },
+          null,
+          2,
+        ),
+      )
+      process.exit(1)
+    }
+
+    const latestFamilies = [
+      ["anthropic-opus-4", /^anthropic\/claude-opus-4\./],
+      ["google-gemini-3", /^google\/gemini-(?:3|3\.1|3\.5)/],
+      ["minimax-m", /^minimax\/minimax-m(?:2\.\d+|3)$/],
+      ["moonshot-kimi-k2", /^moonshotai\/kimi-k2/],
+      ["openai-gpt-5", /^openai\/gpt-5/],
+      ["qwen3-coder", /^qwen\/qwen3-coder/],
+      ["qwen3-plus", /^qwen\/qwen3\.\d+-plus$/],
+      ["qwen3-max", /^qwen\/qwen3\.\d+-max(?:-preview)?$/],
+      ["qwen3-flash", /^qwen\/qwen3\.\d+-flash$/],
+      ["deepseek-v", /^deepseek\/deepseek-v/],
+      ["zai-glm", /^z-ai\/glm-/],
+      ["xai-grok-4", /^x-ai\/grok-4/],
+    ]
+    const catalogBacked = Object.keys(modelsDevOpenRouter)
+      .filter((id) => officialByID.has(id))
+      .filter((id) => !id.includes(":free") && !id.startsWith("~"))
+    const missingLatest = []
+    for (const [name, pattern] of latestFamilies) {
+      const candidates = catalogBacked
+        .filter((id) => pattern.test(id))
+        .map((id) => officialByID.get(id))
+        .filter(Boolean)
+      if (candidates.length === 0) continue
+      const latestCreated = Math.max(...candidates.map((item) => Number(item.created) || 0))
+      for (const item of candidates.filter((candidate) => Number(candidate.created) === latestCreated)) {
+        if (!profileWhitelist.includes(item.id)) missingLatest.push(`${name}:${item.id}`)
+      }
+    }
+    if (missingLatest.length) {
+      console.error(`missing latest catalog-backed OpenRouter model(s): ${missingLatest.join(", ")}`)
+      process.exit(1)
+    }
+  ' "$GUARDRAILS_PROFILE/opencode.json" "$MANAGED_PROFILE" >/dev/null
 }
 
 repair_links() {
@@ -308,6 +591,32 @@ EOF
   ln -sfn "$CACHED_TARGET" "$CACHED_BUNDLE"
 }
 
+if [[ "$mode" == "check-zai-coding-plan" ]]; then
+  mark "$(zai_coding_plan_catalog_smoke && echo ok || echo fail)" "local runtime exposes $ZAI_CODING_PLAN_MODEL_REF"
+  mark "$(zai_coding_plan_variant_smoke && echo ok || echo fail)" "local runtime exposes $ZAI_CODING_PLAN_MODEL_REF high/max variants"
+  mark "$(zai_coding_plan_default_smoke && echo ok || echo fail)" "guardrails profile defaults to $ZAI_CODING_PLAN_MODEL_REF"
+
+  if [[ "$failures" -gt 0 ]]; then
+    printf '\n%s Z.AI Coding Plan check(s) failed.\n' "$failures"
+    exit 1
+  fi
+
+  printf '\nlocal Z.AI Coding Plan catalog/default scenario is fixed.\n'
+  exit 0
+fi
+
+if [[ "$mode" == "check-openrouter-catalog" ]]; then
+  mark "$(openrouter_catalog_smoke && echo ok || echo fail)" "OpenRouter whitelist matches live catalog and latest tracked families"
+
+  if [[ "$failures" -gt 0 ]]; then
+    printf '\n%s OpenRouter catalog check(s) failed.\n' "$failures"
+    exit 1
+  fi
+
+  printf '\nlocal OpenRouter catalog freshness scenario is fixed.\n'
+  exit 0
+fi
+
 if [[ "$mode" == "deploy" ]]; then
   (cd "$PACKAGE" && "$BUN_BIN" run build)
   repair_links
@@ -322,6 +631,11 @@ mark "$([[ -f "$GUARDRAILS_PROFILE/commands/plan.md" ]] && echo ok || echo fail)
 mark "$(guardrails_profile_has_team_plugin && echo ok || echo fail)" "guardrails profile enables guardrail and team plugins"
 mark "$(guardrails_policy_plugins_smoke && echo ok || echo fail)" "guardrails review/git policy smoke passes"
 mark "$(guardrails_team_plugin_loads && echo ok || echo fail)" "guardrails team plugin loads team/background/team_status"
+mark "$(guardrails_team_fallback_smoke && echo ok || echo fail)" "guardrails team fallback uses $ZAI_CODING_PLAN_MODEL_REF"
+mark "$(zai_coding_plan_catalog_smoke && echo ok || echo fail)" "local runtime exposes $ZAI_CODING_PLAN_MODEL_REF"
+mark "$(zai_coding_plan_variant_smoke && echo ok || echo fail)" "local runtime exposes $ZAI_CODING_PLAN_MODEL_REF high/max variants"
+mark "$(zai_coding_plan_default_smoke && echo ok || echo fail)" "guardrails profile defaults to $ZAI_CODING_PLAN_MODEL_REF"
+mark "$(openrouter_catalog_smoke && echo ok || echo fail)" "OpenRouter whitelist matches live catalog and latest tracked families"
 
 entry_target="$(readlink "$ENTRYPOINT" 2>/dev/null || true)"
 mark "$([[ "$entry_target" == "$LIVE_WRAPPER" ]] && echo ok || echo fail)" "entrypoint is fixed: $ENTRYPOINT -> $LIVE_WRAPPER"

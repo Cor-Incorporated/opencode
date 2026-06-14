@@ -10,6 +10,7 @@ import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
+import { ModelRequest } from "@opencode-ai/core/model-request"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Auth } from "../auth"
 import { Env } from "../env"
@@ -1215,8 +1216,26 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
 
   return {
     ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
+    variants: modelsDevVariants(provider, model, base),
   }
+}
+
+function modelsDevVariants(provider: ModelsDev.Provider, model: ModelsDev.Model, base: Model) {
+  if (model.experimental?.modes !== undefined) return {}
+
+  const transformed = ProviderTransform.variants(base)
+  if (Object.keys(transformed).length > 0) return mapValues(transformed, (v) => v)
+
+  const effort = model.reasoning_options?.find((item) => item.type === "effort")
+  if (!effort) return {}
+  return Object.fromEntries(
+    effort.values.flatMap((value) => {
+      if (typeof value !== "string") return []
+      const request = ModelRequest.normalizeAiSdkOptions(model.provider?.npm ?? provider.npm, { reasoningEffort: value })
+      if (request.options.reasoningEffort !== value) return []
+      return [[value, request.options]]
+    }),
+  )
 }
 
 export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
