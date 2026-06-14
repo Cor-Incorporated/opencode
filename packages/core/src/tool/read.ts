@@ -72,11 +72,12 @@ export const layer = Layer.effectDiscard(
                 agent: context.agent,
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
-              if (type === "directory") return yield* reader.list(target, { offset: input.offset, limit: input.limit })
-              const content = yield* reader.read(target, resource, {
-                offset: input.offset,
-                limit: input.limit,
-              })
+              const page = {
+                ...(input.offset === undefined ? {} : { offset: input.offset }),
+                ...(input.limit === undefined ? {} : { limit: input.limit }),
+              }
+              if (type === "directory") return yield* reader.list(target, page)
+              const content = yield* reader.read(target, resource, page)
               if ("encoding" in content && content.encoding === "base64" && SUPPORTED_IMAGE_MIMES.has(content.mime)) {
                 return yield* image
                   .normalize(resource, { ...content, encoding: "base64" })
