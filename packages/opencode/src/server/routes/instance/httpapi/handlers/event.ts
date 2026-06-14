@@ -2,15 +2,14 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@opencode-ai/core/event"
-import * as Log from "@opencode-ai/core/util/log"
+import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import type { InstanceContext } from "@/project/instance-context"
 import { Effect, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { EventApi } from "../groups/event"
-
-const log = Log.create({ service: "server" })
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -23,6 +22,41 @@ function eventData(data: unknown): Sse.Event {
 
 function eventID() {
   return EventV2.ID.create()
+}
+
+function eventLocation(instance: InstanceContext, workspaceID: WorkspaceV2.ID | undefined, event?: EventV2.Payload) {
+  const selectedWorkspaceID = event?.location?.workspaceID ?? workspaceID
+  return {
+    directory: event?.location?.directory ?? instance.directory,
+    ...(selectedWorkspaceID ? { workspaceID: selectedWorkspaceID } : {}),
+    project: { id: instance.project.id, directory: instance.worktree },
+  }
+}
+
+function streamEvent(instance: InstanceContext, workspaceID: WorkspaceV2.ID | undefined, event: EventV2.Payload) {
+  return {
+    id: event.id,
+    type: event.type,
+    location: eventLocation(instance, workspaceID, event),
+    data: event.data,
+    properties: event.data,
+  }
+}
+
+function serverEvent(
+  instance: InstanceContext,
+  workspaceID: WorkspaceV2.ID | undefined,
+  type: string,
+  data: unknown = {},
+  id: string = eventID(),
+) {
+  return {
+    id,
+    type,
+    location: eventLocation(instance, workspaceID),
+    data,
+    properties: data,
+  }
 }
 
 function eventResponse(events: EventV2.Interface) {
@@ -40,19 +74,24 @@ function eventResponse(events: EventV2.Interface) {
           event.location?.directory === instance.directory &&
           (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID),
       ),
-      Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
+      Stream.map((event) => streamEvent(instance, workspaceID, event)),
     )
-    const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>((queue) => {
+    const disposed = Stream.callback<ReturnType<typeof serverEvent>>((queue) => {
       const listener = (event: {
         directory?: string
         payload: { id?: string; type?: string; properties?: unknown }
       }) => {
         if (event.directory !== instance.directory || event.payload.type !== "server.instance.disposed") return
-        Queue.offerUnsafe(queue, {
-          id: event.payload.id ?? eventID(),
-          type: "server.instance.disposed",
-          properties: event.payload.properties ?? {},
-        })
+        Queue.offerUnsafe(
+          queue,
+          serverEvent(
+            instance,
+            workspaceID,
+            "server.instance.disposed",
+            event.payload.properties ?? {},
+            event.payload.id,
+          ),
+        )
       }
       return Effect.acquireRelease(
         Effect.sync(() => GlobalBus.on("event", listener)),
@@ -65,17 +104,17 @@ function eventResponse(events: EventV2.Interface) {
     )
     const heartbeat = Stream.tick("10 seconds").pipe(
       Stream.drop(1),
-      Stream.map(() => ({ id: eventID(), type: "server.heartbeat", properties: {} })),
+      Stream.map(() => serverEvent(instance, workspaceID, "server.heartbeat")),
     )
 
-    log.info("event connected")
+    yield* Effect.logInfo("event connected")
     return HttpServerResponse.stream(
-      Stream.make({ id: eventID(), type: "server.connected", properties: {} }).pipe(
+      Stream.make(serverEvent(instance, workspaceID, "server.connected")).pipe(
         Stream.concat(output.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }))),
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
-        Stream.ensuring(Effect.sync(() => log.info("event disconnected"))),
+        Stream.ensuring(Effect.logInfo("event disconnected")),
       ),
       {
         contentType: "text/event-stream",

@@ -2,24 +2,45 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Catalog } from "@opencode-ai/core/catalog"
+import { Credential } from "@opencode-ai/core/credential"
+import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { Integration } from "@opencode-ai/core/integration"
 import { Location } from "@opencode-ai/core/location"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ModelsDevPlugin } from "@opencode-ai/core/plugin/models-dev"
+import { Policy } from "@opencode-ai/core/policy"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 
+const events = EventV2.defaultLayer
 const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
 )
-const it = testEffect(
-  Catalog.locationLayer.pipe(Layer.provideMerge(EventV2.defaultLayer), Layer.provideMerge(locationLayer)),
+const plugins = PluginV2.layer.pipe(Layer.provide(events))
+const policy = Policy.layer.pipe(Layer.provide(locationLayer))
+const connections = Credential.layer.pipe(
+  Layer.fresh,
+  Layer.provide(Database.layerFromPath(":memory:").pipe(Layer.fresh)),
+  Layer.provide(events),
 )
+const catalog = Catalog.layer.pipe(Layer.provide(Layer.mergeAll(events, locationLayer, plugins, policy, connections)))
+const integrations = Integration.locationLayer.pipe(Layer.provide(events), Layer.provide(connections))
+const layer = Layer.mergeAll(
+  catalog.pipe(Layer.provide(connections)),
+  integrations,
+  connections,
+  events,
+  locationLayer,
+  plugins,
+)
+const it = testEffect(layer)
 
 function withModelsDevFixture<A, E, R>(effect: Effect.Effect<A, E, R>) {
   return Effect.acquireUseRelease(
@@ -42,7 +63,30 @@ function withModelsDevFixture<A, E, R>(effect: Effect.Effect<A, E, R>) {
 }
 
 describe("ModelsDevPlugin", () => {
-  it.effect("synthesizes effort reasoning option variants", () =>
+  it.effect("registers key methods for providers with environment variables", () =>
+    withModelsDevFixture(
+      Effect.gen(function* () {
+        yield* ModelsDevPlugin.effect
+        const integrations = yield* Integration.Service
+        expect(yield* integrations.list()).toEqual([
+          new Integration.Info({
+            id: Integration.ID.make("acme"),
+            name: "Acme",
+            methods: [
+              new Integration.KeyMethod({ type: "key" }),
+              new Integration.EnvMethod({
+                type: "env",
+                names: ["ACME_API_KEY"],
+              }),
+            ],
+            connections: [],
+          }),
+        ])
+      }),
+    ),
+  )
+
+  it.effect("synthesizes effort reasoning option variants through AI SDK request normalization", () =>
     withModelsDevFixture(
       Effect.gen(function* () {
         yield* ModelsDevPlugin.effect
@@ -52,12 +96,16 @@ describe("ModelsDevPlugin", () => {
           {
             id: ModelV2.VariantID.make("high"),
             headers: {},
-            body: { reasoningEffort: "high" },
+            generation: {},
+            options: { reasoningEffort: "high" },
+            body: {},
           },
           {
             id: ModelV2.VariantID.make("max"),
             headers: {},
-            body: { reasoningEffort: "max" },
+            generation: {},
+            options: { reasoningEffort: "max" },
+            body: {},
           },
         ])
       }),
@@ -74,9 +122,33 @@ describe("ModelsDevPlugin", () => {
           {
             id: ModelV2.VariantID.make("custom"),
             headers: { "x-model-mode": "custom" },
-            body: { reasoningEffort: "high" },
+            generation: {},
+            options: { reasoningEffort: "high" },
+            body: {},
           },
         ])
+      }),
+    ),
+  )
+
+  it.effect("does not synthesize reasoning variants when experimental modes are present but empty", () =>
+    withModelsDevFixture(
+      Effect.gen(function* () {
+        yield* ModelsDevPlugin.effect
+        const catalog = yield* Catalog.Service
+        const model = yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("empty-modes"))
+        expect(model.variants).toEqual([])
+      }),
+    ),
+  )
+
+  it.effect("does not synthesize reasoning variants for unsupported provider packages", () =>
+    withModelsDevFixture(
+      Effect.gen(function* () {
+        yield* ModelsDevPlugin.effect
+        const catalog = yield* Catalog.Service
+        const model = yield* catalog.model.get(ProviderV2.ID.make("local"), ModelV2.ID.make("native-effort"))
+        expect(model.variants).toEqual([])
       }),
     ),
   )

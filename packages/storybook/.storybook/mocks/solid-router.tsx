@@ -19,6 +19,10 @@ export function useLocation() {
   }
 }
 
+export function useSearchParams<T extends Record<string, string | undefined> = Record<string, string | undefined>>() {
+  return [{} as Partial<T>, () => undefined] as const
+}
+
 export function MemoryRouter(props: ParentProps) {
   return props.children
 }

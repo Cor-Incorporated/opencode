@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Context, Schema } from "effect"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
-import * as Log from "@opencode-ai/core/util/log"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
-
-void Log.init({ print: false })
 
 const context = Context.empty() as Context.Context<unknown>
 
@@ -31,10 +28,18 @@ const Event = Schema.Struct({
   data: Schema.Unknown,
 })
 
+const RawEvent = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  type: Schema.String,
+  location: Schema.optional(Schema.Unknown),
+  data: Schema.optional(Schema.Unknown),
+  properties: Schema.optional(Schema.Unknown),
+})
+
 async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>) {
   const value = await reader.read()
   if (value.done) throw new Error("event stream closed")
-  return Schema.decodeUnknownSync(Event)(JSON.parse(new TextDecoder().decode(value.value).replace(/^data: /, "")))
+  return Schema.decodeUnknownSync(RawEvent)(JSON.parse(new TextDecoder().decode(value.value).replace(/^data: /, "")))
 }
 
 async function readEventType(reader: ReadableStreamDefaultReader<Uint8Array>, type: string) {
@@ -75,7 +80,7 @@ describe("v2 location HttpApi", () => {
 
     const created = await request("/session", tmp.path, { method: "POST" })
     expect(created.status).toBe(200)
-    expect(await readEventType(reader, "session.created")).toMatchObject({
+    expect(Schema.decodeUnknownSync(Event)(await readEventType(reader, "session.created"))).toMatchObject({
       type: "session.created",
       location: { directory: tmp.path, project: { directory: tmp.path } },
       data: { sessionID: expect.any(String) },

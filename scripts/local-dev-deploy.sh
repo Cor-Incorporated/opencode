@@ -288,13 +288,14 @@ repair_links() {
   # HIGH fix (review #205, codex): shell-escape paths in the heredoc so that
   # spaces or metacharacters in repo path / GUARDRAILS_BIN cannot break the
   # generated wrapper or inject shell.
-  local active_q guard_q
+  local active_q guard_q bun_q
   active_q=$(printf '%q' "$ACTIVE_BINARY")
   guard_q=$(printf '%q' "$GUARDRAILS_BIN")
+  bun_q=$(printf '%q' "$BUN_BIN")
   cat > "$LIVE_WRAPPER" <<EOF
 #!/bin/zsh
 export OPENCODE_BIN_PATH=$active_q
-exec $guard_q "\$@"
+exec $bun_q $guard_q "\$@"
 EOF
   chmod 755 "$LIVE_WRAPPER"
 
@@ -334,8 +335,9 @@ mark "$([[ -x "$ACTIVE_BINARY" ]] && echo ok || echo fail)" "active binary is ex
 # the raw assignment and the printf %q form.
 active_q_check=$(printf '%q' "$ACTIVE_BINARY")
 guard_q_check=$(printf '%q' "$GUARDRAILS_BIN")
+bun_q_check=$(printf '%q' "$BUN_BIN")
 mark "$(grep -Fq "OPENCODE_BIN_PATH=$active_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper pins active binary"
-mark "$(grep -Fq "exec $guard_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper enters guardrails profile"
+mark "$(grep -Fq "exec $bun_q_check $guard_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper enters guardrails profile"
 
 entry_version="$("$ENTRYPOINT" --version 2>/dev/null || true)"
 active_version="$("$ACTIVE_BINARY" --version 2>/dev/null || true)"

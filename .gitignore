@@ -15,6 +15,7 @@ tmp
 dist
 ts-dist
 .turbo
+**/.artifacts/
 **/.serena
 .serena/
 **/.omo
@@ -35,4 +36,5 @@ logs/
 *.bun-build
 tsconfig.tsbuildinfo
 packages/opencode/.opencode/
+packages/opencode/config.json
 packages/opencode/src/provider/models-snapshot.*

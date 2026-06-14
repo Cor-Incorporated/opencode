@@ -1,7 +1,3 @@
-import * as Log from "@opencode-ai/core/util/log"
-
-const log = Log.create({ service: "storage" })
-
 export type JournalModeDatabase = {
   run: (sql: string) => unknown
 }
@@ -11,14 +7,18 @@ export function configureJournalMode(db: JournalModeDatabase) {
     db.run("PRAGMA journal_mode = WAL")
     return "WAL"
   } catch (error) {
-    log.warn("failed to enable WAL journal mode, falling back to DELETE", { error })
+    warn("failed to enable WAL journal mode, falling back to DELETE", error)
   }
 
   try {
     db.run("PRAGMA journal_mode = DELETE")
     return "DELETE"
   } catch (error) {
-    log.warn("failed to enable DELETE journal mode fallback, continuing with SQLite default", { error })
+    warn("failed to enable DELETE journal mode fallback, continuing with SQLite default", error)
     return "default"
   }
+}
+
+function warn(message: string, error: unknown) {
+  console.warn("[storage]", message, error)
 }
