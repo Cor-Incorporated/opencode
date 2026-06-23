@@ -408,6 +408,110 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     )
   }
 
+  function uatEvidenceCommand(cmd: string) {
+    return (
+      /\bgh\s+issue\s+(?:create|close|comment|edit)\b/i.test(cmd) ||
+      /\bgh\s+pr\s+(?:merge|ready|comment|review)\b/i.test(cmd) ||
+      ghApiPrMerge(cmd) ||
+      ghApiIssueMutation(cmd)
+    )
+  }
+
+  function ghApiIssueMutation(cmd: string) {
+    return ghCommandTokens(cmd).some((tokens) => {
+      const apiIndex = tokens.findIndex((token) => token === "api")
+      if (apiIndex === -1) return false
+      const endpoint = tokens
+        .slice(apiIndex + 1)
+        .map((token) =>
+          token
+            .replace(/^https:\/\/api\.github\.com\//i, "")
+            .replace(/^\/+/, "")
+            .replace(/\?.*$/, "")
+            .replace(/\/+$/, ""),
+        )
+        .find((token) => /^repos\/[^/]+\/[^/]+\/issues(?:\/\d+)?(?:\/comments)?$/i.test(token))
+      if (!endpoint) return false
+      const method = ghApiMethod(tokens)
+      if (method === "GET") return false
+      if (["POST", "PATCH", "PUT", "DELETE"].includes(method)) return true
+      return ghApiHasBodyField(tokens)
+    })
+  }
+
+  function uatScoped(cmd: string, data: Record<string, unknown>) {
+    return (
+      flag(data.uat_evidence_required) ||
+      flag(data.ux_evidence_required) ||
+      flag(data.e2e_evidence_required) ||
+      flag(data.browser_evidence_required) ||
+      /\b(?:UAT|UX|E2E|end-to-end|browser[- ]tested|browser[- ]verified|browser verification|browser test(?:ed|ing)?|live verification|live smoke|user journey|acceptance criteria|manual QA|issue close|close issue|closed issue)\b|操作テスト|ブラウザ|テスト済|検証済|確認済|完了|β\s*Ready|クローズ|マージ済/i.test(
+        cmd,
+      )
+    )
+  }
+
+  function blockerIssueCommand(cmd: string) {
+    if (!/\bgh\s+issue\s+(?:create|close|comment|edit)\b/i.test(cmd) && !ghApiIssueMutation(cmd)) return false
+    return /\b(?:blocker|blocked|unverified-restart-condition|restart condition|unable to verify|cannot verify|verification blocked|blocked by)\b/i.test(
+      cmd,
+    )
+  }
+
+  function hasUatEvidence(cmd: string, data: Record<string, unknown>) {
+    if (
+      /\b(?:no|without|missing)\s+(?:browser\s+|live\s+|uat\s+|ux\s+|e2e\s+)?evidence\b|\bevidence\s+pending\b|証跡なし|証跡不足|未取得|未確認|未検証/i.test(
+        cmd,
+      )
+    ) {
+      return false
+    }
+    const stateHasEvidence =
+      flag(data.uat_evidence_done) ||
+      flag(data.ux_evidence_done) ||
+      flag(data.e2e_evidence_done) ||
+      flag(data.browser_evidence_done) ||
+      flag(data.live_evidence_done) ||
+      flag(data.browser_live_evidence_done) ||
+      flag(data.live_evidence_captured) ||
+      [
+        "uat_evidence_path",
+        "ux_evidence_path",
+        "e2e_evidence_path",
+        "browser_evidence_path",
+        "live_evidence_path",
+        "playwright_report_path",
+        "browser_screenshot_path",
+        "browser_video_path",
+        "live_url",
+        "verified_live_url",
+      ].some((key) => str(data[key]))
+    if (stateHasEvidence) return true
+    return /docs\/v2\/live-evidence\/|\b(?:browser|live|uat|ux|e2e|playwright)\s+(?:evidence|proof|verified|verification|report|artifact|trace|screenshot|video|url)\b|(?:evidence|artifact|report|trace|screenshot|video)\s+(?:path|url):|playwright-report|test-results|\.webm\b|\.png\b|\.zip\b/i.test(
+      cmd,
+    )
+  }
+
+  async function blockMissingUatEvidence(cmd: string, data: Record<string, unknown>) {
+    if (!uatEvidenceCommand(cmd)) return
+    if (!uatScoped(cmd, data)) return
+    if (blockerIssueCommand(cmd)) {
+      await ctx.seen("uat_evidence.blocker_allowed", { command: cmd.slice(0, 500) })
+      return
+    }
+    if (hasUatEvidence(cmd, data)) {
+      await ctx.mark({ uat_evidence_done: true, uat_evidence_at: new Date().toISOString() })
+      await ctx.seen("uat_evidence.present", { command: cmd.slice(0, 500) })
+      return
+    }
+
+    await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "UAT/browser evidence missing" })
+    await ctx.seen("uat_evidence.missing", { command: cmd.slice(0, 500) })
+    throw new Error(
+      "Guardrail policy blocked this action: UAT/UX/E2E/browser-tested issue or PR completion requires browser/live evidence markers. Include Browser evidence:, Live evidence:, Playwright report:, screenshot/video/trace/evidence path, or mark the issue as blocker/unverified-restart-condition.",
+    )
+  }
+
   async function bashBeforeGit(cmd: string, out: { output?: string }, data: Record<string, unknown>) {
     const isMerge = gitSubcommand(cmd, "merge") || ghPrCommand(cmd, "merge") || ghApiPrMerge(cmd)
     const isPrMerge = ghPrCommand(cmd, "merge") || ghApiPrMerge(cmd)
@@ -431,6 +535,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
 
     await blockOwnApproval(cmd)
     await blockWrongOpencodePrTarget(cmd)
+    await blockMissingUatEvidence(cmd, data)
 
     if (/\bcodex\s+exec\b/i.test(cmd)) {
       const worktree = codexExecWorktree(cmd)
