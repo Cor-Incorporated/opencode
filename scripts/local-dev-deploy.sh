@@ -222,6 +222,38 @@ guardrails_policy_plugins_smoke() {
         }
       }
 
+      try {
+        await git.bashBeforeGit(
+          "gh issue close 123 --comment '\''操作テストはブラウザで確認済のためクローズします'\''",
+          {},
+          {},
+        )
+        console.error("guardrail-git UAT issue close smoke should block missing evidence")
+        process.exit(1)
+      } catch (err) {
+        if (!String(err).includes("UAT/UX/E2E/browser-tested issue or PR completion requires browser/live evidence markers")) {
+          console.error(`guardrail-git UAT issue close smoke blocked for wrong reason: ${String(err)}`)
+          process.exit(1)
+        }
+      }
+
+      const uatState = await Bun.file(state).json()
+      if (uatState.last_reason !== "UAT/browser evidence missing") {
+        console.error(`guardrail-git UAT issue close smoke recorded wrong state: ${JSON.stringify(uatState)}`)
+        process.exit(1)
+      }
+
+      try {
+        await git.bashBeforeGit(
+          "gh issue close 123 --comment '\''操作テストはブラウザで確認済です。Browser evidence: docs/v2/live-evidence/uat-2026-06-23/playwright-report.zip Timestamp: 2026-06-23T09:00:00Z Visible UI signal: tenant dashboard Auth class: app user Screenshot hash: sha256:0123456789abcdef'\''",
+          {},
+          {},
+        )
+      } catch (err) {
+        console.error(`guardrail-git UAT issue close smoke should allow complete evidence: ${String(err)}`)
+        process.exit(1)
+      }
+
       const blocked = []
       for (const cmd of [
         "git push origin main",

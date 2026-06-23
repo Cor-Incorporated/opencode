@@ -224,6 +224,85 @@ describe("guardrail-git", () => {
     )
   })
 
+  test("blocks UAT PR merge commands without browser or live evidence", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(git.bashBeforeGit("gh pr merge 42 --merge # UX UAT browser-tested complete", {}, {})).rejects.toThrow(
+      "UAT/UX/E2E/browser-tested issue or PR completion requires browser/live evidence markers",
+    )
+
+    expect(fixture.marks.at(-1)?.last_reason).toBe("UAT/browser evidence missing")
+  })
+
+  test("blocks Japanese UAT issue close commands without evidence", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit("gh issue close 42 --comment '操作テストはブラウザで確認済のためクローズ'", {}, {}),
+    ).rejects.toThrow("UAT/UX/E2E/browser-tested issue or PR completion requires browser/live evidence markers")
+  })
+
+  test("does not treat missing browser evidence text as evidence", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit("gh issue close 42 --comment 'UAT complete but no browser evidence was captured'", {}, {}),
+    ).rejects.toThrow("UAT/UX/E2E/browser-tested issue or PR completion requires browser/live evidence markers")
+  })
+
+  test("allows UAT issue close commands with browser and live evidence markers", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit(
+        "gh issue close 42 --comment 'UAT passed. Browser evidence: artifacts/playwright/report/index.html. Live evidence: https://app.example.test/smoke'",
+        {},
+        {},
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(fixture.marks.some((item) => item.uat_evidence_done === true)).toBe(true)
+  })
+
+  test("allows UAT issue close commands with live evidence docs paths", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit(
+        "gh issue close 42 --comment '操作テスト完了。docs/v2/live-evidence/uat-login-smoke.md にブラウザ証跡あり'",
+        {},
+        {},
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  test("allows UAT blocker issues without browser evidence", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit(
+        "gh issue create --title 'UAT blocker: browser sign-in cannot start' --body 'unverified-restart-condition: OAuth sandbox is down' --label blocker",
+        {},
+        {},
+      ),
+    ).resolves.toBeUndefined()
+  })
+
+  test("allows non-UAT issue commands without browser evidence", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit("gh issue comment 42 --body 'Refactor cleanup note without user-journey scope'", {}, {}),
+    ).resolves.toBeUndefined()
+  })
+
   test("requires explicit worktree for codex exec reviews", async () => {
     await using fixture = await context()
     const git = createGitHandlers(fixture.ctx, review())

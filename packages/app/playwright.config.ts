@@ -20,6 +20,7 @@ if (process.env.PLAYWRIGHT_JUNIT_OUTPUT) {
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: process.env.OPENCODE_PERFORMANCE === "1" ? "performance/**/*.test.ts" : "performance/**",
   outputDir: "./e2e/test-results",
   timeout: 60_000,
   expect: {
