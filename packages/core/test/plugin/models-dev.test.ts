@@ -31,6 +31,11 @@ const catalog = Catalog.layer.pipe(
 const layer = Layer.mergeAll(catalog.pipe(Layer.provide(connections)), integrations, connections, events, locationLayer)
 const it = testEffect(layer)
 
+function required<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Expected value")
+  return value
+}
+
 function withModelsDevFixture<A, E, R>(effect: Effect.Effect<A, E, R>) {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
@@ -93,7 +98,7 @@ describe("ModelsDevPlugin", () => {
       Effect.gen(function* () {
         yield* runModelsDevPlugin()
         const catalog = yield* Catalog.Service
-        const model = yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("glm-5.2"))
+        const model = required(yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("glm-5.2")))
         expect(model.variants).toEqual([
           {
             id: ModelV2.VariantID.make("high"),
@@ -119,7 +124,9 @@ describe("ModelsDevPlugin", () => {
       Effect.gen(function* () {
         yield* runModelsDevPlugin()
         const catalog = yield* Catalog.Service
-        const model = yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("mode-priority"))
+        const model = required(
+          yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("mode-priority")),
+        )
         expect(model.variants).toEqual([
           {
             id: ModelV2.VariantID.make("custom"),
@@ -138,7 +145,9 @@ describe("ModelsDevPlugin", () => {
       Effect.gen(function* () {
         yield* runModelsDevPlugin()
         const catalog = yield* Catalog.Service
-        const model = yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("empty-modes"))
+        const model = required(
+          yield* catalog.model.get(ProviderV2.ID.make("zai-coding-plan"), ModelV2.ID.make("empty-modes")),
+        )
         expect(model.variants).toEqual([])
       }),
     ),
@@ -149,7 +158,7 @@ describe("ModelsDevPlugin", () => {
       Effect.gen(function* () {
         yield* runModelsDevPlugin()
         const catalog = yield* Catalog.Service
-        const model = yield* catalog.model.get(ProviderV2.ID.make("local"), ModelV2.ID.make("native-effort"))
+        const model = required(yield* catalog.model.get(ProviderV2.ID.make("local"), ModelV2.ID.make("native-effort")))
         expect(model.variants).toEqual([])
       }),
     ),
