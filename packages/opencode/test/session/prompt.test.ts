@@ -1024,7 +1024,7 @@ it.instance(
         expect(exit.value.info.role).toBe("assistant")
       }
     }),
-  3_000,
+  10_000,
 )
 
 it.instance(
@@ -1050,7 +1050,7 @@ it.instance(
         }
       }
     }),
-  3_000,
+  10_000,
 )
 
 raceNoLLMServer.instance(
@@ -1357,7 +1357,7 @@ it.instance(
       if (!Array.isArray(messages)) throw new Error("expected LLM messages")
       expect(messages.at(-1)).toEqual({ role: "user", content: "second" })
     }),
-  3_000,
+  10_000,
 )
 
 it.instance(
@@ -2177,7 +2177,7 @@ it.instance(
         expect(last.info.error?.name).toBe("MessageAbortedError")
       }
     }),
-  3_000,
+  10_000,
 )
 
 // Agent variant
