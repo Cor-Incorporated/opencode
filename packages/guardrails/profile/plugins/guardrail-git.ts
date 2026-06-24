@@ -408,13 +408,68 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     )
   }
 
-  function uatEvidenceCommand(cmd: string) {
+  function ghIssueCloseCommand(cmd: string) {
+    if (/\bgh\s+issue\s+close\b/i.test(cmd)) return true
+    if (/\bgh\s+issue\s+edit\b/i.test(cmd) && /\s--state(?:=|\s+)closed\b/i.test(cmd)) return true
+    return ghApiIssueCloseMutation(cmd)
+  }
+
+  function ghApiIssueCloseMutation(cmd: string) {
+    return ghCommandTokens(cmd).some((tokens) => {
+      const apiIndex = tokens.findIndex((token) => token === "api")
+      if (apiIndex === -1) return false
+      const endpoint = tokens
+        .slice(apiIndex + 1)
+        .map((token) =>
+          token
+            .replace(/^https:\/\/api\.github\.com\//i, "")
+            .replace(/^\/+/, "")
+            .replace(/\?.*$/, "")
+            .replace(/\/+$/, ""),
+        )
+        .find((token) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/i.test(token))
+      if (!endpoint) return false
+      const method = ghApiMethod(tokens)
+      if (method === "GET") return false
+      if (method && !["PATCH", "PUT"].includes(method)) return false
+      return (
+        ghApiField(tokens, "state").toLowerCase() === "closed" ||
+        /\bstate=(?:closed|completed)\b|["']state["']\s*:\s*["']closed["']/i.test(cmd)
+      )
+    })
+  }
+
+  function uatLifecycleCommand(cmd: string) {
+    return ghIssueCloseCommand(cmd) || ghPrCommand(cmd, "merge") || ghPrCommand(cmd, "ready") || ghApiPrMerge(cmd)
+  }
+
+  function uatStatusCommand(cmd: string) {
     return (
-      /\bgh\s+issue\s+(?:create|close|comment|edit)\b/i.test(cmd) ||
-      /\bgh\s+pr\s+(?:merge|ready|comment|review)\b/i.test(cmd) ||
-      ghApiPrMerge(cmd) ||
+      /\bgh\s+issue\s+(?:create|comment|edit)\b/i.test(cmd) ||
+      /\bgh\s+pr\s+(?:create|comment|review)\b/i.test(cmd) ||
       ghApiIssueMutation(cmd)
     )
+  }
+
+  function uatCompletionDeclaration(cmd: string) {
+    return (
+      /\b(?:close|closing|closed|merge|merged|ready\s+for\s+review|pr\s+ready|mark(?:ed)?\s+ready|ready\s+to\s+(?:close|merge|ship))\b/i.test(
+        cmd,
+      ) ||
+      /\b(?:UAT|UX|E2E|end-to-end|browser[- ]tested|browser[- ]verified|browser verification|browser test(?:ed|ing)?|live verification|live smoke|user journey|manual QA)\b[\s\S]{0,120}\b(?:complete|completed|done|pass(?:ed)?|verified|confirmed|resolved|fixed|ready)\b/i.test(
+        cmd,
+      ) ||
+      /\b(?:complete|completed|done|pass(?:ed)?|verified|confirmed|resolved|fixed|ready)\b[\s\S]{0,120}\b(?:UAT|UX|E2E|end-to-end|browser[- ]tested|browser[- ]verified|browser verification|browser test(?:ed|ing)?|live verification|live smoke|user journey|manual QA)\b/i.test(
+        cmd,
+      ) ||
+      /(?:操作テスト|ブラウザ|受入|検証)[\s\S]{0,120}(?:完了|確認済|検証済|テスト済|解決|修正済)|(?:完了|確認済|検証済|テスト済|解決|修正済)[\s\S]{0,120}(?:操作テスト|ブラウザ|受入|検証)/i.test(
+        cmd,
+      )
+    )
+  }
+
+  function uatEvidenceCommand(cmd: string) {
+    return uatLifecycleCommand(cmd) || (uatStatusCommand(cmd) && uatCompletionDeclaration(cmd))
   }
 
   function ghApiIssueMutation(cmd: string) {
@@ -445,15 +500,16 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       flag(data.ux_evidence_required) ||
       flag(data.e2e_evidence_required) ||
       flag(data.browser_evidence_required) ||
-      /\b(?:UAT|UX|E2E|end-to-end|browser[- ]tested|browser[- ]verified|browser verification|browser test(?:ed|ing)?|live verification|live smoke|user journey|acceptance criteria|manual QA|issue close|close issue|closed issue)\b|操作テスト|ブラウザ|テスト済|検証済|確認済|完了|β\s*Ready|クローズ|マージ済/i.test(
+      /\b(?:UAT|UX|E2E|end-to-end|browser[- ]tested|browser[- ]verified|browser verification|browser test(?:ed|ing)?|live verification|live smoke|user journey|acceptance criteria|manual QA)\b|操作テスト|ブラウザ/i.test(
         cmd,
       )
     )
   }
 
-  function blockerIssueCommand(cmd: string) {
-    if (!/\bgh\s+issue\s+(?:create|close|comment|edit)\b/i.test(cmd) && !ghApiIssueMutation(cmd)) return false
-    return /\b(?:blocker|blocked|unverified-restart-condition|restart condition|unable to verify|cannot verify|verification blocked|blocked by)\b/i.test(
+  function nonFinalUatStatusCommand(cmd: string) {
+    if (uatLifecycleCommand(cmd)) return false
+    if (!uatStatusCommand(cmd)) return false
+    return /\b(?:blocker|blocked|unverified|not\s+verified|unverified-restart-condition|restart condition|unable to verify|cannot verify|verification blocked|blocked by|investigat(?:e|ion)|research|plan(?:ning)?|read-only|triage|status update|draft|proposal|follow-up|followup)\b|未検証|未確認|未取得|調査|計画|ブロッカー|保留/i.test(
       cmd,
     )
   }
@@ -495,8 +551,8 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
   async function blockMissingUatEvidence(cmd: string, data: Record<string, unknown>) {
     if (!uatEvidenceCommand(cmd)) return
     if (!uatScoped(cmd, data)) return
-    if (blockerIssueCommand(cmd)) {
-      await ctx.seen("uat_evidence.blocker_allowed", { command: cmd.slice(0, 500) })
+    if (nonFinalUatStatusCommand(cmd)) {
+      await ctx.seen("uat_evidence.non_final_status_allowed", { command: cmd.slice(0, 500) })
       return
     }
     if (hasUatEvidence(cmd, data)) {
