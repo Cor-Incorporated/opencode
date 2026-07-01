@@ -4,6 +4,14 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
+## Local Entrypoint Protection
+
+Before deleting any worktree, run `bun run local:assert-not-pinned -- <worktree-path>`.
+
+If the assertion fails, do not delete that worktree. From a retained worktree that is not the deletion target, such as `.worktrees/codex/local-deploy-20260701`, run `bun run local:deploy` and `bun run local:check` to repin the local wrapper, then rerun the assertion.
+
+Keep this separate from upstream or fork cleanup. This rule protects local startup entrypoints such as `~/.local/bin/opencode` wrappers from pointing at binaries or guardrails inside a deleted worktree.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.

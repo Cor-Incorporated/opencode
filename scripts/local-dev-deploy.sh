@@ -8,6 +8,7 @@ GUARDRAILS_PROFILE="$ROOT/packages/guardrails/profile"
 ALLOWED_WRITE_ROOT="$HOME/.local/bin"
 ENTRYPOINT="${OPENCODE_LOCAL_ENTRYPOINT:-$ALLOWED_WRITE_ROOT/opencode}"
 LIVE_WRAPPER="${OPENCODE_LOCAL_WRAPPER:-$ALLOWED_WRITE_ROOT/opencode-live-guardrails-wrapper}"
+LIVE_WRAPPER_MANIFEST="${OPENCODE_LOCAL_WRAPPER_MANIFEST:-$ALLOWED_WRITE_ROOT/opencode-live-guardrails-wrapper.json}"
 LOCAL_DB="${OPENCODE_LOCAL_DB:-opencode-local.db}"
 BUN_BIN="${BUN_BIN:-$(command -v bun 2>/dev/null || true)}"
 if [[ -z "$BUN_BIN" && -x "$HOME/.bun/bin/bun" ]]; then
@@ -70,7 +71,8 @@ Usage:
   bun run local:deploy
   bun run local:check
   bun run local:fix
-  bash scripts/local-dev-deploy.sh [--check|--fix|--no-build|--check-zai-coding-plan|--check-openrouter-catalog]
+  bun run local:assert-not-pinned -- <worktree-path>
+  bash scripts/local-dev-deploy.sh [--check|--fix|--no-build|--assert-not-pinned <worktree-path>|--check-zai-coding-plan|--check-openrouter-catalog]
 
 Deploy the local opencode development build into the fixed local runtime path.
 The wrapper defaults OPENCODE_DB to opencode-local.db unless the caller
@@ -91,14 +93,25 @@ Modes:
               validate only the local Z.AI Coding Plan catalog/default scenario
   --check-openrouter-catalog
               validate OpenRouter whitelist freshness against live official catalogs
+  --assert-not-pinned <worktree-path>
+              fail if the local wrapper currently points inside that worktree
 EOF
 }
 
 mode="deploy"
+assert_not_pinned_target=""
 case "${1:-}" in
   "") ;;
   --check) mode="check" ;;
   --fix|--no-build) mode="fix" ;;
+  --assert-not-pinned)
+    mode="assert-not-pinned"
+    if [[ "${2:-}" == "--" ]]; then
+      assert_not_pinned_target="${3:-}"
+    else
+      assert_not_pinned_target="${2:-}"
+    fi
+    ;;
   --check-zai-coding-plan) mode="check-zai-coding-plan" ;;
   --check-openrouter-catalog) mode="check-openrouter-catalog" ;;
   -h|--help) usage; exit 0 ;;
@@ -744,6 +757,11 @@ repair_links() {
   # ALLOWED_WRITE_ROOT exists so pwd -P can resolve it.
   require_under_allowed_root "ENTRYPOINT" "$ENTRYPOINT"
   require_under_allowed_root "LIVE_WRAPPER" "$LIVE_WRAPPER"
+  require_under_allowed_root "LIVE_WRAPPER_MANIFEST" "$LIVE_WRAPPER_MANIFEST"
+  if [[ -L "$LIVE_WRAPPER_MANIFEST" ]]; then
+    echo "refusing to replace symlinked LIVE_WRAPPER_MANIFEST: $LIVE_WRAPPER_MANIFEST" >&2
+    exit 2
+  fi
 
   # HIGH fix (review #205, codex): shell-escape paths in the heredoc so that
   # spaces or metacharacters in repo path / GUARDRAILS_BIN cannot break the
@@ -755,11 +773,32 @@ repair_links() {
   local_db_q=$(printf '%q' "$LOCAL_DB")
   cat > "$LIVE_WRAPPER" <<EOF
 #!/bin/zsh
+# opencode-local-wrapper-repo-root: $ROOT
+# opencode-local-wrapper-active-binary: $ACTIVE_BINARY
+# opencode-local-wrapper-guardrails-bin: $GUARDRAILS_BIN
 export OPENCODE_BIN_PATH=$active_q
 export OPENCODE_DB=\${OPENCODE_DB:-$local_db_q}
 exec $bun_q $guard_q "\$@"
 EOF
   chmod 755 "$LIVE_WRAPPER"
+
+  "$BUN_BIN" --eval '
+    await Bun.write(
+      process.argv[1],
+      `${JSON.stringify(
+        {
+          repo_root: process.argv[2],
+          active_binary: process.argv[3],
+          guardrails_bin: process.argv[4],
+          entrypoint: process.argv[5],
+          live_wrapper: process.argv[6],
+          local_db: process.argv[7],
+        },
+        null,
+        2,
+      )}\n`,
+    )
+  ' "$LIVE_WRAPPER_MANIFEST" "$ROOT" "$ACTIVE_BINARY" "$GUARDRAILS_BIN" "$ENTRYPOINT" "$LIVE_WRAPPER" "$LOCAL_DB"
 
   # HIGH fix (review #205, codex): refuse to overwrite a regular file at
   # ENTRYPOINT or CACHED_BUNDLE; only replace symlinks or missing paths.
@@ -769,6 +808,100 @@ EOF
   ln -sfn "$LIVE_WRAPPER" "$ENTRYPOINT"
   ln -sfn "$CACHED_TARGET" "$CACHED_BUNDLE"
 }
+
+wrapper_manifest_matches() {
+  "$BUN_BIN" --eval '
+    const data = await Bun.file(process.argv[1]).json()
+    const expected = {
+      repo_root: process.argv[2],
+      active_binary: process.argv[3],
+      guardrails_bin: process.argv[4],
+      entrypoint: process.argv[5],
+      live_wrapper: process.argv[6],
+      local_db: process.argv[7],
+    }
+    const mismatches = Object.entries(expected).filter(([key, value]) => data[key] !== value)
+    if (mismatches.length) {
+      console.error(
+        `wrapper manifest mismatch: ${mismatches.map(([key, value]) => `${key}=${JSON.stringify(data[key])}, expected=${JSON.stringify(value)}`).join("; ")}`,
+      )
+      process.exit(1)
+    }
+  ' "$LIVE_WRAPPER_MANIFEST" "$ROOT" "$ACTIVE_BINARY" "$GUARDRAILS_BIN" "$ENTRYPOINT" "$LIVE_WRAPPER" "$LOCAL_DB" >/dev/null
+}
+
+assert_not_pinned() {
+  local target="$1"
+  local resolved
+  if [[ -z "$target" ]]; then
+    echo "missing worktree path for --assert-not-pinned" >&2
+    exit 2
+  fi
+  resolved="$(cd "$target" 2>/dev/null && pwd -P || true)"
+  if [[ -z "$resolved" ]]; then
+    echo "cannot resolve worktree path: $target" >&2
+    exit 2
+  fi
+
+  "$BUN_BIN" --eval '
+    const path = await import("node:path")
+    const { readFile, readlink } = await import("node:fs/promises")
+
+    const targets = [...new Set([path.resolve(process.argv[1]), path.resolve(process.argv[2])])]
+    const target = targets[0]
+    const manifestPath = process.argv[3]
+    const wrapperPath = process.argv[4]
+    const entrypointPath = process.argv[5]
+    const blockers = []
+    const underTarget = (value) => {
+      const resolved = path.resolve(value)
+      return targets.some((candidate) => {
+        const prefix = candidate.endsWith(path.sep) ? candidate : `${candidate}${path.sep}`
+        return resolved === candidate || resolved.startsWith(prefix)
+      })
+    }
+
+    const manifestText = await readFile(manifestPath, "utf8").catch(() => "")
+    if (manifestText) {
+      const data = JSON.parse(manifestText)
+      for (const key of ["repo_root", "active_binary", "guardrails_bin"]) {
+        if (typeof data[key] === "string" && underTarget(data[key])) blockers.push(`${key}: ${data[key]}`)
+      }
+    }
+
+    const wrapper = await readFile(wrapperPath, "utf8").catch(() => "")
+    if (
+      targets.some((candidate) => {
+        const prefix = candidate.endsWith(path.sep) ? candidate : `${candidate}${path.sep}`
+        const escapedTarget = candidate.replaceAll(" ", "\\ ")
+        return wrapper.includes(prefix) || wrapper.includes(`${escapedTarget}${path.sep}`)
+      })
+    ) {
+      blockers.push(`wrapper text references ${target}`)
+    }
+
+    const entrypointTarget = await readlink(entrypointPath).catch(() => "")
+    if (entrypointTarget) {
+      const resolved = path.resolve(path.dirname(entrypointPath), entrypointTarget)
+      if (underTarget(resolved)) {
+        blockers.push(`entrypoint symlink: ${entrypointPath} -> ${entrypointTarget}`)
+      }
+    }
+
+    if (blockers.length) {
+      console.error(`refusing to remove pinned local opencode worktree: ${target}`)
+      for (const blocker of blockers) console.error(`- ${blocker}`)
+      console.error("Run local:deploy/local:check from a retained worktree, then retry this check.")
+      process.exit(1)
+    }
+  ' "$resolved" "$target" "$LIVE_WRAPPER_MANIFEST" "$LIVE_WRAPPER" "$ENTRYPOINT"
+}
+
+if [[ "$mode" == "assert-not-pinned" ]]; then
+  assert_not_pinned "$assert_not_pinned_target"
+  printf 'worktree is not pinned by local opencode wrapper: %s\n' "$assert_not_pinned_target"
+  exit 0
+fi
 
 if [[ "$mode" == "check-zai-coding-plan" ]]; then
   mark "$(zai_coding_plan_catalog_smoke && echo ok || echo fail)" "local runtime exposes $ZAI_CODING_PLAN_MODEL_REF"
@@ -834,6 +967,7 @@ local_db_q_check=$(printf '%q' "$LOCAL_DB")
 mark "$(grep -Fq "OPENCODE_BIN_PATH=$active_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper pins active binary"
 mark "$(grep -Fq "OPENCODE_DB=\${OPENCODE_DB:-$local_db_q_check}" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper defaults stable local database: $LOCAL_DB"
 mark "$(grep -Fq "exec $bun_q_check $guard_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper enters guardrails profile"
+mark "$(wrapper_manifest_matches && echo ok || echo fail)" "live wrapper manifest pins current worktree safely"
 
 entry_version="$("$ENTRYPOINT" --version 2>/dev/null || true)"
 active_version="$("$ACTIVE_BINARY" --version 2>/dev/null || true)"
