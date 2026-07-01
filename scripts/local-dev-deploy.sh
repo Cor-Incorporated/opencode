@@ -437,6 +437,72 @@ guardrails_aggregate_policy_fire_smoke() {
         process.exit(1)
       }
 
+      await Bun.write(
+        join(dir, ".opencode/guardrails/state.json"),
+        JSON.stringify({
+          ...reviewed,
+          review_glm_state: "",
+          review_codex_state: "done",
+          review_state: "",
+          review_at: "",
+        }),
+      )
+      await plugin["tool.execute.after"](
+        { tool: "task", args: { command: "review", subagent_type: "code-reviewer" } },
+        {
+          title: "review",
+          output: "<task_result>Code-reviewer completed. No CRITICAL or HIGH findings were identified.</task_result>",
+          metadata: { exitCode: 0 },
+        },
+      )
+      const taskReview = await state()
+      const taskEvidence = await Bun.file(join(dir, ".opencode/guardrails/review-evidence.json")).json()
+      if (
+        taskReview.review_glm_state !== "done" ||
+        taskReview.review_codex_state !== "done" ||
+        taskReview.review_state !== "done" ||
+        taskEvidence.review_glm_state !== "done" ||
+        taskEvidence.review_codex_state !== "done"
+      ) {
+        console.error(
+          `aggregate guardrail task review did not persist durable evidence: ${JSON.stringify({ taskReview, taskEvidence })}`,
+        )
+        process.exit(1)
+      }
+
+      await Bun.write(
+        join(dir, ".opencode/guardrails/state.json"),
+        JSON.stringify({
+          ...taskReview,
+          review_glm_state: "done",
+          review_codex_state: "",
+          review_state: "",
+          review_at: "",
+        }),
+      )
+      await plugin["tool.execute.after"](
+        { tool: "bash", args: { command: `codex exec -C ${dir} --sandbox read-only "review PR #1"` } },
+        {
+          title: "review",
+          output: "Codex CLI review completed. No CRITICAL or HIGH findings were identified.",
+          metadata: { exitCode: 0 },
+        },
+      )
+      const codexReview = await state()
+      const codexEvidence = await Bun.file(join(dir, ".opencode/guardrails/review-evidence.json")).json()
+      if (
+        codexReview.review_glm_state !== "done" ||
+        codexReview.review_codex_state !== "done" ||
+        codexReview.review_state !== "done" ||
+        codexEvidence.review_glm_state !== "done" ||
+        codexEvidence.review_codex_state !== "done"
+      ) {
+        console.error(
+          `aggregate guardrail codex exec review did not persist durable evidence: ${JSON.stringify({ codexReview, codexEvidence })}`,
+        )
+        process.exit(1)
+      }
+
       try {
         await plugin["tool.execute.before"](
           { tool: "bash", args: { command: "git merge dev" } },
