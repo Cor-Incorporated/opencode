@@ -8,6 +8,7 @@ GUARDRAILS_PROFILE="$ROOT/packages/guardrails/profile"
 ALLOWED_WRITE_ROOT="$HOME/.local/bin"
 ENTRYPOINT="${OPENCODE_LOCAL_ENTRYPOINT:-$ALLOWED_WRITE_ROOT/opencode}"
 LIVE_WRAPPER="${OPENCODE_LOCAL_WRAPPER:-$ALLOWED_WRITE_ROOT/opencode-live-guardrails-wrapper}"
+LOCAL_DB="${OPENCODE_LOCAL_DB:-opencode-local.db}"
 BUN_BIN="${BUN_BIN:-$(command -v bun 2>/dev/null || true)}"
 if [[ -z "$BUN_BIN" && -x "$HOME/.bun/bin/bun" ]]; then
   BUN_BIN="$HOME/.bun/bin/bun"
@@ -72,12 +73,15 @@ Usage:
   bash scripts/local-dev-deploy.sh [--check|--fix|--no-build|--check-zai-coding-plan|--check-openrouter-catalog]
 
 Deploy the local opencode development build into the fixed local runtime path.
+The wrapper defaults OPENCODE_DB to opencode-local.db unless the caller
+explicitly provides OPENCODE_DB.
 
 Default:
   1. build packages/opencode
   2. point packages/opencode/bin/.opencode at the new dist binary
   3. point ~/.local/bin/opencode at the guardrails live wrapper
-  4. verify /auto and /plan are available from the guardrails profile
+  4. default local runtime DB to opencode-local.db
+  5. verify /auto and /plan are available from the guardrails profile
 
 Modes:
   --check     validate only
@@ -603,13 +607,15 @@ repair_links() {
   # HIGH fix (review #205, codex): shell-escape paths in the heredoc so that
   # spaces or metacharacters in repo path / GUARDRAILS_BIN cannot break the
   # generated wrapper or inject shell.
-  local active_q guard_q bun_q
+  local active_q guard_q bun_q local_db_q
   active_q=$(printf '%q' "$ACTIVE_BINARY")
   guard_q=$(printf '%q' "$GUARDRAILS_BIN")
   bun_q=$(printf '%q' "$BUN_BIN")
+  local_db_q=$(printf '%q' "$LOCAL_DB")
   cat > "$LIVE_WRAPPER" <<EOF
 #!/bin/zsh
 export OPENCODE_BIN_PATH=$active_q
+export OPENCODE_DB=\${OPENCODE_DB:-$local_db_q}
 exec $bun_q $guard_q "\$@"
 EOF
   chmod 755 "$LIVE_WRAPPER"
@@ -682,7 +688,9 @@ mark "$([[ -x "$ACTIVE_BINARY" ]] && echo ok || echo fail)" "active binary is ex
 active_q_check=$(printf '%q' "$ACTIVE_BINARY")
 guard_q_check=$(printf '%q' "$GUARDRAILS_BIN")
 bun_q_check=$(printf '%q' "$BUN_BIN")
+local_db_q_check=$(printf '%q' "$LOCAL_DB")
 mark "$(grep -Fq "OPENCODE_BIN_PATH=$active_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper pins active binary"
+mark "$(grep -Fq "OPENCODE_DB=\${OPENCODE_DB:-$local_db_q_check}" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper defaults stable local database: $LOCAL_DB"
 mark "$(grep -Fq "exec $bun_q_check $guard_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper enters guardrails profile"
 
 entry_version="$("$ENTRYPOINT" --version 2>/dev/null || true)"

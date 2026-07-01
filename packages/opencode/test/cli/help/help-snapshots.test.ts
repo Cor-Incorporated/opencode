@@ -79,6 +79,7 @@ const SUBCOMMANDS = [
   ["agent", "create"],
   ["agent", "list"],
   ["session", "list"],
+  ["session", "locate"],
   ["session", "delete"],
   ["github", "install"],
   ["github", "run"],
