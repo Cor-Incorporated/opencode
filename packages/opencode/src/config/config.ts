@@ -2,7 +2,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import path from "path"
-import { pathToFileURL } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import os from "os"
 import { mergeDeep } from "remeda"
 import { Global } from "@opencode-ai/core/global"
@@ -106,6 +106,26 @@ async function resolveLoadedPlugins<T extends { plugin?: ConfigPluginV1.Spec[] }
     config.plugin[i] = await ConfigPlugin.resolvePluginSpec(config.plugin[i], filepath)
   }
   return config
+}
+
+function localGuardrailsProfileEnabled() {
+  return Boolean(process.env.OPENCODE_LOCAL_GUARDRAILS_PROFILE?.trim())
+}
+
+function managedGlobalGuardrailPlugin(plugin: ConfigPluginV1.Spec) {
+  const spec = ConfigPlugin.pluginSpecifier(plugin)
+  if (!spec.startsWith("file://")) return false
+
+  const target = (() => {
+    try {
+      return fileURLToPath(spec)
+    } catch {
+      return undefined
+    }
+  })()
+  if (!target) return false
+  if (!["git-guard.ts", "guardrail.ts", "team.ts"].includes(path.basename(target))) return false
+  return path.resolve(path.dirname(target)) === path.resolve(Global.Path.config, "plugins")
 }
 
 type Info = ConfigV1.Info & {
@@ -338,11 +358,15 @@ const layer = Layer.effect(
         ) {
           if (!list?.length) return
           const hit = kind ?? (yield* pluginScopeForSource(source))
+          const incoming =
+            localGuardrailsProfileEnabled() && hit === "global"
+              ? list.filter((spec) => !managedGlobalGuardrailPlugin(spec))
+              : list
           // Merge newly seen plugin origins with previously collected ones, then dedupe by plugin identity while
           // keeping the winning source/scope metadata for downstream installs, writes, and diagnostics.
           const plugins = ConfigPlugin.deduplicatePluginOrigins([
             ...(result.plugin_origins ?? []),
-            ...list.map((spec) => ({ spec, source, scope: hit })),
+            ...incoming.map((spec) => ({ spec, source, scope: hit })),
           ])
           result.plugin = plugins.map((item) => item.spec)
           result.plugin_origins = plugins

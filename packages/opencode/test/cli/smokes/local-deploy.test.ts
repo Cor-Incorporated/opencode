@@ -85,11 +85,14 @@ describe("deployed local opencode (smoke)", () => {
     const guardrailsBin = stringField(manifest, ["guardrailsBin", "guardrails_bin"])
     const pinnedRepoRoot = stringField(manifest, ["repoRoot", "repo_root"])
     const localDatabase = stringField(manifest, ["localDatabase", "local_database", "localDb", "local_db"])
+    const localGuardrailsProfile = stringField(manifest, ["localGuardrailsProfile", "local_guardrails_profile"])
 
     expect(path.isAbsolute(activeBinary)).toBe(true)
     expect(path.isAbsolute(guardrailsBin)).toBe(true)
     expect(path.isAbsolute(pinnedRepoRoot)).toBe(true)
+    expect(path.isAbsolute(localGuardrailsProfile)).toBe(true)
     expect(localDatabase).toContain("opencode-local.db")
+    expect(localGuardrailsProfile).toBe(path.join(pinnedRepoRoot, "packages/guardrails/profile"))
   })
 
   localDeployTest("wrapper manifest does not point at a deleted worktree", () => {
@@ -187,7 +190,9 @@ describe("deployed local opencode (smoke)", () => {
   })
 
   localDeployTest("wrapper defaults to a stable local database and preserves explicit database overrides", () => {
-    expect(readFileSync(liveWrapper, "utf8")).toContain("OPENCODE_DB=${OPENCODE_DB:-opencode-local.db}")
+    const wrapper = readFileSync(liveWrapper, "utf8")
+    expect(wrapper).toContain("OPENCODE_DB=${OPENCODE_DB:-opencode-local.db}")
+    expect(wrapper).toContain("OPENCODE_LOCAL_GUARDRAILS_PROFILE=")
 
     const dir = mkdtempSync(path.join(tmpdir(), "opencode-local-db-"))
     try {
@@ -219,6 +224,9 @@ describe("deployed local opencode (smoke)", () => {
       expect(result.stdout).toContain("terminal: opencode-local-env-smoke")
       expect(result.stdout).toContain("plugins/guardrail.ts")
       expect(result.stdout).toContain("plugins/team.ts")
+      expect(result.stdout).not.toContain(".config/opencode/plugins/guardrail.ts")
+      expect(result.stdout).not.toContain(".config/opencode/plugins/git-guard.ts")
+      expect(result.stdout).not.toContain(".config/opencode/plugins/team.ts")
       expect(result.stdout).not.toContain("plugins/guardrail-git.ts")
       expect(result.stdout).not.toContain("plugins/guardrail-review.ts")
       expect(result.stdout).not.toContain("external plugins disabled")
