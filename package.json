@@ -15,6 +15,7 @@
     "local:check": "bash scripts/local-dev-deploy.sh --check",
     "local:deploy": "bash scripts/local-dev-deploy.sh",
     "local:fix": "bash scripts/local-dev-deploy.sh --fix",
+    "local:assert-not-pinned": "bash scripts/local-dev-deploy.sh --assert-not-pinned",
     "lint": "oxlint",
     "typecheck": "bun turbo typecheck",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
