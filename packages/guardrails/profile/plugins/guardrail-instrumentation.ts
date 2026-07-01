@@ -307,25 +307,43 @@ function integrationTestEvidence(contents: { file: string; text: string }[], ins
   return contents
     .filter((item) => integrationEvidenceTestFile(item.file))
     .some((item) => {
-      if (/\bexpect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)/.test(item.text)) return false
+      if (meaninglessIntegrationEvidence(item.text)) return false
       if (
         /\b(instrumentation|instrument|metrics?|telemetry|observability|unavailable_reason|dependency)\b/i.test(
           item.text,
         )
       )
         return true
+      if (pythonIntegrationEvidence(item.text)) return true
       return targets.some((target) => target && item.text.includes(target))
     })
 }
 
 function integrationEvidenceTestFile(file: string) {
   const normalized = file.replaceAll("\\", "/")
-  const evidencePath = /(?:^|\/)(test|tests|__tests__)\/.*(?:integration|e2e|smoke|instrument|metric)/i.test(
-    normalized,
-  )
+  const evidencePath = /(?:^|\/)(test|tests|__tests__)\/.*(?:integration|e2e|smoke|instrument|metric)/i.test(normalized)
   if (evidencePath && /\.(?:test)\.(?:ts|tsx|js|jsx)$/i.test(normalized)) return true
   if (evidencePath && /(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$/i.test(normalized)) return true
+  if (/(?:^|\/)tests?\/(?:.*\/)?(?:test_[^/]+|[^/]+_test)\.py$/i.test(normalized)) return true
+  if (/(?:^|\/)scripts\/(?:smoke_[^/]+|[^/]+_smoke)\.py$/i.test(normalized)) return true
   return /(?:integration|e2e|smoke)\.test\.(?:ts|tsx|js|jsx)$/i.test(normalized)
+}
+
+function meaninglessIntegrationEvidence(content: string) {
+  if (/\bexpect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)/.test(content)) return true
+  const executable = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .filter((line) => !/^(from|import)\b/.test(line))
+    .filter((line) => !/^def\s+/.test(line))
+    .filter((line) => !/^class\s+/.test(line))
+    .filter((line) => !/^@/.test(line))
+  return executable.length > 0 && executable.every((line) => /^(assert\s+True\b|pass\b|\.\.\.)/.test(line))
+}
+
+function pythonIntegrationEvidence(content: string) {
+  return /\b(TestClient|httpx|requests)\b|\.test_client\(|\bclient\.(?:get|post|put|patch|delete)\(/i.test(content)
 }
 
 function metricSemanticsEvidence(text: string) {

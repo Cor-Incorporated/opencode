@@ -280,6 +280,143 @@ guardrails_policy_plugins_smoke() {
   ' "$GUARDRAILS_PROFILE" >/dev/null
 }
 
+guardrails_aggregate_policy_fire_smoke() {
+  "$BUN_BIN" --conditions=browser --eval '
+    const { mkdtemp, mkdir, rm } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const { join } = await import("node:path")
+    const { pathToFileURL } = await import("node:url")
+
+    const profile = process.argv[1]
+    const dir = await mkdtemp(join(tmpdir(), "opencode-local-aggregate-policy-"))
+    const client = {
+      session: {
+        create: async () => ({ data: { id: "ses_unused_local_aggregate" } }),
+        promptAsync: async () => ({}),
+        prompt: async () => ({}),
+        status: async () => ({ data: {} }),
+        messages: async () => ({ data: [] }),
+        abort: async () => ({}),
+      },
+    }
+
+    async function state() {
+      return await Bun.file(join(dir, ".opencode/guardrails/state.json")).json()
+    }
+
+    try {
+      const mod = await import(pathToFileURL(join(profile, "plugins/guardrail.ts")).href)
+      const plugin = await mod.default({ client, directory: dir, worktree: dir }, {})
+
+      await Bun.$`git init`.cwd(dir).quiet()
+      await Bun.$`git config core.fsmonitor false`.cwd(dir).quiet()
+      await Bun.$`git config commit.gpgsign false`.cwd(dir).quiet()
+      await Bun.$`git config user.email "local-check@opencode.test"`.cwd(dir).quiet()
+      await Bun.$`git config user.name "OpenCode Local Check"`.cwd(dir).quiet()
+      await Bun.$`git commit --allow-empty -m root`.cwd(dir).quiet()
+      await Bun.$`git branch -M dev`.cwd(dir).quiet()
+      await Bun.$`git update-ref refs/remotes/origin/dev HEAD`.cwd(dir).quiet()
+      await Bun.$`git checkout -b policy-smoke`.cwd(dir).quiet()
+      await mkdir(join(dir, "packages/guardrails/profile/plugins"), { recursive: true })
+      await Bun.write(join(dir, "packages/guardrails/profile/plugins/guardrail-git.ts"), "policy aggregate smoke\n")
+      await Bun.$`git add packages/guardrails/profile/plugins/guardrail-git.ts`.cwd(dir).quiet()
+      await Bun.$`git commit -m "fix: aggregate policy smoke"`.cwd(dir).quiet()
+
+      await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_aggregate_policy" } } })
+      const initialized = await state()
+      if (initialized.workflow_phase !== "idle" || initialized.review_glm_state !== "") {
+        console.error(`aggregate guardrail session.created initialized unexpected state: ${JSON.stringify(initialized)}`)
+        process.exit(1)
+      }
+
+      try {
+        await plugin["tool.execute.before"](
+          { tool: "bash", args: { command: "git merge dev" } },
+          { args: { command: "git merge dev" } },
+        )
+        console.error("aggregate guardrail source merge should block before review")
+        process.exit(1)
+      } catch (err) {
+        const message = String(err)
+        if (!message.includes("merge blocked (FULL tier)") || !message.includes("pending: GLM code-reviewer")) {
+          console.error(`aggregate guardrail source merge blocked for wrong reason: ${message}`)
+          process.exit(1)
+        }
+      }
+
+      await plugin["tool.execute.after"](
+        { tool: "bash", args: { command: "opencode run /review" } },
+        {
+          title: "review",
+          output: "Review completed. No CRITICAL or HIGH findings were identified.",
+          metadata: { exitCode: 0 },
+        },
+      )
+      const reviewed = await state()
+      if (reviewed.review_glm_state !== "done" || reviewed.review_codex_state !== "done") {
+        console.error(`aggregate guardrail review completion did not update state: ${JSON.stringify(reviewed)}`)
+        process.exit(1)
+      }
+
+      try {
+        await plugin["tool.execute.before"](
+          { tool: "bash", args: { command: "git merge dev" } },
+          { args: { command: "git merge dev" } },
+        )
+      } catch (err) {
+        console.error(`aggregate guardrail source merge should pass after review: ${String(err)}`)
+        process.exit(1)
+      }
+
+      try {
+        await plugin["tool.execute.before"](
+          {
+            tool: "bash",
+            args: {
+              command: "gh issue close 123 --comment '\''操作テストはブラウザで確認済のためクローズします'\''",
+            },
+          },
+          { args: { command: "gh issue close 123 --comment '\''操作テストはブラウザで確認済のためクローズします'\''" } },
+        )
+        console.error("aggregate guardrail UAT close should block missing evidence")
+        process.exit(1)
+      } catch (err) {
+        if (!String(err).includes("UAT/UX/E2E/browser-tested issue or PR completion requires browser/live evidence markers")) {
+          console.error(`aggregate guardrail UAT close blocked for wrong reason: ${String(err)}`)
+          process.exit(1)
+        }
+      }
+
+      try {
+        await plugin["tool.execute.before"](
+          {
+            tool: "bash",
+            args: {
+              command: "gh issue close 123 --comment '\''操作テストはブラウザで確認済です。Browser evidence: docs/v2/live-evidence/uat-2026-07-01/playwright-report.zip Timestamp: 2026-07-01T09:00:00Z Visible UI signal: settings screen Auth class: app user Screenshot hash: sha256:0123456789abcdef'\''",
+            },
+          },
+          {
+            args: {
+              command: "gh issue close 123 --comment '\''操作テストはブラウザで確認済です。Browser evidence: docs/v2/live-evidence/uat-2026-07-01/playwright-report.zip Timestamp: 2026-07-01T09:00:00Z Visible UI signal: settings screen Auth class: app user Screenshot hash: sha256:0123456789abcdef'\''",
+            },
+          },
+        )
+      } catch (err) {
+        console.error(`aggregate guardrail UAT close should allow complete evidence: ${String(err)}`)
+        process.exit(1)
+      }
+
+      const uat = await state()
+      if (uat.uat_evidence_done !== true) {
+        console.error(`aggregate guardrail UAT evidence was not recorded: ${JSON.stringify(uat)}`)
+        process.exit(1)
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  ' "$GUARDRAILS_PROFILE" >/dev/null
+}
+
 guardrails_team_plugin_loads() {
   "$BUN_BIN" --conditions=browser --eval '
     const { mkdtemp, rm } = await import("node:fs/promises")
@@ -406,7 +543,11 @@ entrypoint_guardrails_smoke() {
 
   grep -Fq "terminal: opencode-local-env-smoke" <<<"$output" &&
     grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail.ts" <<<"$output" &&
-    grep -Fq "$GUARDRAILS_PROFILE/plugins/team.ts" <<<"$output"
+    grep -Fq "$GUARDRAILS_PROFILE/plugins/team.ts" <<<"$output" &&
+    ! grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail-git.ts" <<<"$output" &&
+    ! grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail-review.ts" <<<"$output" &&
+    ! grep -Fq "external plugins disabled" <<<"$output" &&
+    ! grep -Fq "plugins: none" <<<"$output"
 }
 
 zai_coding_plan_catalog_smoke() {
@@ -668,6 +809,7 @@ mark "$([[ -f "$GUARDRAILS_PROFILE/commands/auto.md" ]] && echo ok || echo fail)
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/plan.md" ]] && echo ok || echo fail)" "guardrails profile includes /plan"
 mark "$(guardrails_profile_has_team_plugin && echo ok || echo fail)" "guardrails profile enables guardrail and team plugins"
 mark "$(guardrails_policy_plugins_smoke && echo ok || echo fail)" "guardrails review/git policy smoke passes"
+mark "$(guardrails_aggregate_policy_fire_smoke && echo ok || echo fail)" "guardrails aggregate plugin fires review/git/UAT policy hooks"
 mark "$(guardrails_team_plugin_loads && echo ok || echo fail)" "guardrails team plugin loads team/background/team_status"
 mark "$(guardrails_team_fallback_smoke && echo ok || echo fail)" "guardrails team fallback uses $ZAI_CODING_PLAN_MODEL_REF"
 mark "$(zai_coding_plan_catalog_smoke && echo ok || echo fail)" "local runtime exposes $ZAI_CODING_PLAN_MODEL_REF"

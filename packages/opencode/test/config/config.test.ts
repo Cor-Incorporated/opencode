@@ -1821,6 +1821,23 @@ describe("deduplicatePluginOrigins", () => {
       }),
     ),
   )
+
+  it.effect("does not auto-discover sibling plugins when a config directory declares plugin list", () =>
+    withConfigTree(
+      { local: { plugin: ["./plugins/guardrail.ts"] } },
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const guardrail = path.join(test.directory, ".opencode", "plugins", "guardrail.ts")
+        const helper = path.join(test.directory, ".opencode", "plugins", "guardrail-git.ts")
+        yield* FSUtil.use.writeWithDirs(guardrail, "export default {}\n")
+        yield* FSUtil.use.writeWithDirs(helper, "export default {}\n")
+
+        const specs = ((yield* Config.use.get()).plugin ?? []).map((p) => ConfigPlugin.pluginSpecifier(p))
+        expect(specs).toContain(pathToFileURL(guardrail).href)
+        expect(specs).not.toContain(pathToFileURL(helper).href)
+      }),
+    ),
+  )
 })
 
 describe("OPENCODE_DISABLE_PROJECT_CONFIG", () => {

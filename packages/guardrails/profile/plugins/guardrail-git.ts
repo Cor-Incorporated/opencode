@@ -1,4 +1,4 @@
-import { flag, git, num, stash, str } from "./guardrail-patterns"
+import { ciChecksGreen, flag, git, num, stash, str } from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
 import path from "path"
 
@@ -364,12 +364,6 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     return ""
   }
 
-  function ciChecksBlocked(output: string) {
-    return /\b(fail(?:ed|ing)?|pending|queued|in[_ -]?progress|neutral|skipped|cancel(?:led|ed)|timed[_ -]?out|action[_ -]?required|startup[_ -]?failure|stale)\b/i.test(
-      output.replaceAll("\t", " "),
-    )
-  }
-
   function codexExecWorktree(cmd: string) {
     return (
       cmd
@@ -598,15 +592,7 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
   }
 
   async function ghPrHeadRefOid(prNumber: string) {
-    const proc = spawnGh([
-      "pr",
-      "view",
-      ...(prNumber ? [prNumber] : []),
-      "--json",
-      "headRefOid",
-      "--jq",
-      ".headRefOid",
-    ])
+    const proc = spawnGh(["pr", "view", ...(prNumber ? [prNumber] : []), "--json", "headRefOid", "--jq", ".headRefOid"])
     const [headOut, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
     return code === 0 ? headOut.trim() : ""
   }
@@ -697,14 +683,15 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     async function ensurePrChecksGreen() {
       if (prChecksGreen !== undefined) return prChecksGreen
       if (!isPrMerge) return flag(data.ci_green)
-      const proc = spawnGh(["pr", "checks", ...(prMergeNumber ? [prMergeNumber] : [])])
-      const [ciOut, ciErr, code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
+      const proc = spawnGh([
+        "pr",
+        "checks",
+        ...(prMergeNumber ? [prMergeNumber] : []),
+        "--json",
+        "bucket,name,state,workflow,link",
       ])
-      const checksOutput = `${ciOut}\n${ciErr}`.trim()
-      prChecksGreen = code === 0 && checksOutput.length > 0 && !ciChecksBlocked(checksOutput)
+      const [ciOut, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+      prChecksGreen = ciChecksGreen(ciOut, code)
       await ctx.mark({ ci_green: prChecksGreen })
       return prChecksGreen
     }
