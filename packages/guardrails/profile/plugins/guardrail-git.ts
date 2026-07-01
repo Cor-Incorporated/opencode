@@ -17,6 +17,7 @@ type Review = {
     message: string
   }
   syncReviewState(): Promise<void>
+  hydrateReviewEvidence?(expectedHead?: string): Promise<boolean | void>
 }
 
 export function createGitHandlers(ctx: GuardrailContext, review: Review) {
@@ -568,6 +569,125 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     )
   }
 
+  function reviewDone(data: Record<string, unknown>) {
+    return str(data.review_glm_state) === "done" && str(data.review_codex_state) === "done"
+  }
+
+  function hasRestoredReviewEvidence(data: Record<string, unknown>) {
+    return str(data.review_evidence_state) === "restored" || Boolean(reviewedHeadSha(data))
+  }
+
+  function reviewedHeadSha(data: Record<string, unknown>) {
+    return (
+      [
+        "review_head_sha",
+        "reviewed_head_sha",
+        "reviewed_head",
+        "review_evidence_head",
+        "review_head_oid",
+        "reviewed_head_oid",
+        "review_head_ref_oid",
+        "reviewed_head_ref_oid",
+        "review_pr_head_sha",
+        "head_sha",
+        "head",
+      ]
+        .map((key) => str(data[key]))
+        .find(Boolean) ?? ""
+    )
+  }
+
+  async function ghPrHeadRefOid(prNumber: string) {
+    const proc = spawnGh([
+      "pr",
+      "view",
+      ...(prNumber ? [prNumber] : []),
+      "--json",
+      "headRefOid",
+      "--jq",
+      ".headRefOid",
+    ])
+    const [headOut, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
+    return code === 0 ? headOut.trim() : ""
+  }
+
+  async function hydrateMergeReviewState(
+    cmd: string,
+    data: Record<string, unknown>,
+    isPrMerge: boolean,
+    prNumber: string,
+  ) {
+    const prHead = isPrMerge ? await ghPrHeadRefOid(prNumber) : ""
+    if (isPrMerge && !prHead) {
+      await ctx.mark({
+        last_block: "bash",
+        last_command: cmd,
+        last_reason: "PR headRefOid verification failed",
+      })
+      throw new Error(
+        "Guardrail policy blocked this action: merge blocked (FULL tier): could not verify PR headRefOid before accepting restored review evidence.",
+      )
+    }
+
+    if (!reviewDone(data) && review.hydrateReviewEvidence) {
+      await review.hydrateReviewEvidence(prHead || undefined)
+      const fresh = await stash(ctx.state)
+      const next = { ...data, ...fresh }
+      if (hasRestoredReviewEvidence(next)) {
+        Object.assign(data, fresh)
+        await ctx.seen("pre_merge.review_hydrated", { pr: prNumber || undefined })
+      }
+    }
+
+    if (isPrMerge && reviewDone(data)) {
+      const reviewedHead = reviewedHeadSha(data)
+      if (!reviewedHead) {
+        await ctx.mark({
+          last_block: "bash",
+          last_command: cmd,
+          last_reason: "review evidence missing reviewed HEAD SHA",
+        })
+        throw new Error(
+          "Guardrail policy blocked this action: merge blocked (FULL tier): restored review evidence is missing the reviewed HEAD SHA.",
+        )
+      }
+
+      if (prHead.toLowerCase() !== reviewedHead.toLowerCase()) {
+        await ctx.mark({
+          last_block: "bash",
+          last_command: cmd,
+          last_reason: "review evidence HEAD mismatch",
+          review_evidence_head: reviewedHead,
+          pr_head_ref_oid: prHead,
+        })
+        throw new Error(
+          "Guardrail policy blocked this action: merge blocked (FULL tier): restored review evidence was captured for a different PR HEAD.",
+        )
+      }
+    }
+  }
+
+  function reviewFindingCounts(data: Record<string, unknown>) {
+    const criticalCount = num(data.review_critical_count)
+    const highCount = num(data.review_high_count)
+    const severeCount = Math.max(num(data.review_severe_count), criticalCount + highCount)
+    return { criticalCount, highCount, severeCount }
+  }
+
+  async function blockSevereReviewFindings(cmd: string, data: Record<string, unknown>) {
+    const counts = reviewFindingCounts(data)
+    if (counts.criticalCount === 0 && counts.highCount === 0 && counts.severeCount === 0) return
+    const prNum = str(data.review_pr_number)
+    await ctx.mark({
+      last_block: "bash",
+      last_command: cmd,
+      last_reason: `unresolved CRITICAL=${counts.criticalCount} HIGH=${counts.highCount} SEVERE=${counts.severeCount}`,
+    })
+    throw new Error(
+      `Guardrail policy blocked this action: merge blocked: PR #${prNum} has unresolved CRITICAL=${counts.criticalCount} HIGH=${counts.highCount} SEVERE=${counts.severeCount} review findings`,
+    )
+  }
+
   async function bashBeforeGit(cmd: string, out: { output?: string }, data: Record<string, unknown>) {
     const isMerge = gitSubcommand(cmd, "merge") || ghPrCommand(cmd, "merge") || ghApiPrMerge(cmd)
     const isPrMerge = ghPrCommand(cmd, "merge") || ghApiPrMerge(cmd)
@@ -644,8 +764,6 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
           )
         }
       }
-      const criticalCount = num(data.review_critical_count)
-      const highCount = num(data.review_high_count)
       try {
         const branchResult = await git(ctx.input.worktree, ["branch", "--show-current"])
         if (branchResult.code !== 0) throw new Error("git branch failed")
@@ -674,21 +792,11 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
           }
           await ctx.seen("pre_merge.tier", { branch, tier, files, result: "pass" })
         } else if (tier === "LIGHT") {
-          if (criticalCount > 0 || highCount > 0) {
-            const prNum = str(data.review_pr_number)
-            await ctx.mark({
-              last_block: "bash",
-              last_command: cmd,
-              last_reason: `unresolved CRITICAL=${criticalCount} HIGH=${highCount}`,
-            })
-            throw new Error(
-              `Guardrail policy blocked this action: merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`,
-            )
-          }
+          await blockSevereReviewFindings(cmd, data)
           const anyReviewDone = str(data.review_glm_state) === "done" || str(data.review_codex_state) === "done"
           const ciGreen = await ensurePrChecksGreen()
           const checksRan = Boolean(str(data.review_checks_at))
-          const noSevere = checksRan && criticalCount === 0 && highCount === 0
+          const noSevere = checksRan && reviewFindingCounts(data).severeCount === 0
           if (!ciGreen && !anyReviewDone && !noSevere) {
             await ctx.mark({
               last_block: "bash",
@@ -701,17 +809,8 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
           }
           await ctx.seen("pre_merge.tier", { branch, tier, files, result: "pass" })
         } else {
-          if (criticalCount > 0 || highCount > 0) {
-            const prNum = str(data.review_pr_number)
-            await ctx.mark({
-              last_block: "bash",
-              last_command: cmd,
-              last_reason: `unresolved CRITICAL=${criticalCount} HIGH=${highCount}`,
-            })
-            throw new Error(
-              `Guardrail policy blocked this action: merge blocked: PR #${prNum} has unresolved CRITICAL=${criticalCount} HIGH=${highCount} review findings`,
-            )
-          }
+          await hydrateMergeReviewState(cmd, data, isPrMerge, prMergeNumber)
+          await blockSevereReviewFindings(cmd, data)
           const gate = review.reviewGate(data)
           if (!gate.done) {
             await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `FULL tier: ${gate.message}` })

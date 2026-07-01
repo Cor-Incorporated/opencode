@@ -104,6 +104,32 @@ describe("guardrail-access", () => {
     expect(marks[0]?.last_reason).toBe("guardrail runtime state is plugin-owned")
   })
 
+  test("blocks write tool access to review evidence runtime state", async () => {
+    const { ctx, marks } = context((file, kind) => {
+      const rel = file.replace("/tmp/project/", "")
+      if (kind === "edit" && rel.startsWith(".opencode/guardrails/")) {
+        return "guardrail runtime state is plugin-owned"
+      }
+    })
+    const access = createAccessHandlers(ctx)
+
+    await expect(
+      access.toolBeforeAccess(
+        { tool: "write", args: { filePath: "/tmp/project/.opencode/guardrails/review-evidence.json", content: "{}" } },
+        { args: { filePath: "/tmp/project/.opencode/guardrails/review-evidence.json", content: "{}" } },
+      ),
+    ).rejects.toThrow("guardrail runtime state is plugin-owned")
+
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toEqual(
+      expect.objectContaining({
+        last_block: "write",
+        last_file: ".opencode/guardrails/review-evidence.json",
+        last_reason: "guardrail runtime state is plugin-owned",
+      }),
+    )
+  })
+
   test("allows read-only shell access to .opencode/guardrails", async () => {
     const { ctx, marks } = context()
     const access = createAccessHandlers(ctx)
@@ -131,5 +157,160 @@ describe("guardrail-access", () => {
 
     expect(marks).toHaveLength(1)
     expect(marks[0]?.last_reason).toBe("protected runtime or config mutation")
+  })
+
+  test("blocks mutating shell access to review evidence runtime state", async () => {
+    const { ctx, marks } = context()
+    const access = createAccessHandlers(ctx)
+    const command = "printf '{}' > .opencode/guardrails/review-evidence.json"
+
+    await expect(
+      access.toolBeforeAccess(
+        { tool: "bash", args: { command } },
+        { args: { command } },
+      ),
+    ).rejects.toThrow("protected runtime or config mutation")
+
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toEqual(
+      expect.objectContaining({
+        last_block: "bash",
+        last_command: command,
+        last_reason: "protected runtime or config mutation",
+      }),
+    )
+  })
+
+  test("blocks interpreter shell writes to review evidence runtime state", async () => {
+    const { ctx, marks } = context()
+    const access = createAccessHandlers(ctx)
+    const command =
+      "python -c \"from pathlib import Path; Path('.opencode/guardrails/review-evidence.json').write_text('{}')\""
+
+    await expect(
+      access.toolBeforeAccess(
+        { tool: "bash", args: { command } },
+        { args: { command } },
+      ),
+    ).rejects.toThrow("protected runtime or config mutation")
+
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toEqual(
+      expect.objectContaining({
+        last_block: "bash",
+        last_command: command,
+        last_reason: "protected runtime or config mutation",
+      }),
+    )
+  })
+
+  test("blocks inline interpreter shell even when guardrail runtime path is assembled dynamically", async () => {
+    const { ctx, marks } = context()
+    const access = createAccessHandlers(ctx)
+    const command =
+      "python -c \"from pathlib import Path; Path('.open'+'code/guard'+'rails/review-evidence.json').write_text('{}')\""
+
+    await expect(
+      access.toolBeforeAccess(
+        { tool: "bash", args: { command } },
+        { args: { command } },
+      ),
+    ).rejects.toThrow("interpreter shell can mutate guardrail runtime")
+
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toEqual(
+      expect.objectContaining({
+        last_block: "bash",
+        last_command: command,
+        last_reason: "interpreter shell can mutate guardrail runtime",
+      }),
+    )
+  })
+
+  test("clears stale review evidence state after mutating tool edits", async () => {
+    const { ctx, marks } = context()
+    ctx.hasCodexMcp = true
+    const access = createAccessHandlers(ctx)
+
+    await access.toolAfterAccess(
+      { tool: "edit", args: { filePath: "/tmp/project/src/policy.ts", oldString: "old", newString: "new" } },
+      { title: "Edited", output: "", metadata: {} },
+      {
+        edited_files: ["src/old.ts"],
+        edit_count: 1,
+        edit_count_since_check: 2,
+        edits_since_review: 0,
+        reviewed: true,
+        review_at: "2026-07-01T00:00:00.000Z",
+        review_agent: "code-reviewer",
+        review_glm_state: "done",
+        review_codex_state: "done",
+        review_state: "done",
+        review_glm_at: "2026-07-01T00:00:00.000Z",
+        review_codex_at: "2026-07-01T00:00:01.000Z",
+        review_checks_at: "2026-07-01T00:00:02.000Z",
+        review_pr_number: "42",
+      },
+    )
+
+    expect(marks.at(-1)).toEqual(
+      expect.objectContaining({
+        edited_files: ["src/old.ts", "src/policy.ts"],
+        edit_count: 2,
+        edit_count_since_check: 3,
+        edits_since_review: 1,
+        last_edit: "src/policy.ts",
+        reviewed: false,
+        review_at: "",
+        review_agent: "",
+        review_glm_state: "",
+        review_codex_state: "",
+        review_state: "",
+        review_glm_at: "",
+        review_codex_at: "",
+        review_checks_at: "",
+        review_pr_number: "",
+      }),
+    )
+  })
+
+  test("clears stale review evidence state after shell mutations", async () => {
+    const { ctx, marks } = context()
+    ctx.hasCodexMcp = true
+    const access = createAccessHandlers(ctx)
+
+    await access.toolAfterAccess(
+      { tool: "bash", args: { command: "printf 'new' > src/policy.ts" } },
+      { title: "bash", output: "", metadata: { exitCode: 0 } },
+      {
+        edits_since_review: 2,
+        reviewed: true,
+        review_at: "2026-07-01T00:00:00.000Z",
+        review_agent: "code-reviewer",
+        review_glm_state: "done",
+        review_codex_state: "done",
+        review_state: "done",
+        review_glm_at: "2026-07-01T00:00:00.000Z",
+        review_codex_at: "2026-07-01T00:00:01.000Z",
+        review_checks_at: "2026-07-01T00:00:02.000Z",
+        review_pr_number: "42",
+      },
+    )
+
+    expect(marks.at(-1)).toEqual(
+      expect.objectContaining({
+        edits_since_review: 3,
+        reviewed: false,
+        review_at: "",
+        review_agent: "",
+        review_glm_state: "",
+        review_codex_state: "",
+        review_state: "",
+        review_glm_at: "",
+        review_codex_at: "",
+        review_checks_at: "",
+        review_pr_number: "",
+      }),
+    )
   })
 })

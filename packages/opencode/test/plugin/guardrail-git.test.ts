@@ -5,8 +5,11 @@ import { createGitHandlers } from "../../../../packages/guardrails/profile/plugi
 import type { GuardrailContext } from "../../../../packages/guardrails/profile/plugins/guardrail-context"
 import { tmpdir } from "../fixture/fixture"
 
+type HydrateReviewState = (expectedHead?: string) => Promise<boolean | void> | boolean | void
+
 async function context() {
   const tmp = await tmpdir()
+  const state = path.join(tmp.path, ".opencode", "guardrails", "state.json")
   const marks: Record<string, unknown>[] = []
   const ctx: GuardrailContext = {
     input: {
@@ -17,7 +20,7 @@ async function context() {
     mode: "enforced",
     root: path.join(tmp.path, ".opencode", "guardrails"),
     log: path.join(tmp.path, ".opencode", "guardrails", "events.jsonl"),
-    state: path.join(tmp.path, ".opencode", "guardrails", "state.json"),
+    state,
     allow: {},
     hasCodexMcp: false,
     maxParallelTasks: 5,
@@ -27,6 +30,20 @@ async function context() {
     domainDirs: {},
     async mark(data) {
       marks.push(data)
+      await fs.mkdir(path.dirname(state), { recursive: true })
+      await Bun.write(
+        state,
+        JSON.stringify(
+          {
+            ...(await Bun.file(state)
+              .json()
+              .catch(() => ({}))),
+            ...data,
+          },
+          null,
+          2,
+        ),
+      )
     },
     async seen() {},
     note() {
@@ -78,7 +95,7 @@ async function context() {
   }
 }
 
-function review() {
+function review(input: { hydrateReviewEvidence?: HydrateReviewState } = {}) {
   return {
     checklist() {
       return { score: 3, total: 3, blocking: [], summary: "ok" }
@@ -95,6 +112,9 @@ function review() {
       }
     },
     async syncReviewState() {},
+    async hydrateReviewEvidence(expectedHead?: string) {
+      return input.hydrateReviewEvidence?.(expectedHead)
+    },
   }
 }
 
@@ -145,12 +165,30 @@ function fakeGh(handler: (args: string[]) => { stdout?: string; stderr?: string;
   }
 }
 
-function fakePrMergeGh(input: { files: string[]; checks?: string }) {
+function fakePrMergeGh(input: {
+  files: string[]
+  checks?: string
+  pr?: string
+  headRefOid?: string
+  author?: string
+  approvals?: string[]
+}) {
+  const pr = input.pr ?? "170"
   return fakeGh((args) => {
     if (args[0] === "pr" && args[1] === "checks") return { stdout: input.checks ?? "build\tpass\t0\thttps://example.test/check\n" }
-    if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/170/files") return { stdout: `${input.files.join("\n")}\n` }
-    if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/170/reviews") return { stdout: "0\n" }
-    if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/170") return { stdout: "\n" }
+    if (args[0] === "pr" && args[1] === "view" && args[2] === pr && args.includes("headRefOid")) {
+      return { stdout: `${input.headRefOid ?? ""}\n` }
+    }
+    if (args[0] === "api" && args[1] === `repos/owner/repo/pulls/${pr}/files`) {
+      return { stdout: `${input.files.join("\n")}\n` }
+    }
+    if (args[0] === "api" && args[1] === `repos/owner/repo/pulls/${pr}/reviews` && args[3]?.includes("APPROVED")) {
+      return { stdout: `${(input.approvals ?? []).join("\n")}\n` }
+    }
+    if (args[0] === "api" && args[1] === `repos/owner/repo/pulls/${pr}/reviews`) return { stdout: "0\n" }
+    if (args[0] === "api" && args[1] === `repos/owner/repo/pulls/${pr}`) {
+      return { stdout: input.author ? `${input.author}\n` : "\n" }
+    }
     return {}
   })
 }
@@ -475,6 +513,207 @@ describe("guardrail-git", () => {
     }
   })
 
+  test.serial("allows FULL tier PR merge after hydrating matching review evidence", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/fresh-review-evidence.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const calls: string[] = []
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/fresh-review-evidence.ts"],
+      headRefOid: "abc123",
+      author: "alice",
+      approvals: ["bob"],
+    })
+    try {
+      await expect(
+        createGitHandlers(
+          fixture.ctx,
+          review({
+            async hydrateReviewEvidence(expectedHead) {
+              calls.push(expectedHead ?? "")
+              await fixture.ctx.mark({
+                review_glm_state: "done",
+                review_codex_state: "done",
+                reviewed_head_sha: "abc123",
+                review_evidence_state: "restored",
+                review_critical_count: 0,
+                review_high_count: 0,
+                edits_since_review: 0,
+              })
+              return true
+            },
+          }),
+        ).bashBeforeGit("gh pr merge 42 --merge", {}, {}),
+      ).resolves.toBeUndefined()
+
+      expect(calls).toEqual(["abc123"])
+      expect(fixture.marks.some((item) => item.merge_review_tier === "FULL")).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("blocks FULL tier PR merge when hydrated evidence head does not match PR head", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/stale-review-evidence.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/stale-review-evidence.ts"],
+      headRefOid: "newhead",
+    })
+    try {
+      await expect(
+        createGitHandlers(
+          fixture.ctx,
+          review({
+            async hydrateReviewEvidence() {
+              await fixture.ctx.mark({
+                review_glm_state: "done",
+                review_codex_state: "done",
+                reviewed_head_sha: "oldhead",
+                review_evidence_state: "restored",
+                review_critical_count: 0,
+                review_high_count: 0,
+                edits_since_review: 0,
+              })
+              return true
+            },
+          }),
+        ).bashBeforeGit("gh pr merge 42 --merge", {}, {}),
+      ).rejects.toThrow("restored review evidence was captured for a different PR HEAD")
+
+      expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence HEAD mismatch")
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("blocks FULL tier PR merge when existing review state lacks reviewed HEAD evidence", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/done-without-head.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/done-without-head.ts"],
+      headRefOid: "abc123",
+    })
+    try {
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 42 --merge", {}, {
+          review_glm_state: "done",
+          review_codex_state: "done",
+          review_critical_count: 0,
+          review_high_count: 0,
+          edits_since_review: 0,
+        }),
+      ).rejects.toThrow("restored review evidence is missing the reviewed HEAD SHA")
+
+      expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence missing reviewed HEAD SHA")
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("blocks FULL tier PR merge when existing review evidence head does not match PR head", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/done-with-stale-head.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/done-with-stale-head.ts"],
+      headRefOid: "newhead",
+    })
+    try {
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 42 --merge", {}, {
+          review_glm_state: "done",
+          review_codex_state: "done",
+          reviewed_head_sha: "oldhead",
+          review_critical_count: 0,
+          review_high_count: 0,
+          edits_since_review: 0,
+        }),
+      ).rejects.toThrow("restored review evidence was captured for a different PR HEAD")
+
+      expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence HEAD mismatch")
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("blocks FULL tier PR merge without hydrated review evidence", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/missing-review-evidence.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/missing-review-evidence.ts"],
+      headRefOid: "abc123",
+    })
+    try {
+      await expect(
+        createGitHandlers(
+          fixture.ctx,
+          review({
+            hydrateReviewEvidence() {},
+          }),
+        ).bashBeforeGit("gh pr merge 42 --merge", {}, { review_codex_state: "done" }),
+      ).rejects.toThrow("pending: GLM code-reviewer")
+
+      expect(fixture.marks.at(-1)?.last_reason).toBe("FULL tier: pending: GLM code-reviewer")
+    } finally {
+      restore()
+    }
+  })
+
+  test("blocks full source merges when restored severe count is present without critical or high counts", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/severe-review-evidence.ts")
+    const git = createGitHandlers(fixture.ctx, review())
+
+    await expect(
+      git.bashBeforeGit("git merge dev", {}, {
+        review_glm_state: "done",
+        review_codex_state: "done",
+        reviewed_head_sha: "abc123",
+        review_critical_count: 0,
+        review_high_count: 0,
+        review_severe_count: 1,
+        edits_since_review: 0,
+      }),
+    ).rejects.toThrow("SEVERE=1")
+
+    expect(fixture.marks.at(-1)?.last_reason).toBe("unresolved CRITICAL=0 HIGH=0 SEVERE=1")
+  })
+
+  test.serial("keeps queued CI blocking before PR merge review hydration", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/ci-before-hydration.ts")
+    const calls: string[] = []
+    const restore = fakeGh((args) =>
+      args[0] === "pr" && args[1] === "checks" ? { stdout: "build\tqueued\t0\thttps://example.test/check\n" } : {},
+    )
+    try {
+      await expect(
+        createGitHandlers(
+          fixture.ctx,
+          review({
+            async hydrateReviewEvidence(expectedHead) {
+              calls.push(expectedHead ?? "")
+              await fixture.ctx.mark({
+                review_glm_state: "done",
+                review_codex_state: "done",
+                reviewed_head_sha: "abc123",
+                review_evidence_state: "restored",
+              })
+              return true
+            },
+          }),
+        ).bashBeforeGit("gh pr merge 42 --merge", {}, {}),
+      ).rejects.toThrow("CI checks not all green")
+
+      expect(calls).toEqual([])
+      expect(fixture.marks.at(-1)?.last_reason).toBe("CI checks not all green")
+    } finally {
+      restore()
+    }
+  })
+
   test("treats guardrail profile markdown as full review tier", async () => {
     await using fixture = await diffFixture("packages/guardrails/profile/commands/ship.md")
     const git = createGitHandlers(fixture.ctx, review())
@@ -631,6 +870,7 @@ describe("guardrail-git", () => {
     await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
     const restore = fakeGh((args) => {
       if (args[0] === "pr" && args[1] === "checks") return { stdout: "build\tpass\t0\thttps://example.test/check\n" }
+      if (args[0] === "pr" && args[1] === "view" && args.includes("headRefOid")) return { stdout: "abc123\n" }
       if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/42/files") {
         return { stdout: "packages/opencode/src/self-approved.ts\n" }
       }
@@ -655,10 +895,95 @@ describe("guardrail-git", () => {
           {
             review_glm_state: "done",
             review_codex_state: "done",
+            reviewed_head_sha: "abc123",
           },
         ),
       ).rejects.toThrow("PR approval cannot come only from the PR author")
       expect(fixture.marks.at(-1)?.last_reason).toBe("only PR author approvals present")
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("rehydrates review evidence for FULL tier PR merges after session reset", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/review-evidence.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const evidence = [
+      'gstack-review-log {"skill":"code-reviewer","timestamp":"2026-07-01T00:00:00Z","status":"pass"}',
+      'gstack-review-log {"skill":"codex-review","timestamp":"2026-07-01T00:01:00Z","status":"pass"}',
+      "Review completed. CRITICAL=0 HIGH=0.",
+    ].join("\n")
+    const resetState = {
+      review_state: "",
+      review_glm_state: "",
+      review_codex_state: "",
+      review_at: "",
+      edits_since_review: 0,
+      review_critical_count: 0,
+      review_high_count: 0,
+      ci_green: false,
+    }
+    const restore = fakeGh((args) => {
+      const command = args.join(" ")
+      if (args[0] === "pr" && args[1] === "checks") return { stdout: "build\tpass\t0\thttps://example.test/check\n" }
+      if (args[0] === "pr" && args[1] === "list") return { stdout: "" }
+      if (args[0] === "pr" && args[1] === "view" && args.includes("headRefOid")) return { stdout: "abc123\n" }
+      if (args[0] === "pr" && args[1] === "view" && args.includes("--json")) {
+        return {
+          stdout: `${JSON.stringify({
+            comments: [{ body: evidence }],
+            reviews: [{ author: { login: "reviewer" }, body: evidence, state: "COMMENTED" }],
+          })}\n`,
+        }
+      }
+      if (args[0] === "pr" && args[1] === "view") return { stdout: `${evidence}\n` }
+      if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/42/files") {
+        return { stdout: "packages/opencode/src/review-evidence.ts\n" }
+      }
+      if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/42") return { stdout: "alice\n" }
+      if (args[0] === "api" && args[1] === "repos/owner/repo/issues/42/comments") {
+        if (args.includes("--jq")) return { stdout: `${evidence}\n` }
+        return { stdout: `${JSON.stringify([{ body: evidence }])}\n` }
+      }
+      if (args[0] === "api" && args[1] === "repos/owner/repo/pulls/42/reviews") {
+        if (command.includes("CHANGES_REQUESTED")) return { stdout: "0\n" }
+        if (command.includes("APPROVED") && command.includes("@tsv")) return { stdout: "reviewer\n" }
+        if (args.includes("--jq")) return { stdout: `${evidence}\n` }
+        return {
+          stdout: `${JSON.stringify([
+            { body: evidence, state: "COMMENTED", user: { login: "code-reviewer" } },
+            { body: evidence, state: "APPROVED", user: { login: "reviewer" } },
+          ])}\n`,
+        }
+      }
+      return {}
+    })
+    try {
+      await Bun.write(fixture.ctx.state, JSON.stringify(resetState, null, 2))
+
+      await expect(
+        createGitHandlers(
+          fixture.ctx,
+          review({
+            async hydrateReviewEvidence(expectedHead) {
+              expect(expectedHead).toBe("abc123")
+              await fixture.ctx.mark({
+                review_glm_state: "done",
+                review_codex_state: "done",
+                reviewed_head_sha: "abc123",
+                review_evidence_state: "restored",
+                review_critical_count: 0,
+                review_high_count: 0,
+                edits_since_review: 0,
+              })
+              return true
+            },
+          }),
+        ).bashBeforeGit("gh pr merge 42 --merge", {}, resetState),
+      ).resolves.toBeUndefined()
+
+      expect(fixture.marks.some((item) => item.ci_green === true)).toBe(true)
+      expect(fixture.marks.some((item) => item.merge_review_tier === "FULL")).toBe(true)
     } finally {
       restore()
     }
