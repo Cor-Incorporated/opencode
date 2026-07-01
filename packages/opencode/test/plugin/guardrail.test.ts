@@ -175,6 +175,47 @@ describe("guardrail plugin", () => {
     expect(evidence.review_codex_state).toBe("done")
   })
 
+  test("fresh aggregate plugin restores task review evidence before source merge", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Bun.$`git branch -M dev`.cwd(tmp.path).quiet()
+    await Bun.$`git update-ref refs/remotes/origin/dev HEAD`.cwd(tmp.path).quiet()
+    await Bun.$`git checkout -b feat/fresh-review`.cwd(tmp.path).quiet()
+    await fs.mkdir(path.join(tmp.path, "src"), { recursive: true })
+    await Bun.write(path.join(tmp.path, "src", "policy.ts"), "export const policy = true\n")
+    await Bun.$`git add src/policy.ts`.cwd(tmp.path).quiet()
+    await Bun.$`git commit -m "add policy source"`.cwd(tmp.path).quiet()
+    const plugin = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+
+    await withHome(tmp.path, async () => {
+      await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_task_review" } } })
+    })
+    await plugin["tool.execute.after"](
+      { tool: "task", args: { command: "review", subagent_type: "code-reviewer" } },
+      {
+        title: "Done",
+        output: "<task_result>Review complete. No CRITICAL or HIGH findings were identified.</task_result>",
+        metadata: { exitCode: 0 },
+      },
+    )
+
+    const fresh = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+    await withHome(tmp.path, async () => {
+      await fresh.event({ event: { type: "session.created", properties: { sessionID: "ses_fresh_restore" } } })
+    })
+
+    const data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.review_glm_state).toBe("done")
+    expect(data.review_codex_state).toBe("done")
+    expect(data.review_evidence_state).toBe("restored")
+
+    await expect(
+      fresh["tool.execute.before"](
+        { tool: "bash", args: { command: "git merge dev" } },
+        { args: { command: "git merge dev" } },
+      ),
+    ).resolves.toBeUndefined()
+  })
+
   test("full source merge uses hydrated review evidence from aggregate hook", async () => {
     await using tmp = await tmpdir({ git: true })
     await Bun.$`git branch -M dev`.cwd(tmp.path).quiet()

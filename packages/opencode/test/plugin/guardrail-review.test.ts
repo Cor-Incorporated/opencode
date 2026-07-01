@@ -199,7 +199,32 @@ test("review evidence restores for same HEAD and clean worktree", async () => {
   expect(data.review_state).toBe("done")
   expect(data.review_agent).toBe("opencode:review")
   expect(data.reviewed_head_sha).toBe(await gitOutput(tmp.path, ["rev-parse", "HEAD"]))
+  expect(data.review_evidence_state).toBe("restored")
   expect(data.edits_since_review).toBe(0)
+})
+
+test("review evidence is not restored when expected PR head mismatches", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const state = statePath(tmp.path)
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({ review_codex_state: "done" }))
+  const { ctx, events } = await context(state, tmp.path)
+  const review = createReviewPipeline(ctx)
+
+  await review.handleExternalReviewDetection(
+    { tool: "bash", args: { command: "opencode run /review" } },
+    { output: "Review completed. No critical or high issues found.", metadata: { exitCode: 0 } },
+  )
+  await Bun.write(state, JSON.stringify({}))
+
+  expect(await review.restoreReviewEvidence("0000000000000000000000000000000000000000")).toBe(false)
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBeUndefined()
+  expect(data.review_evidence_reason).toBe("pr_head_mismatch")
+  expect(events.some((item) => item.type === "review_evidence.not_restored" && item.reason === "pr_head_mismatch")).toBe(
+    true,
+  )
 })
 
 test("review evidence is not restored when HEAD changes", async () => {
@@ -258,6 +283,75 @@ test("review evidence is not restored for dirty worktree", async () => {
   expect(events.some((item) => item.type === "review_evidence.not_restored" && item.reason === "dirty_worktree")).toBe(
     true,
   )
+})
+
+test("review evidence is not restored when saved evidence has dirty count", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const state = statePath(tmp.path)
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(
+    evidencePath(tmp.path),
+    JSON.stringify({
+      reviewed_head_sha: await gitOutput(tmp.path, ["rev-parse", "HEAD"]),
+      review_glm_state: "done",
+      review_codex_state: "done",
+      review_worktree_clean: true,
+      review_dirty_count: 1,
+    }),
+  )
+  const { ctx, events } = await context(state, tmp.path)
+
+  expect(await createReviewPipeline(ctx).restoreReviewEvidence()).toBe(false)
+
+  const data = await Bun.file(state).json()
+  expect(data.review_evidence_reason).toBe("evidence_dirty_worktree")
+  expect(events.some((item) => item.type === "review_evidence.not_restored" && item.reason === "evidence_dirty_worktree")).toBe(
+    true,
+  )
+})
+
+test("review evidence is not restored when saved evidence has dirty paths", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const state = statePath(tmp.path)
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(
+    evidencePath(tmp.path),
+    JSON.stringify({
+      reviewed_head_sha: await gitOutput(tmp.path, ["rev-parse", "HEAD"]),
+      review_glm_state: "done",
+      review_codex_state: "done",
+      review_worktree_clean: true,
+      review_dirty_paths: ["src/dirty.ts"],
+    }),
+  )
+  const { ctx } = await context(state, tmp.path)
+
+  expect(await createReviewPipeline(ctx).restoreReviewEvidence()).toBe(false)
+
+  expect((await Bun.file(state).json()).review_evidence_reason).toBe("evidence_dirty_worktree")
+})
+
+test("review evidence can restore when only guardrail runtime files are dirty", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const state = statePath(tmp.path)
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({ review_codex_state: "done" }))
+  const { ctx } = await context(state, tmp.path)
+  const review = createReviewPipeline(ctx)
+
+  await review.handleExternalReviewDetection(
+    { tool: "bash", args: { command: "opencode run /review" } },
+    { output: "Review completed. No critical or high issues found.", metadata: { exitCode: 0 } },
+  )
+  await Bun.write(path.join(tmp.path, ".opencode", "guardrails", "runtime-note.txt"), "ignored\n")
+  await Bun.write(state, JSON.stringify({}))
+
+  expect(await review.restoreReviewEvidence()).toBe(true)
+
+  const data = await Bun.file(state).json()
+  expect(data.review_glm_state).toBe("done")
+  expect(data.review_codex_state).toBe("done")
+  expect(data.review_evidence_state).toBe("restored")
 })
 
 test("external opencode review marks GLM review done", async () => {

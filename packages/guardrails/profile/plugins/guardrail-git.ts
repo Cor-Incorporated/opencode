@@ -567,8 +567,8 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
     return str(data.review_glm_state) === "done" && str(data.review_codex_state) === "done"
   }
 
-  function hasRestoredReviewEvidence(data: Record<string, unknown>) {
-    return str(data.review_evidence_state) === "restored" || Boolean(reviewedHeadSha(data))
+  function hasUsableReviewEvidence(data: Record<string, unknown>) {
+    return /^(restored|saved)$/i.test(str(data.review_evidence_state)) && Boolean(reviewedHeadSha(data))
   }
 
   function reviewedHeadSha(data: Record<string, unknown>) {
@@ -583,8 +583,6 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
         "review_head_ref_oid",
         "reviewed_head_ref_oid",
         "review_pr_head_sha",
-        "head_sha",
-        "head",
       ]
         .map((key) => str(data[key]))
         .find(Boolean) ?? ""
@@ -615,14 +613,29 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
       )
     }
 
-    if (!reviewDone(data) && review.hydrateReviewEvidence) {
+    function assignHydrationDiagnostics(fresh: Record<string, unknown>) {
+      for (const key of [
+        "review_evidence_state",
+        "review_evidence_reason",
+        "reviewed_head",
+        "current_head",
+        "expected_head",
+        "review_dirty_count",
+        "dirty_count",
+      ]) {
+        if (fresh[key] !== undefined) data[key] = fresh[key]
+      }
+    }
+
+    if ((!reviewDone(data) || !reviewedHeadSha(data) || num(data.edits_since_review) > 0) && review.hydrateReviewEvidence) {
       await review.hydrateReviewEvidence(prHead || undefined)
       const fresh = await stash(ctx.state)
       const next = { ...data, ...fresh }
-      if (hasRestoredReviewEvidence(next)) {
+      if (hasUsableReviewEvidence(next)) {
         Object.assign(data, fresh)
         await ctx.seen("pre_merge.review_hydrated", { pr: prNumber || undefined })
       }
+      assignHydrationDiagnostics(fresh)
     }
 
     if (isPrMerge && reviewDone(data)) {
@@ -800,9 +813,11 @@ export function createGitHandlers(ctx: GuardrailContext, review: Review) {
           await blockSevereReviewFindings(cmd, data)
           const gate = review.reviewGate(data)
           if (!gate.done) {
-            await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `FULL tier: ${gate.message}` })
+            const evidenceReason = str(data.review_evidence_reason)
+            const reason = evidenceReason ? `${gate.message}; review evidence not accepted: ${evidenceReason}` : gate.message
+            await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: `FULL tier: ${reason}` })
             throw new Error(
-              `Guardrail policy blocked this action: merge blocked (FULL tier): ${gate.message}. Run both code-reviewer agent and Codex review before merging.`,
+              `Guardrail policy blocked this action: merge blocked (FULL tier): ${reason}. Run both code-reviewer agent and Codex review before merging in the PR worktree.`,
             )
           }
           if (num(data.edits_since_review) > 0) {

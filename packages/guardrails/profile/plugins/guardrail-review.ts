@@ -21,6 +21,24 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     return line.slice(3).trim()
   }
 
+  function reviewedEvidenceHead(evidence: Record<string, unknown>) {
+    return str(evidence.reviewed_head_sha) || str(evidence.reviewed_head) || str(evidence.head_sha) || str(evidence.head)
+  }
+
+  function evidenceDirtyPaths(evidence: Record<string, unknown>) {
+    return [...list(evidence.review_dirty_paths), ...list(evidence.dirty_paths)].filter(str)
+  }
+
+  function evidenceWasDirty(evidence: Record<string, unknown>) {
+    return (
+      evidence.review_worktree_clean === false ||
+      evidence.clean === false ||
+      num(evidence.review_dirty_count) > 0 ||
+      num(evidence.dirty_count) > 0 ||
+      evidenceDirtyPaths(evidence).length > 0
+    )
+  }
+
   async function currentGitSnapshot() {
     const head = await git(ctx.input.worktree, ["rev-parse", "HEAD"])
     if (head.code !== 0 || !head.stdout.trim()) return
@@ -82,7 +100,7 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       return false
     }
     const current = data ?? (await stash(ctx.state))
-    await save(evidencePath(), {
+    const evidence = {
       version: 1,
       saved_at: new Date().toISOString(),
       reviewed: flag(current.reviewed),
@@ -109,7 +127,30 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       review_worktree_clean: snapshot.clean,
       review_dirty_count: snapshot.dirtyPaths.length,
       review_dirty_paths: snapshot.dirtyPaths,
+    }
+    await save(evidencePath(), evidence)
+    await ctx.mark({
+      reviewed_head: snapshot.head,
+      reviewed_head_sha: snapshot.head,
+      review_evidence_head: snapshot.head,
+      review_branch: snapshot.branch,
+      reviewed_branch: snapshot.branch,
+      review_worktree_clean: snapshot.clean,
+      review_dirty_count: snapshot.dirtyPaths.length,
+      review_dirty_paths: snapshot.dirtyPaths,
+      review_evidence_state: snapshot.clean ? "saved" : "dirty",
+      review_evidence_reason: snapshot.clean ? "" : "dirty_worktree",
+      review_evidence_at: evidence.saved_at,
     })
+    if (!snapshot.clean) {
+      await ctx.seen("review_evidence.not_saved", {
+        reason: "dirty_worktree",
+        head: snapshot.head,
+        branch: snapshot.branch,
+        dirty_count: snapshot.dirtyPaths.length,
+      })
+      return false
+    }
     await ctx.seen("review_evidence.saved", {
       head: snapshot.head,
       branch: snapshot.branch,
@@ -119,49 +160,51 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     return true
   }
 
+  async function notRestored(reason: string, data: Record<string, unknown> = {}) {
+    await ctx.mark({
+      review_evidence_state: "stale",
+      review_evidence_reason: reason,
+      ...data,
+    })
+    await ctx.seen("review_evidence.not_restored", { reason, ...data })
+    return false
+  }
+
   async function restoreReviewEvidence(expectedHead?: string) {
     const snapshot = await currentGitSnapshot()
     if (!snapshot) {
-      await ctx.seen("review_evidence.not_restored", { reason: "git_head_unavailable" })
-      return false
+      return notRestored("git_head_unavailable")
     }
     if (!snapshot.clean) {
-      await ctx.seen("review_evidence.not_restored", {
-        reason: "dirty_worktree",
+      return notRestored("dirty_worktree", {
         dirty_count: snapshot.dirtyPaths.length,
       })
-      return false
     }
     const evidence = record(
       await Bun.file(evidencePath())
         .json()
         .catch(() => ({})),
     )
-    const reviewedHead =
-      str(evidence.reviewed_head_sha) || str(evidence.reviewed_head) || str(evidence.head_sha) || str(evidence.head)
+    const reviewedHead = reviewedEvidenceHead(evidence)
     if (!reviewedHead) {
-      await ctx.seen("review_evidence.not_restored", { reason: "missing" })
-      return false
+      return notRestored("missing")
     }
     if (reviewedHead !== snapshot.head) {
-      await ctx.seen("review_evidence.not_restored", {
-        reason: "head_mismatch",
+      return notRestored("head_mismatch", {
         reviewed_head: reviewedHead,
         current_head: snapshot.head,
       })
-      return false
     }
     if (expectedHead && reviewedHead !== expectedHead) {
-      await ctx.seen("review_evidence.not_restored", {
-        reason: "pr_head_mismatch",
+      return notRestored("pr_head_mismatch", {
         reviewed_head: reviewedHead,
         expected_head: expectedHead,
       })
-      return false
     }
-    if (evidence.review_worktree_clean === false || evidence.clean === false) {
-      await ctx.seen("review_evidence.not_restored", { reason: "evidence_dirty_worktree" })
-      return false
+    if (evidenceWasDirty(evidence)) {
+      return notRestored("evidence_dirty_worktree", {
+        review_dirty_count: num(evidence.review_dirty_count) || num(evidence.dirty_count),
+      })
     }
     const current = await stash(ctx.state)
     const reviewGlm = str(evidence.review_glm_state) === "done" || str(current.review_glm_state) === "done"

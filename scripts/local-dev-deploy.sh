@@ -383,6 +383,10 @@ guardrails_aggregate_policy_fire_smoke() {
       return await Bun.file(join(dir, ".opencode/guardrails/state.json")).json()
     }
 
+    async function head() {
+      return (await Bun.$`git rev-parse HEAD`.cwd(dir).text()).trim()
+    }
+
     try {
       const mod = await import(pathToFileURL(join(profile, "plugins/guardrail.ts")).href)
       const plugin = await mod.default({ client, directory: dir, worktree: dir }, {})
@@ -490,12 +494,15 @@ guardrails_aggregate_policy_fire_smoke() {
       )
       const codexReview = await state()
       const codexEvidence = await Bun.file(join(dir, ".opencode/guardrails/review-evidence.json")).json()
+      const reviewedHead = await head()
       if (
         codexReview.review_glm_state !== "done" ||
         codexReview.review_codex_state !== "done" ||
         codexReview.review_state !== "done" ||
         codexEvidence.review_glm_state !== "done" ||
-        codexEvidence.review_codex_state !== "done"
+        codexEvidence.review_codex_state !== "done" ||
+        codexEvidence.reviewed_head_sha !== reviewedHead ||
+        codexEvidence.review_worktree_clean !== true
       ) {
         console.error(
           `aggregate guardrail codex exec review did not persist durable evidence: ${JSON.stringify({ codexReview, codexEvidence })}`,
@@ -503,8 +510,23 @@ guardrails_aggregate_policy_fire_smoke() {
         process.exit(1)
       }
 
+      const freshPlugin = await mod.default({ client, directory: dir, worktree: dir }, {})
+      await freshPlugin.event({ event: { type: "session.created", properties: { sessionID: "ses_aggregate_policy_fresh" } } })
+      const restored = await state()
+      if (
+        restored.review_glm_state !== "done" ||
+        restored.review_codex_state !== "done" ||
+        restored.review_state !== "done" ||
+        restored.review_evidence_state !== "restored" ||
+        restored.reviewed_head_sha !== reviewedHead ||
+        restored.edits_since_review !== 0
+      ) {
+        console.error(`aggregate guardrail fresh runtime did not restore review evidence: ${JSON.stringify(restored)}`)
+        process.exit(1)
+      }
+
       try {
-        await plugin["tool.execute.before"](
+        await freshPlugin["tool.execute.before"](
           { tool: "bash", args: { command: "git merge dev" } },
           { args: { command: "git merge dev" } },
         )
