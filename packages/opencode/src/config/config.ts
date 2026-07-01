@@ -422,11 +422,14 @@ const layer = Layer.effect(
         const deps: Fiber.Fiber<void>[] = []
 
         for (const dir of directories) {
+          const loadedDirConfigs: Info[] = []
           if (dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
             for (const file of ["opencode.json", "opencode.jsonc"]) {
               const source = path.join(dir, file)
               yield* Effect.logDebug(`loading config from ${source}`)
-              yield* merge(source, yield* loadFile(source, authEnv))
+              const next = yield* loadFile(source, authEnv)
+              loadedDirConfigs.push(next)
+              yield* merge(source, next)
               result.agent ??= {}
               result.mode ??= {}
               result.plugin ??= []
@@ -460,8 +463,12 @@ const layer = Layer.effect(
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.loadMode(dir)))
           // Auto-discovered plugins under `.opencode/plugin(s)` are already local files, so ConfigPlugin.load
-          // returns normalized Specs and we only need to attach origin metadata here.
-          const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
+          // returns normalized Specs and we only need to attach origin metadata here. If the directory already
+          // declares an explicit plugin list, treat that list as authoritative for the directory and do not also
+          // glob helper modules from plugin(s) as top-level plugins.
+          const list = loadedDirConfigs.some((item) => item.plugin?.length)
+            ? []
+            : yield* Effect.promise(() => ConfigPlugin.load(dir))
           yield* mergePluginOrigins(dir, list)
         }
 

@@ -72,6 +72,10 @@ describe("deployed local opencode (smoke)", () => {
       expect(result.stdout).toContain("terminal: opencode-local-env-smoke")
       expect(result.stdout).toContain("plugins/guardrail.ts")
       expect(result.stdout).toContain("plugins/team.ts")
+      expect(result.stdout).not.toContain("plugins/guardrail-git.ts")
+      expect(result.stdout).not.toContain("plugins/guardrail-review.ts")
+      expect(result.stdout).not.toContain("external plugins disabled")
+      expect(result.stdout).not.toContain("plugins: none")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

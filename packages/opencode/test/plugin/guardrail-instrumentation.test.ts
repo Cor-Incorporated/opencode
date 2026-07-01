@@ -414,4 +414,167 @@ describe("guardrail instrumentation gate", () => {
     expect(fixture.marks.at(-1)?.instrumentation_quality_state).toBe("done")
     expect(fixture.events.at(-1)?.type).toBe("instrumentation.quality_gate_passed")
   })
+
+  test("passes instrumentation PR creation with Python smoke script evidence", async () => {
+    await using fixture = await gitFixture()
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "src/instrumentation/agent_metrics.py",
+      [
+        "def collect_agent_metrics(dependency=None):",
+        '    unavailable_reason = "agent metrics dependency missing"',
+        "    dependency_availability_probe = dependency is not None",
+        "    try:",
+        "        if not dependency_availability_probe:",
+        '            return {"unavailable": True, "unavailable_reason": unavailable_reason}',
+        '        return {"metric": "agent.request.count", "semantics": "completed AI agent requests", "codePath": "src/instrumentation/agent_metrics.py#collect_agent_metrics"}',
+        "    finally:",
+        "        pass",
+        "",
+      ].join("\n"),
+    )
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "docs/agent-instrumentation.md",
+      [
+        "# Agent Instrumentation",
+        "",
+        "## Traceability Matrix",
+        "",
+        "| Acceptance Criteria | Implementation code path |",
+        "| --- | --- |",
+        "| source-level hooks only | src/instrumentation/agent_metrics.py#collect_agent_metrics |",
+        "",
+        "Metric semantics: agent.request.count means completed AI agent requests.",
+        "Metric code path: src/instrumentation/agent_metrics.py#collect_agent_metrics.",
+        "Dependency availability probe: the dependency is checked before use and unavailable_reason explains missing data.",
+        "",
+      ].join("\n"),
+    )
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "scripts/smoke_agent_instrumentation.py",
+      [
+        "from src.instrumentation.agent_metrics import collect_agent_metrics",
+        "",
+        "def main():",
+        '    assert collect_agent_metrics(None)["unavailable_reason"] == "agent metrics dependency missing"',
+        "",
+        'if __name__ == "__main__":',
+        "    main()",
+        "",
+      ].join("\n"),
+    )
+    await Bun.$`git commit -m instrumentation-gates`.cwd(fixture.ctx.input.worktree).quiet()
+    const instrumentation = createInstrumentationHandlers(fixture.ctx)
+
+    await expect(
+      instrumentation.bashBeforeInstrumentation("gh pr create --title 'feat: metrics'", {}),
+    ).resolves.toBeUndefined()
+
+    expect(fixture.marks.at(-1)?.instrumentation_quality_state).toBe("done")
+    expect(fixture.events.at(-1)?.type).toBe("instrumentation.quality_gate_passed")
+  })
+
+  test("blocks Python smoke evidence that only asserts true", async () => {
+    await using fixture = await gitFixture()
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "src/instrumentation/agent_metrics.py",
+      [
+        "def collect_agent_metrics(dependency=None):",
+        '    unavailable_reason = "agent metrics dependency missing"',
+        "    dependency_availability_probe = dependency is not None",
+        "    try:",
+        "        if not dependency_availability_probe:",
+        '            return {"unavailable": True, "unavailable_reason": unavailable_reason}',
+        '        return {"metric": "agent.request.count", "semantics": "completed AI agent requests", "codePath": "src/instrumentation/agent_metrics.py#collect_agent_metrics"}',
+        "    finally:",
+        "        pass",
+        "",
+      ].join("\n"),
+    )
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "docs/agent-instrumentation.md",
+      [
+        "# Agent Instrumentation",
+        "",
+        "## Traceability Matrix",
+        "",
+        "| Acceptance Criteria | Implementation code path |",
+        "| --- | --- |",
+        "| source-level hooks only | src/instrumentation/agent_metrics.py#collect_agent_metrics |",
+        "",
+        "Metric semantics: agent.request.count means completed AI agent requests.",
+        "Metric code path: src/instrumentation/agent_metrics.py#collect_agentMetrics.",
+        "Dependency availability probe: the dependency is checked before use and unavailable_reason explains missing data.",
+        "",
+      ].join("\n"),
+    )
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "scripts/smoke_agent_instrumentation.py",
+      ["def test_agent_instrumentation_smoke():", "    assert True", ""].join("\n"),
+    )
+    await Bun.$`git commit -m instrumentation-gates`.cwd(fixture.ctx.input.worktree).quiet()
+    const instrumentation = createInstrumentationHandlers(fixture.ctx)
+
+    await expect(instrumentation.bashBeforeInstrumentation("gh pr create --title 'feat: metrics'", {})).rejects.toThrow(
+      "meaningful integration/smoke test",
+    )
+
+    expect(fixture.marks.at(-1)?.instrumentation_quality_state).toBe("blocked")
+  })
+
+  test("blocks unrelated Python test evidence", async () => {
+    await using fixture = await gitFixture()
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "src/instrumentation/agent_metrics.py",
+      [
+        "def collect_agent_metrics(dependency=None):",
+        '    unavailable_reason = "agent metrics dependency missing"',
+        "    dependency_availability_probe = dependency is not None",
+        "    try:",
+        "        if not dependency_availability_probe:",
+        '            return {"unavailable": True, "unavailable_reason": unavailable_reason}',
+        '        return {"metric": "agent.request.count", "semantics": "completed AI agent requests", "codePath": "src/instrumentation/agent_metrics.py#collect_agent_metrics"}',
+        "    finally:",
+        "        pass",
+        "",
+      ].join("\n"),
+    )
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "docs/agent-instrumentation.md",
+      [
+        "# Agent Instrumentation",
+        "",
+        "## Traceability Matrix",
+        "",
+        "| Acceptance Criteria | Implementation code path |",
+        "| --- | --- |",
+        "| source-level hooks only | src/instrumentation/agent_metrics.py#collect_agent_metrics |",
+        "",
+        "Metric semantics: agent.request.count means completed AI agent requests.",
+        "Metric code path: src/instrumentation/agent_metrics.py#collect_agent_metrics.",
+        "Dependency availability probe: the dependency is checked before use and unavailable_reason explains missing data.",
+        "",
+      ].join("\n"),
+    )
+    await commitFile(
+      fixture.ctx.input.worktree,
+      "tests/test_unrelated_smoke.py",
+      ["def test_unrelated_math():", "    assert 1 + 1 == 2", ""].join("\n"),
+    )
+    await Bun.$`git commit -m instrumentation-gates`.cwd(fixture.ctx.input.worktree).quiet()
+    const instrumentation = createInstrumentationHandlers(fixture.ctx)
+
+    await expect(instrumentation.bashBeforeInstrumentation("gh pr create --title 'feat: metrics'", {})).rejects.toThrow(
+      "meaningful integration/smoke test",
+    )
+
+    expect(fixture.marks.at(-1)?.instrumentation_quality_state).toBe("blocked")
+  })
 })

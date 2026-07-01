@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 import { createGitHandlers } from "../../../../packages/guardrails/profile/plugins/guardrail-git"
 import type { GuardrailContext } from "../../../../packages/guardrails/profile/plugins/guardrail-context"
+import { ciChecksGreen } from "../../../../packages/guardrails/profile/plugins/guardrail-patterns"
 import { tmpdir } from "../fixture/fixture"
 
 type HydrateReviewState = (expectedHead?: string) => Promise<boolean | void> | boolean | void
@@ -145,7 +146,9 @@ async function branchFixture(branch: string) {
 
 async function opencodeFixture() {
   const fixture = await diffFixture("docs/placeholder.md")
-  await Bun.$`git remote add origin git@github.com:Cor-Incorporated/opencode.git`.cwd(fixture.ctx.input.worktree).quiet()
+  await Bun.$`git remote add origin git@github.com:Cor-Incorporated/opencode.git`
+    .cwd(fixture.ctx.input.worktree)
+    .quiet()
   return fixture
 }
 
@@ -175,7 +178,8 @@ function fakePrMergeGh(input: {
 }) {
   const pr = input.pr ?? "170"
   return fakeGh((args) => {
-    if (args[0] === "pr" && args[1] === "checks") return { stdout: input.checks ?? "build\tpass\t0\thttps://example.test/check\n" }
+    if (args[0] === "pr" && args[1] === "checks")
+      return { stdout: input.checks ?? "build\tpass\t0\thttps://example.test/check\n" }
     if (args[0] === "pr" && args[1] === "view" && args[2] === pr && args.includes("headRefOid")) {
       return { stdout: `${input.headRefOid ?? ""}\n` }
     }
@@ -203,6 +207,31 @@ function ghProcess(result: { stdout?: string; stderr?: string; code?: number }) 
 }
 
 describe("guardrail-git", () => {
+  test("assesses gh pr checks status without scanning descriptions", () => {
+    expect(ciChecksGreen("CodeRabbit\tpass\t0\t\tReview skipped: reviews are disabled for this base branch\n", 0)).toBe(
+      true,
+    )
+    expect(
+      ciChecksGreen(
+        JSON.stringify([
+          {
+            bucket: "pass",
+            name: "CodeRabbit",
+            state: "SUCCESS",
+            workflow: "Review skipped: reviews are disabled for this base branch",
+            link: "https://example.test/stale-cache",
+          },
+        ]),
+        0,
+      ),
+    ).toBe(true)
+    expect(ciChecksGreen(JSON.stringify([{ bucket: "skipping", name: "optional" }]), 0)).toBe(false)
+    expect(ciChecksGreen("build\tqueued\t0\thttps://example.test/check\n", 0)).toBe(false)
+    expect(ciChecksGreen("build\tpass\t0\thttps://example.test/check\n", 1)).toBe(false)
+    expect(ciChecksGreen("", 0)).toBe(false)
+    expect(ciChecksGreen("[", 0)).toBe(false)
+  })
+
   test("blocks GitHub API pull request merge bypasses", async () => {
     await using fixture = await context()
     const restore = fakeGh((args) => {
@@ -455,8 +484,35 @@ describe("guardrail-git", () => {
     await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
     const restore = fakePrMergeGh({ files: ["docs/guardrails.md", "README.md"] })
     try {
-      await expect(createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {})).resolves.toBeUndefined()
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {}),
+      ).resolves.toBeUndefined()
       expect(fixture.marks.some((item) => item.merge_review_tier === "DOCS_ONLY")).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("allows PR merge when passing check text mentions skipped review", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/ignored-by-pr-files.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const restore = fakePrMergeGh({
+      files: ["docs/guardrails.md"],
+      checks: JSON.stringify([
+        {
+          bucket: "pass",
+          name: "CodeRabbit",
+          state: "SUCCESS",
+          workflow: "Review skipped: reviews are disabled for this base branch",
+          link: "https://example.test/stale-cache",
+        },
+      ]),
+    })
+    try {
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {}),
+      ).resolves.toBeUndefined()
+      expect(fixture.marks.some((item) => item.ci_green === true)).toBe(true)
     } finally {
       restore()
     }
@@ -470,9 +526,9 @@ describe("guardrail-git", () => {
       checks: "build\tqueued\t0\thttps://example.test/check\n",
     })
     try {
-      await expect(createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {})).rejects.toThrow(
-        "CI checks not all green",
-      )
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {}),
+      ).rejects.toThrow("CI checks not all green")
       expect(fixture.marks.at(-1)?.last_reason).toBe("CI checks not all green")
     } finally {
       restore()
@@ -484,9 +540,9 @@ describe("guardrail-git", () => {
     await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
     const restore = fakePrMergeGh({ files: ["docs/guardrails.md"], checks: "" })
     try {
-      await expect(createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {})).rejects.toThrow(
-        "CI checks not all green",
-      )
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {}),
+      ).rejects.toThrow("CI checks not all green")
       expect(fixture.marks.at(-1)?.last_reason).toBe("CI checks not all green")
     } finally {
       restore()
@@ -504,9 +560,9 @@ describe("guardrail-git", () => {
       return {}
     })
     try {
-      await expect(createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {})).rejects.toThrow(
-        "changed file classification unavailable",
-      )
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 170 --merge", {}, {}),
+      ).rejects.toThrow("changed file classification unavailable")
       expect(fixture.marks.at(-1)?.last_reason).toBe("merge classification unavailable")
     } finally {
       restore()
@@ -598,13 +654,17 @@ describe("guardrail-git", () => {
     })
     try {
       await expect(
-        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 42 --merge", {}, {
-          review_glm_state: "done",
-          review_codex_state: "done",
-          review_critical_count: 0,
-          review_high_count: 0,
-          edits_since_review: 0,
-        }),
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit(
+          "gh pr merge 42 --merge",
+          {},
+          {
+            review_glm_state: "done",
+            review_codex_state: "done",
+            review_critical_count: 0,
+            review_high_count: 0,
+            edits_since_review: 0,
+          },
+        ),
       ).rejects.toThrow("restored review evidence is missing the reviewed HEAD SHA")
 
       expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence missing reviewed HEAD SHA")
@@ -623,14 +683,18 @@ describe("guardrail-git", () => {
     })
     try {
       await expect(
-        createGitHandlers(fixture.ctx, review()).bashBeforeGit("gh pr merge 42 --merge", {}, {
-          review_glm_state: "done",
-          review_codex_state: "done",
-          reviewed_head_sha: "oldhead",
-          review_critical_count: 0,
-          review_high_count: 0,
-          edits_since_review: 0,
-        }),
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit(
+          "gh pr merge 42 --merge",
+          {},
+          {
+            review_glm_state: "done",
+            review_codex_state: "done",
+            reviewed_head_sha: "oldhead",
+            review_critical_count: 0,
+            review_high_count: 0,
+            edits_since_review: 0,
+          },
+        ),
       ).rejects.toThrow("restored review evidence was captured for a different PR HEAD")
 
       expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence HEAD mismatch")
@@ -668,15 +732,19 @@ describe("guardrail-git", () => {
     const git = createGitHandlers(fixture.ctx, review())
 
     await expect(
-      git.bashBeforeGit("git merge dev", {}, {
-        review_glm_state: "done",
-        review_codex_state: "done",
-        reviewed_head_sha: "abc123",
-        review_critical_count: 0,
-        review_high_count: 0,
-        review_severe_count: 1,
-        edits_since_review: 0,
-      }),
+      git.bashBeforeGit(
+        "git merge dev",
+        {},
+        {
+          review_glm_state: "done",
+          review_codex_state: "done",
+          reviewed_head_sha: "abc123",
+          review_critical_count: 0,
+          review_high_count: 0,
+          review_severe_count: 1,
+          edits_since_review: 0,
+        },
+      ),
     ).rejects.toThrow("SEVERE=1")
 
     expect(fixture.marks.at(-1)?.last_reason).toBe("unresolved CRITICAL=0 HIGH=0 SEVERE=1")
@@ -811,11 +879,15 @@ describe("guardrail-git", () => {
     const git = createGitHandlers(fixture.ctx, review())
 
     await expect(
-      git.bashBeforeGit("git merge dev", {}, {
-        review_glm_state: "done",
-        review_codex_state: "done",
-        edits_since_review: 1,
-      }),
+      git.bashBeforeGit(
+        "git merge dev",
+        {},
+        {
+          review_glm_state: "done",
+          review_codex_state: "done",
+          edits_since_review: 1,
+        },
+      ),
     ).rejects.toThrow("reviews are stale")
 
     expect(fixture.marks.at(-1)?.last_reason).toBe("FULL tier: reviews stale after 1 edit(s)")
@@ -1080,11 +1152,7 @@ describe("guardrail-git", () => {
     ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
-      git.bashBeforeGit(
-        "gh api repos/Cor-Incorporated/opencode/pulls --input payload.json",
-        {},
-        {},
-      ),
+      git.bashBeforeGit("gh api repos/Cor-Incorporated/opencode/pulls --input payload.json", {}, {}),
     ).rejects.toThrow("REST pull request creation blocked")
 
     await expect(
@@ -1137,13 +1205,13 @@ describe("guardrail-git", () => {
       ),
     ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
 
-    await expect(
-      git.bashBeforeGit("gh api graphql -F query=@create-pr.graphql", {}, {}),
-    ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
+    await expect(git.bashBeforeGit("gh api graphql -F query=@create-pr.graphql", {}, {})).rejects.toThrow(
+      "GraphQL createPullRequest mutation blocked",
+    )
 
-    await expect(
-      git.bashBeforeGit("gh api graphql --input create-pr.json", {}, {}),
-    ).rejects.toThrow("GraphQL createPullRequest mutation blocked")
+    await expect(git.bashBeforeGit("gh api graphql --input create-pr.json", {}, {})).rejects.toThrow(
+      "GraphQL createPullRequest mutation blocked",
+    )
 
     await expect(git.bashBeforeGit("gh api graphql -F query=@-", {}, {})).rejects.toThrow(
       "GraphQL createPullRequest mutation blocked",
@@ -1162,14 +1230,21 @@ describe("guardrail-git", () => {
     await using fixture = await opencodeFixture()
     const git = createGitHandlers(fixture.ctx, review())
     await Bun.write(path.join(fixture.ctx.input.worktree, "viewer.graphql"), "query Viewer { viewer { login } }")
-    await Bun.write(path.join(fixture.ctx.input.worktree, "viewer.json"), '{"query":"query Viewer { viewer { login } }"}')
+    await Bun.write(
+      path.join(fixture.ctx.input.worktree, "viewer.json"),
+      '{"query":"query Viewer { viewer { login } }"}',
+    )
 
     await expect(
       git.bashBeforeGit("gh api graphql -f query='query Viewer { viewer { login } }'", {}, {}),
     ).resolves.toBeUndefined()
 
     await expect(
-      git.bashBeforeGit("gh api graphql -f query='query Viewer($login: String!) { user(login: $login) { id } }'", {}, {}),
+      git.bashBeforeGit(
+        "gh api graphql -f query='query Viewer($login: String!) { user(login: $login) { id } }'",
+        {},
+        {},
+      ),
     ).resolves.toBeUndefined()
 
     await expect(git.bashBeforeGit("gh api graphql -F query=@viewer.graphql", {}, {})).resolves.toBeUndefined()

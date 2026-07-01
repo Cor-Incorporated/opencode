@@ -4,7 +4,7 @@ import { createContext, type GuardrailInput } from "./guardrail-context"
 import { createGitHandlers } from "./guardrail-git"
 import { createInstrumentationHandlers } from "./guardrail-instrumentation"
 import { createReviewPipeline } from "./guardrail-review"
-import { flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
+import { ciChecksGreen, flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
 const OPENCODE_IGNORE = ".opencode/"
 
@@ -506,12 +506,8 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           await ctx.seen("workflow.merged", {})
           out.output += "\n\n[WORKFLOW] Merge complete. Create follow-up issues for any discovered problems."
         }
-        if (pipelineActive && /\bgh\s+pr\s+checks\b/.test(cmd)) {
-          const allPass =
-            !/\b(fail(?:ed|ing)?|pending|queued|in[_ -]?progress|neutral|skipped|cancel(?:led|ed)|timed[_ -]?out|action[_ -]?required|startup[_ -]?failure|stale)\b/i.test(
-              output,
-            )
-          await ctx.mark({ ci_green: allPass })
+        if (/\bgh\s+pr\s+checks\b/.test(cmd)) {
+          await ctx.mark({ ci_green: ciChecksGreen(output, out.metadata?.exitCode) })
         }
         if (/\bgh\s+issue\s+create\b/.test(cmd) && output.includes("github.com")) {
           const issueUrl = output.trim().match(/https:\/\/github\.com\/[^\s]+/)

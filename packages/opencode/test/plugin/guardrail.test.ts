@@ -174,4 +174,31 @@ describe("guardrail plugin", () => {
       ),
     ).rejects.toThrow("pending: GLM code-reviewer")
   })
+
+  test("tool after updates ci_green from gh pr checks output", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const plugin = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+    await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_ci" } } })
+
+    await plugin["tool.execute.after"](
+      { tool: "bash", args: { command: "gh pr checks 42" } },
+      { title: "checks", output: "build\tpass\t0\thttps://example.test/check\n", metadata: { exitCode: 0 } },
+    )
+    let data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.ci_green).toBe(true)
+
+    await plugin["tool.execute.after"](
+      { tool: "bash", args: { command: "gh pr checks 42" } },
+      { title: "checks", output: "build\tqueued\t0\thttps://example.test/check\n", metadata: { exitCode: 0 } },
+    )
+    data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.ci_green).toBe(false)
+
+    await plugin["tool.execute.after"](
+      { tool: "bash", args: { command: "gh pr checks 42" } },
+      { title: "checks", output: "build\tpass\t0\thttps://example.test/check\n", metadata: { exitCode: 1 } },
+    )
+    data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.ci_green).toBe(false)
+  })
 })

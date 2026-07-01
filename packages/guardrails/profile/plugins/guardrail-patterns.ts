@@ -77,14 +77,7 @@ export const paid: Record<string, Set<string>> = {
     "glm-5.1",
     "glm-5v-turbo",
   ]),
-  "zai-coding-plan": new Set([
-    "glm-4.5-air",
-    "glm-4.7",
-    "glm-5-turbo",
-    "glm-5.1",
-    "glm-5.2",
-    "glm-5v-turbo",
-  ]),
+  "zai-coding-plan": new Set(["glm-4.5-air", "glm-4.7", "glm-5-turbo", "glm-5.1", "glm-5.2", "glm-5v-turbo"]),
   openai: new Set([
     "gpt-5.1-codex",
     "gpt-5.1-codex-max",
@@ -128,7 +121,7 @@ export function ext(file: string) {
 export function stash(file: string) {
   return Bun.file(file)
     .json()
-    .catch(() => ({} as Record<string, unknown>))
+    .catch(() => ({}) as Record<string, unknown>)
 }
 
 export async function save(file: string, data: Record<string, unknown>) {
@@ -136,7 +129,9 @@ export async function save(file: string, data: Record<string, unknown>) {
 }
 
 export async function line(file: string, data: Record<string, unknown>) {
-  const prev = await Bun.file(file).text().catch(() => "")
+  const prev = await Bun.file(file)
+    .text()
+    .catch(() => "")
   await Bun.write(file, prev + JSON.stringify(data) + "\n")
 }
 
@@ -167,6 +162,35 @@ export function flag(data: unknown) {
 
 export function str(data: unknown) {
   return typeof data === "string" ? data : ""
+}
+
+export function ciChecksGreen(output: string, exitCode: unknown) {
+  if (exitCode !== 0) return false
+  const text = output.trim()
+  if (!text) return false
+  const jsonResult = ciChecksJsonGreen(text)
+  if (jsonResult !== undefined) return jsonResult
+  return ciChecksTextGreen(text)
+}
+
+function ciChecksJsonGreen(text: string) {
+  if (!/^\s*\[/.test(text)) return undefined
+  try {
+    const checks = JSON.parse(text) as unknown
+    if (!Array.isArray(checks) || checks.length === 0) return false
+    return checks.every((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false
+      return str((item as Record<string, unknown>).bucket).toLowerCase() === "pass"
+    })
+  } catch {
+    return false
+  }
+}
+
+function ciChecksTextGreen(text: string) {
+  const rows = text.split(/\r?\n/).filter((line) => line.trim())
+  if (rows.length === 0) return false
+  return rows.every((line) => str(line.split("\t")[1]).toLowerCase() === "pass")
 }
 
 export function json(data: unknown): Record<string, number> {
@@ -205,10 +229,7 @@ export function free(data: {
   return !(ids && ids.has(str(data.id)))
 }
 
-export function preview(data: {
-  id?: unknown
-  status?: unknown
-}) {
+export function preview(data: { id?: unknown; status?: unknown }) {
   const id = str(data.id)
   const status = str(data.status)
   if (status && status !== "active") return true
