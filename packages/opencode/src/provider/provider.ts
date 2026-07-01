@@ -10,7 +10,6 @@ import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
-import { ModelRequest } from "@opencode-ai/core/model-request"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Auth } from "../auth"
 import { Env } from "../env"
@@ -25,7 +24,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { EffectPromise } from "@/effect/promise"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { isRecord } from "@/util/record"
-import { optionalOmitUndefined } from "@opencode-ai/core/schema"
+import { optional } from "@opencode-ai/core/schema"
 import { ProviderTransform } from "./transform"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -1000,8 +999,8 @@ const ProviderCost = Schema.Struct({
   input: Schema.Finite,
   output: Schema.Finite,
   cache: ProviderCacheCost,
-  tiers: optionalOmitUndefined(Schema.Array(ProviderCostTier)),
-  experimentalOver200K: optionalOmitUndefined(
+  tiers: optional(Schema.Array(ProviderCostTier)),
+  experimentalOver200K: optional(
     Schema.Struct({
       input: Schema.Finite,
       output: Schema.Finite,
@@ -1012,7 +1011,7 @@ const ProviderCost = Schema.Struct({
 
 const ProviderLimit = Schema.Struct({
   context: Schema.Finite,
-  input: optionalOmitUndefined(Schema.Finite),
+  input: optional(Schema.Finite),
   output: Schema.Finite,
 })
 
@@ -1021,7 +1020,7 @@ export const Model = Schema.Struct({
   providerID: ProviderV2.ID,
   api: ProviderApiInfo,
   name: Schema.String,
-  family: optionalOmitUndefined(Schema.String),
+  family: optional(Schema.String),
   capabilities: ProviderCapabilities,
   cost: ProviderCost,
   limit: ProviderLimit,
@@ -1029,7 +1028,7 @@ export const Model = Schema.Struct({
   options: Schema.Record(Schema.String, Schema.Any),
   headers: Schema.Record(Schema.String, Schema.String),
   release_date: Schema.String,
-  variants: optionalOmitUndefined(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
+  variants: optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Any))),
 }).annotate({ identifier: "Model" })
 export type Model = Types.DeepMutable<Schema.Schema.Type<typeof Model>>
 
@@ -1038,7 +1037,7 @@ export const Info = Schema.Struct({
   name: Schema.String,
   source: Schema.Literals(["env", "config", "custom", "api"]),
   env: Schema.Array(Schema.String),
-  key: optionalOmitUndefined(Schema.String),
+  key: optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Any),
   models: Schema.Record(Schema.String, Model),
 }).annotate({ identifier: "Provider" })
@@ -1079,6 +1078,11 @@ export class ModelNotFoundError extends Schema.TaggedErrorClass<ModelNotFoundErr
   suggestions: Schema.optional(Schema.Array(Schema.String)),
   cause: Schema.optional(Schema.Defect()),
 }) {
+  override get message() {
+    const suggestions = this.suggestions?.length ? ` Did you mean: ${this.suggestions.join(", ")}?` : ""
+    return `Model not found: ${this.providerID}/${this.modelID}.${suggestions}`
+  }
+
   static isInstance(input: unknown): input is ModelNotFoundError {
     return input instanceof ModelNotFoundError
   }
@@ -1088,12 +1092,20 @@ export class InitError extends Schema.TaggedErrorClass<InitError>()("ProviderIni
   providerID: ProviderV2.ID,
   cause: Schema.optional(Schema.Defect()),
 }) {
+  override get message() {
+    return `Failed to initialize provider: ${this.providerID}`
+  }
+
   static isInstance(input: unknown): input is InitError {
     return input instanceof InitError
   }
 }
 
 export class NoProvidersError extends Schema.TaggedErrorClass<NoProvidersError>()("ProviderNoProvidersError", {}) {
+  override get message() {
+    return "No providers are available"
+  }
+
   static isInstance(input: unknown): input is NoProvidersError {
     return input instanceof NoProvidersError
   }
@@ -1102,6 +1114,10 @@ export class NoProvidersError extends Schema.TaggedErrorClass<NoProvidersError>(
 export class NoModelsError extends Schema.TaggedErrorClass<NoModelsError>()("ProviderNoModelsError", {
   providerID: ProviderV2.ID,
 }) {
+  override get message() {
+    return `No models are available for provider: ${this.providerID}`
+  }
+
   static isInstance(input: unknown): input is NoModelsError {
     return input instanceof NoModelsError
   }
@@ -1231,11 +1247,22 @@ function modelsDevVariants(provider: ModelsDev.Provider, model: ModelsDev.Model,
   return Object.fromEntries(
     effort.values.flatMap((value) => {
       if (typeof value !== "string") return []
-      const request = ModelRequest.normalizeAiSdkOptions(model.provider?.npm ?? provider.npm, { reasoningEffort: value })
-      if (request.options.reasoningEffort !== value) return []
-      return [[value, request.options]]
+      const variant = reasoningEffortVariant(model.provider?.npm ?? provider.npm, value)
+      return variant ? [[value, variant]] : []
     }),
   )
+}
+
+function reasoningEffortVariant(packageName: string | undefined, value: string) {
+  switch (packageName) {
+    case "@ai-sdk/openai":
+    case "@ai-sdk/openai-compatible":
+    case "ai-gateway-provider":
+      return { reasoningEffort: value }
+    case "@openrouter/ai-sdk-provider":
+      return { reasoning: { effort: value } }
+  }
+  return undefined
 }
 
 export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
@@ -1301,7 +1328,7 @@ function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enabl
     .map((item) => item.id)
 }
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -1870,44 +1897,43 @@ export const layer = Layer.effect(
         }
       }
 
-      const defaultPriority = [
-        "claude-haiku-4-5",
-        "claude-haiku-4.5",
-        "3-5-haiku",
-        "3.5-haiku",
-        "gemini-3-flash",
-        "gemini-2.5-flash",
-        "gpt-5-nano",
-      ]
+      // TODO: Remove these provider-specific assumptions once model syncing reliably reports available deployments.
+      if (providerID === ProviderV2.ID.azure || providerID === ProviderV2.ID.make("azure-cognitive-services")) {
+        return undefined
+      }
+
       const priority = providerID.startsWith("opencode")
-        ? ["gpt-5-nano"]
+        ? ["gpt-nano"]
         : providerID.startsWith("github-copilot")
-          ? ["gpt-5-mini", "claude-haiku-4.5", ...defaultPriority]
-          : defaultPriority
-      for (const item of priority) {
+          ? ["gpt-mini", ...smallModelFamilyPriority]
+          : smallModelFamilyPriority
+      const models = sortBy(
+        Object.values(provider.models),
+        [(model) => model.release_date, "desc"],
+        [(model) => model.id, "desc"],
+      )
+      for (const family of priority) {
+        const candidates = models.filter((model) => model.family === family)
         if (providerID === ProviderV2.ID.amazonBedrock) {
           const crossRegionPrefixes = ["global.", "us.", "eu."]
-          const candidates = Object.keys(provider.models).filter((m) => m.includes(item))
 
-          const globalMatch = candidates.find((m) => m.startsWith("global."))
-          if (globalMatch) return provider.models[globalMatch]
+          const globalMatch = candidates.find((model) => model.id.startsWith("global."))
+          if (globalMatch) return globalMatch
 
           const region = provider.options?.region
           if (region) {
             const regionPrefix = region.split("-")[0]
             if (regionPrefix === "us" || regionPrefix === "eu") {
-              const regionalMatch = candidates.find((m) => m.startsWith(`${regionPrefix}.`))
-              if (regionalMatch) return provider.models[regionalMatch]
+              const regionalMatch = candidates.find((model) => model.id.startsWith(`${regionPrefix}.`))
+              if (regionalMatch) return regionalMatch
             }
           }
 
-          const unprefixed = candidates.find((m) => !crossRegionPrefixes.some((p) => m.startsWith(p)))
-          if (unprefixed) return provider.models[unprefixed]
-        } else {
-          for (const model of Object.keys(provider.models)) {
-            if (model.includes(item)) return provider.models[model]
-          }
+          const unprefixed = candidates.find((model) => !crossRegionPrefixes.some((p) => model.id.startsWith(p)))
+          if (unprefixed) return unprefixed
+          continue
         }
+        if (candidates[0]) return candidates[0]
       }
 
       return undefined
@@ -1937,7 +1963,8 @@ export const layer = Layer.effect(
         return { providerID: entry.providerID, modelID: entry.modelID }
       }
 
-      const provider = Object.values(s.providers).find((p) => !cfg.provider || Object.keys(cfg.provider).includes(p.id))
+      const configured = Object.keys(cfg.provider ?? {})
+      const provider = Object.values(s.providers).find((p) => configured.length === 0 || configured.includes(p.id))
       if (!provider) return yield* new NoProvidersError()
       const [model] = sort(Object.values(provider.models))
       if (!model) return yield* new NoModelsError({ providerID: provider.id })
@@ -1951,19 +1978,8 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(Env.defaultLayer),
-    Layer.provide(Config.defaultLayer),
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelsDev.defaultLayer),
-    Layer.provide(RuntimeFlags.defaultLayer),
-  ),
-)
-
 const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]
+const smallModelFamilyPriority = ["gemini-flash", "gpt-nano", "claude-haiku"]
 export function sort<T extends { id: string }>(models: T[]) {
   return sortBy(
     models,
@@ -1981,14 +1997,10 @@ export function parseModel(model: string) {
   }
 }
 
-export const node = LayerNode.make(layer, [
-  FSUtil.node,
-  Config.node,
-  Auth.node,
-  Env.node,
-  Plugin.node,
-  ModelsDev.node,
-  RuntimeFlags.node,
-])
+export const node = LayerNode.make({
+  service: Service,
+  layer: layer,
+  deps: [FSUtil.node, Config.node, Auth.node, Env.node, Plugin.node, ModelsDev.node, RuntimeFlags.node],
+})
 
 export * as Provider from "./provider"

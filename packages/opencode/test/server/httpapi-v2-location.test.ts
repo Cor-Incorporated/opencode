@@ -27,21 +27,44 @@ const Event = Schema.Struct({
   data: Schema.Unknown,
 })
 
-const RawEvent = Schema.Struct({
-  id: Schema.optional(Schema.String),
-  type: Schema.String,
-  location: Schema.optional(Schema.Unknown),
-  data: Schema.optional(Schema.Unknown),
-  properties: Schema.optional(Schema.Unknown),
-})
+async function* eventStream(body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (true) {
+      const boundary = buffer.match(/(?:\r\n|\r|\n){2}/)
+      if (!boundary || boundary.index === undefined) {
+        const value = await reader.read()
+        if (value.done) return
+        buffer += decoder.decode(value.value, { stream: true })
+        continue
+      }
 
-async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>) {
-  const value = await reader.read()
-  if (value.done) throw new Error("event stream closed")
-  return Schema.decodeUnknownSync(RawEvent)(JSON.parse(new TextDecoder().decode(value.value).replace(/^data: /, "")))
+      const record = buffer.slice(0, boundary.index)
+      buffer = buffer.slice(boundary.index + boundary[0].length)
+      const data = record
+        .split(/\r\n|\r|\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+      if (data.length) yield Schema.decodeUnknownSync(Event)(JSON.parse(data.join("\n")))
+    }
+  } finally {
+    try {
+      await reader.cancel()
+    } finally {
+      reader.releaseLock()
+    }
+  }
 }
 
-async function readEventType(reader: ReadableStreamDefaultReader<Uint8Array>, type: string) {
+async function readEvent(reader: AsyncIterator<typeof Event.Type>) {
+  const value = await reader.next()
+  if (value.done) throw new Error("event stream closed")
+  return value.value
+}
+
+async function readEventType(reader: AsyncIterator<typeof Event.Type>, type: string) {
   for (let index = 0; index < 20; index++) {
     const event = await readEvent(reader)
     if (event.type === type) return event
@@ -86,18 +109,18 @@ describe("v2 location HttpApi", () => {
     await using subscriber = await tmpdir({ git: true })
     await using publisher = await tmpdir({ git: true })
     const response = await request("/api/event", subscriber.path)
-    const reader = response.body!.getReader()
+    const reader = eventStream(response.body!)
     const connected = await readEvent(reader)
     expect(connected.type).toBe("server.connected")
     expect(connected.location).toBeUndefined()
 
     const created = await request("/session", publisher.path, { method: "POST" })
     expect(created.status).toBe(200)
-    expect(Schema.decodeUnknownSync(Event)(await readEventType(reader, "session.created"))).toMatchObject({
+    expect(await readEventType(reader, "session.created")).toMatchObject({
       type: "session.created",
       location: { directory: publisher.path },
       data: { sessionID: expect.any(String) },
     })
-    await reader.cancel()
+    await reader.return(undefined)
   })
 })
