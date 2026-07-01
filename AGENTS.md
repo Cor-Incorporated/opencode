@@ -12,6 +12,8 @@ If the assertion fails, do not delete that worktree. From a retained worktree th
 
 Keep this separate from upstream or fork cleanup. This rule protects local startup entrypoints such as `~/.local/bin/opencode` wrappers from pointing at binaries or guardrails inside a deleted worktree.
 
+Also verify global guardrail plugin drift before relying on local merge gates. `bun run local:check` must show that managed symlinks under `~/.config/opencode/plugins` point at the retained local profile and that `opencode debug info` lists the retained profile plugins, not stale global guardrail or git-guard plugins. If it fails, run `bun run local:fix` from the retained worktree before deleting old worktrees or attempting guarded PR create/merge flows.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.

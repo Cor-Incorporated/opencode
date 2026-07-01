@@ -1838,6 +1838,64 @@ describe("deduplicatePluginOrigins", () => {
       }),
     ),
   )
+
+  it.effect("keeps managed global guardrail plugins outside local wrapper mode", () =>
+    Effect.gen(function* () {
+      const project = yield* tmpdirScoped()
+      yield* withGlobalConfig(
+        { config: { plugin: ["./plugins/guardrail.ts", "./plugins/git-guard.ts", "./plugins/team.ts"] } },
+        ({ dir }) =>
+          withInstanceDir(
+            project,
+            Effect.gen(function* () {
+              const specs = ((yield* Config.use.get()).plugin ?? []).map((p) => ConfigPlugin.pluginSpecifier(p))
+              expect(specs).toContain(pathToFileURL(path.join(dir, "plugins", "guardrail.ts")).href)
+              expect(specs).toContain(pathToFileURL(path.join(dir, "plugins", "git-guard.ts")).href)
+              expect(specs).toContain(pathToFileURL(path.join(dir, "plugins", "team.ts")).href)
+            }),
+          ),
+      )
+    }),
+  )
+
+  it.effect("filters managed global guardrail plugins in local wrapper mode", () =>
+    Effect.gen(function* () {
+      const project = yield* tmpdirScoped()
+      const profile = yield* tmpdirScoped()
+      yield* withProcessEnv(
+        "OPENCODE_LOCAL_GUARDRAILS_PROFILE",
+        profile,
+        withGlobalConfig(
+          {
+            config: {
+              model: "global/model",
+              plugin: [
+                "./plugins/guardrail.ts",
+                "./plugins/git-guard.ts",
+                "./plugins/team.ts",
+                "./plugins/custom.ts",
+                "custom-package@1.0.0",
+              ],
+            },
+          },
+          ({ dir }) =>
+            withInstanceDir(
+              project,
+              Effect.gen(function* () {
+                const config = yield* Config.use.get()
+                const specs = (config.plugin ?? []).map((p) => ConfigPlugin.pluginSpecifier(p))
+                expect(config.model).toBe("global/model")
+                expect(specs).not.toContain(pathToFileURL(path.join(dir, "plugins", "guardrail.ts")).href)
+                expect(specs).not.toContain(pathToFileURL(path.join(dir, "plugins", "git-guard.ts")).href)
+                expect(specs).not.toContain(pathToFileURL(path.join(dir, "plugins", "team.ts")).href)
+                expect(specs).toContain(pathToFileURL(path.join(dir, "plugins", "custom.ts")).href)
+                expect(specs).toContain("custom-package@1.0.0")
+              }),
+            ),
+        ),
+      )
+    }),
+  )
 })
 
 describe("OPENCODE_DISABLE_PROJECT_CONFIG", () => {

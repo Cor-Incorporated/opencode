@@ -10,6 +10,8 @@ ENTRYPOINT="${OPENCODE_LOCAL_ENTRYPOINT:-$ALLOWED_WRITE_ROOT/opencode}"
 LIVE_WRAPPER="${OPENCODE_LOCAL_WRAPPER:-$ALLOWED_WRITE_ROOT/opencode-live-guardrails-wrapper}"
 LIVE_WRAPPER_MANIFEST="${OPENCODE_LOCAL_WRAPPER_MANIFEST:-$ALLOWED_WRITE_ROOT/opencode-live-guardrails-wrapper.json}"
 LOCAL_DB="${OPENCODE_LOCAL_DB:-opencode-local.db}"
+GLOBAL_CONFIG_DIR="${OPENCODE_GLOBAL_CONFIG_DIR:-$HOME/.config/opencode}"
+GLOBAL_PLUGIN_DIR="$GLOBAL_CONFIG_DIR/plugins"
 BUN_BIN="${BUN_BIN:-$(command -v bun 2>/dev/null || true)}"
 if [[ -z "$BUN_BIN" && -x "$HOME/.bun/bin/bun" ]]; then
   BUN_BIN="$HOME/.bun/bin/bun"
@@ -41,6 +43,70 @@ ensure_symlink_target_safe() {
     echo "refusing to replace existing non-symlink $label: $path" >&2
     exit 2
   fi
+}
+
+managed_global_guardrail_target() {
+  case "$1" in
+    git-guard.ts|guardrail.ts|team.ts) printf '%s/plugins/%s\n' "$GUARDRAILS_PROFILE" "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+guardrails_profile_symlink_target() {
+  local name="$1"
+  local target="$2"
+  case "$target" in
+    "$GUARDRAILS_PROFILE/plugins/$name"|*/packages/guardrails/profile/plugins/"$name") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_global_guardrail_plugin_repairable() {
+  local name="$1"
+  local file="$GLOBAL_PLUGIN_DIR/$name"
+  local target
+  if [[ ! -e "$file" && ! -L "$file" ]]; then
+    return 0
+  fi
+  if [[ ! -L "$file" ]]; then
+    echo "refusing to replace existing non-symlink global guardrail plugin: $file" >&2
+    return 1
+  fi
+  target="$(readlink "$file" 2>/dev/null || true)"
+  if [[ "$target" == "$(managed_global_guardrail_target "$name")" ]]; then
+    return 0
+  fi
+  if guardrails_profile_symlink_target "$name" "$target"; then
+    return 0
+  fi
+  echo "refusing to replace unknown global plugin symlink: $file -> $target" >&2
+  return 1
+}
+
+repair_global_guardrail_plugins() {
+  mkdir -p "$GLOBAL_PLUGIN_DIR"
+  local name
+  for name in guardrail.ts team.ts git-guard.ts; do
+    ensure_global_guardrail_plugin_repairable "$name"
+    ln -sfn "$(managed_global_guardrail_target "$name")" "$GLOBAL_PLUGIN_DIR/$name"
+  done
+}
+
+global_guardrail_plugins_clean() {
+  local name file expected target
+  for name in guardrail.ts team.ts git-guard.ts; do
+    file="$GLOBAL_PLUGIN_DIR/$name"
+    expected="$(managed_global_guardrail_target "$name")"
+    if [[ ! -L "$file" ]]; then
+      echo "global guardrail plugin is not a managed symlink: $file" >&2
+      return 1
+    fi
+    target="$(readlink "$file" 2>/dev/null || true)"
+    if [[ "$target" != "$expected" ]]; then
+      echo "global guardrail plugin points at stale target: $file -> $target, expected $expected" >&2
+      return 1
+    fi
+  done
 }
 
 platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -557,6 +623,8 @@ entrypoint_guardrails_smoke() {
   grep -Fq "terminal: opencode-local-env-smoke" <<<"$output" &&
     grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail.ts" <<<"$output" &&
     grep -Fq "$GUARDRAILS_PROFILE/plugins/team.ts" <<<"$output" &&
+    ! grep -Fq "$GLOBAL_PLUGIN_DIR/guardrail.ts" <<<"$output" &&
+    ! grep -Fq "$GLOBAL_PLUGIN_DIR/git-guard.ts" <<<"$output" &&
     ! grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail-git.ts" <<<"$output" &&
     ! grep -Fq "$GUARDRAILS_PROFILE/plugins/guardrail-review.ts" <<<"$output" &&
     ! grep -Fq "external plugins disabled" <<<"$output" &&
@@ -766,11 +834,12 @@ repair_links() {
   # HIGH fix (review #205, codex): shell-escape paths in the heredoc so that
   # spaces or metacharacters in repo path / GUARDRAILS_BIN cannot break the
   # generated wrapper or inject shell.
-  local active_q guard_q bun_q local_db_q
+  local active_q guard_q bun_q local_db_q profile_q
   active_q=$(printf '%q' "$ACTIVE_BINARY")
   guard_q=$(printf '%q' "$GUARDRAILS_BIN")
   bun_q=$(printf '%q' "$BUN_BIN")
   local_db_q=$(printf '%q' "$LOCAL_DB")
+  profile_q=$(printf '%q' "$GUARDRAILS_PROFILE")
   cat > "$LIVE_WRAPPER" <<EOF
 #!/bin/zsh
 # opencode-local-wrapper-repo-root: $ROOT
@@ -778,6 +847,7 @@ repair_links() {
 # opencode-local-wrapper-guardrails-bin: $GUARDRAILS_BIN
 export OPENCODE_BIN_PATH=$active_q
 export OPENCODE_DB=\${OPENCODE_DB:-$local_db_q}
+export OPENCODE_LOCAL_GUARDRAILS_PROFILE=$profile_q
 exec $bun_q $guard_q "\$@"
 EOF
   chmod 755 "$LIVE_WRAPPER"
@@ -793,12 +863,13 @@ EOF
           entrypoint: process.argv[5],
           live_wrapper: process.argv[6],
           local_db: process.argv[7],
+          local_guardrails_profile: process.argv[8],
         },
         null,
         2,
       )}\n`,
     )
-  ' "$LIVE_WRAPPER_MANIFEST" "$ROOT" "$ACTIVE_BINARY" "$GUARDRAILS_BIN" "$ENTRYPOINT" "$LIVE_WRAPPER" "$LOCAL_DB"
+  ' "$LIVE_WRAPPER_MANIFEST" "$ROOT" "$ACTIVE_BINARY" "$GUARDRAILS_BIN" "$ENTRYPOINT" "$LIVE_WRAPPER" "$LOCAL_DB" "$GUARDRAILS_PROFILE"
 
   # HIGH fix (review #205, codex): refuse to overwrite a regular file at
   # ENTRYPOINT or CACHED_BUNDLE; only replace symlinks or missing paths.
@@ -819,6 +890,7 @@ wrapper_manifest_matches() {
       entrypoint: process.argv[5],
       live_wrapper: process.argv[6],
       local_db: process.argv[7],
+      local_guardrails_profile: process.argv[8],
     }
     const mismatches = Object.entries(expected).filter(([key, value]) => data[key] !== value)
     if (mismatches.length) {
@@ -827,7 +899,7 @@ wrapper_manifest_matches() {
       )
       process.exit(1)
     }
-  ' "$LIVE_WRAPPER_MANIFEST" "$ROOT" "$ACTIVE_BINARY" "$GUARDRAILS_BIN" "$ENTRYPOINT" "$LIVE_WRAPPER" "$LOCAL_DB" >/dev/null
+  ' "$LIVE_WRAPPER_MANIFEST" "$ROOT" "$ACTIVE_BINARY" "$GUARDRAILS_BIN" "$ENTRYPOINT" "$LIVE_WRAPPER" "$LOCAL_DB" "$GUARDRAILS_PROFILE" >/dev/null
 }
 
 assert_not_pinned() {
@@ -935,6 +1007,9 @@ if [[ "$mode" == "deploy" ]]; then
 elif [[ "$mode" == "fix" ]]; then
   repair_links
 fi
+if [[ "$mode" == "deploy" || "$mode" == "fix" ]]; then
+  repair_global_guardrail_plugins
+fi
 
 mark "$([[ -x "$GUARDRAILS_BIN" ]] && echo ok || echo fail)" "guardrails wrapper is executable"
 mark "$(grep -Fq "OPENCODE_CONFIG_DIR" "$GUARDRAILS_BIN" 2>/dev/null && echo ok || echo fail)" "guardrails wrapper sets OPENCODE_CONFIG_DIR"
@@ -964,10 +1039,13 @@ active_q_check=$(printf '%q' "$ACTIVE_BINARY")
 guard_q_check=$(printf '%q' "$GUARDRAILS_BIN")
 bun_q_check=$(printf '%q' "$BUN_BIN")
 local_db_q_check=$(printf '%q' "$LOCAL_DB")
+profile_q_check=$(printf '%q' "$GUARDRAILS_PROFILE")
 mark "$(grep -Fq "OPENCODE_BIN_PATH=$active_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper pins active binary"
 mark "$(grep -Fq "OPENCODE_DB=\${OPENCODE_DB:-$local_db_q_check}" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper defaults stable local database: $LOCAL_DB"
+mark "$(grep -Fq "OPENCODE_LOCAL_GUARDRAILS_PROFILE=$profile_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper filters managed global guardrails profile"
 mark "$(grep -Fq "exec $bun_q_check $guard_q_check" "$LIVE_WRAPPER" 2>/dev/null && echo ok || echo fail)" "live wrapper enters guardrails profile"
 mark "$(wrapper_manifest_matches && echo ok || echo fail)" "live wrapper manifest pins current worktree safely"
+mark "$(global_guardrail_plugins_clean && echo ok || echo fail)" "managed global guardrail plugin symlinks point at current profile"
 
 entry_version="$("$ENTRYPOINT" --version 2>/dev/null || true)"
 active_version="$("$ACTIVE_BINARY" --version 2>/dev/null || true)"
