@@ -25,11 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        settings:
-          - name: linux
-            host: ubuntu-latest
-          - name: windows
-            host: windows-latest
+        settings: ${{ github.repository == 'Cor-Incorporated/opencode' && github.event_name == 'pull_request' && fromJSON('[{"name":"linux-smoke","host":"ubuntu-latest","mode":"smoke"}]') || fromJSON('[{"name":"linux","host":"ubuntu-latest","mode":"full"},{"name":"windows","host":"windows-latest","mode":"full"}]') }}
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -54,6 +50,7 @@ jobs:
           git config --global user.name "opencode"
 
       - name: Cache Turbo
+        if: matrix.settings.mode == 'full'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: node_modules/.cache/turbo
@@ -63,6 +60,7 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
+        if: matrix.settings.mode == 'full'
         timeout-minutes: 20
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -73,13 +71,22 @@ jobs:
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+      - name: Run fork PR smoke tests
+        if: matrix.settings.mode == 'smoke'
+        timeout-minutes: 5
+        run: |
+          bun --cwd packages/opencode test --timeout 30000 \
+            test/cli/smokes/read-only.test.ts \
+            test/cli/help/help-snapshots.test.ts
+
       - name: Check generated client
-        if: runner.os == 'Linux'
+        if: matrix.settings.mode == 'full' && runner.os == 'Linux'
         working-directory: packages/client
         run: bun run check:generated
 
       - name: Run HttpApi exerciser gates
-        if: runner.os == 'Linux'
+        if: matrix.settings.mode == 'full' && runner.os == 'Linux'
+        timeout-minutes: 10
         working-directory: packages/opencode
         run: bun run test:httpapi
 
