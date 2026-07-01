@@ -3,6 +3,47 @@ import { MUTATING_TOOLS, bash, cfg, has, json, list, num, pick, rel, sec, stash,
 import type { GuardrailContext } from "./guardrail-context"
 
 export function createAccessHandlers(ctx: GuardrailContext) {
+  function resetReviewEvidence() {
+    return {
+      reviewed: false,
+      review_at: "",
+      review_agent: "",
+      review_glm_state: "",
+      review_codex_state: ctx.hasCodexMcp ? "" : "done",
+      review_state: "",
+      review_glm_at: "",
+      review_codex_at: ctx.hasCodexMcp ? "" : "auto:no-codex-mcp",
+      review_checks_at: "",
+      review_pr_number: "",
+      reviewed_head: "",
+      reviewed_head_sha: "",
+      review_branch: "",
+      reviewed_branch: "",
+      review_worktree_clean: false,
+      review_dirty_count: 0,
+      review_dirty_paths: [],
+      review_evidence_state: "",
+      review_evidence_at: "",
+      review_evidence_head: "",
+      pr_head_ref_oid: "",
+    }
+  }
+
+  function guardrailRuntimeReadOnlyCommand(cmd: string) {
+    const trimmed = cmd.trim()
+    if (bash(trimmed)) return false
+    if (/\bfind\b[\s\S]*(?:\s-delete\b|\s-exec\b|\s-ok\b)/i.test(trimmed)) return false
+    return /^(?:ls|cat|grep|egrep|fgrep|rg|find|pwd|stat|wc|head|tail|sed\s+-n|test|\[|readlink|file|du)\b/i.test(
+      trimmed,
+    )
+  }
+
+  function inlineInterpreterShell(cmd: string) {
+    return /(?:^|[;&|]\s*|\s)(?:(?:python|python3|ruby|perl)\s+-[A-Za-z]*[ce]|node\s+(?:-[A-Za-z]*e|--eval\b)|bun\s+(?:-[A-Za-z]*e|--eval\b)|deno\s+eval\b|(?:sh|bash|zsh)\s+-c\b)/i.test(
+      cmd,
+    )
+  }
+
   async function toolBeforeAccess(
     item: { tool: string; args?: unknown; callID?: unknown },
     out: { args: Record<string, unknown> },
@@ -34,9 +75,13 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         throw new Error(text("shell access to protected files"))
       }
       const touchesGuardrailRuntime = file.includes(".opencode/guardrails/")
-      if (touchesGuardrailRuntime && bash(cmd)) {
+      if (touchesGuardrailRuntime && !guardrailRuntimeReadOnlyCommand(cmd)) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
+      }
+      if (inlineInterpreterShell(cmd)) {
+        await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "interpreter shell can mutate guardrail runtime" })
+        throw new Error(text("interpreter shell can mutate guardrail runtime"))
       }
       if (/\bdocker\s+build\b/i.test(cmd)) {
         const secretPatterns = [
@@ -166,9 +211,7 @@ export function createAccessHandlers(ctx: GuardrailContext) {
       if (bash(cmd)) {
         await ctx.mark({
           edits_since_review: num(data.edits_since_review) + 1,
-          review_glm_state: "",
-          review_codex_state: ctx.hasCodexMcp ? "" : "done",
-          review_state: "",
+          ...resetReviewEvidence(),
         })
       }
     }
@@ -184,9 +227,7 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         edit_count_since_check: num(data.edit_count_since_check) + 1,
         edits_since_review: num(data.edits_since_review) + 1,
         last_edit: relFile,
-        review_glm_state: "",
-        review_codex_state: ctx.hasCodexMcp ? "" : "done",
-        review_state: "",
+        ...resetReviewEvidence(),
       })
 
       if (/\.(test|spec)\.(ts|tsx|js|jsx)$|(^|\/)test_.*\.py$|_test\.go$/.test(relFile)) {

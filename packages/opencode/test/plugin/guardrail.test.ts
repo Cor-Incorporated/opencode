@@ -34,6 +34,23 @@ function client(): GuardrailInput["client"] {
   }
 }
 
+async function writeReviewEvidence(worktree: string, data: Record<string, unknown>) {
+  const guardrails = path.join(worktree, ".opencode", "guardrails")
+  await fs.mkdir(guardrails, { recursive: true })
+  await Bun.write(path.join(guardrails, "review-evidence.json"), JSON.stringify(data, null, 2))
+}
+
+async function withHome(home: string, fn: () => Promise<void>) {
+  const previous = process.env.HOME
+  process.env.HOME = home
+  try {
+    await fn()
+  } finally {
+    if (previous === undefined) delete process.env.HOME
+    else process.env.HOME = previous
+  }
+}
+
 describe("guardrail plugin", () => {
   test("uses OpenCode-compatible part ids for injected text", () => {
     expect(partID().startsWith("prt_")).toBe(true)
@@ -62,6 +79,72 @@ describe("guardrail plugin", () => {
 
     expect(await ensureLocalOpencodeIgnored(teamDir)).toBe(false)
     expect(await Bun.file(exclude).text()).toBe(before)
+  })
+
+  test("session.created restores same-head review evidence after Codex MCP detection", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const head = (await Bun.$`git rev-parse HEAD`.cwd(tmp.path).text()).trim()
+    await writeReviewEvidence(tmp.path, {
+      head,
+      review_glm_state: "done",
+      review_glm_at: "2026-07-01T00:00:00.000Z",
+      review_agent: "code-reviewer",
+      review_critical_count: 0,
+      review_high_count: 0,
+    })
+    const plugin = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+
+    await withHome(tmp.path, async () => {
+      await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_restore" } } })
+    })
+
+    const data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.read_count).toBe(0)
+    expect(data.workflow_phase).toBe("idle")
+    expect(data.review_glm_state).toBe("done")
+    expect(data.review_codex_state).toBe("done")
+    expect(data.review_codex_at).toBe("auto:no-codex-mcp")
+    expect(data.review_state).toBe("done")
+    expect(data.edits_since_review).toBe(0)
+    expect(data.review_agent).toBe("code-reviewer")
+  })
+
+  test("session.created skips review evidence when HEAD mismatches", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await writeReviewEvidence(tmp.path, {
+      head: "0000000000000000000000000000000000000000",
+      review_glm_state: "done",
+    })
+    const plugin = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+
+    await withHome(tmp.path, async () => {
+      await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_mismatch" } } })
+    })
+
+    const data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.review_glm_state).toBe("")
+    expect(data.review_codex_state).toBe("done")
+    expect(data.review_state).toBe("")
+  })
+
+  test("session.created skips review evidence when worktree is dirty", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const head = (await Bun.$`git rev-parse HEAD`.cwd(tmp.path).text()).trim()
+    await writeReviewEvidence(tmp.path, {
+      head,
+      review_glm_state: "done",
+    })
+    await Bun.write(path.join(tmp.path, "dirty.txt"), "dirty\n")
+    const plugin = await guardrail({ client: client(), directory: tmp.path, worktree: tmp.path }, {})
+
+    await withHome(tmp.path, async () => {
+      await plugin.event({ event: { type: "session.created", properties: { sessionID: "ses_dirty" } } })
+    })
+
+    const data = await Bun.file(path.join(tmp.path, ".opencode", "guardrails", "state.json")).json()
+    expect(data.review_glm_state).toBe("")
+    expect(data.review_codex_state).toBe("done")
+    expect(data.review_state).toBe("")
   })
 
   test("tool hook blocks code PR merge when code-reviewer state is missing", async () => {

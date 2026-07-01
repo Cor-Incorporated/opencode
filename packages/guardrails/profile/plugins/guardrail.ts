@@ -180,6 +180,7 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
             await ctx.seen("codex_mcp.not_configured", { auto_satisfied: true })
           }
         } catch {}
+        await review.hydrateReviewEvidence()
       }
       if (event.type === "permission.asked") {
         await ctx.mark({

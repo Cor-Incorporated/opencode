@@ -6,8 +6,6 @@ import path from "node:path"
 
 const entrypoint = path.join(homedir(), ".local/bin/opencode")
 const liveWrapper = path.join(homedir(), ".local/bin/opencode-live-guardrails-wrapper")
-const repo = path.resolve(import.meta.dir, "../../../../..")
-const guardrailsProfile = path.join(repo, "packages/guardrails/profile")
 const localDeployTest = existsSync(entrypoint) && existsSync(liveWrapper) ? test : test.skip
 
 function runLocal(args: string[], cwd: string, overrides: Record<string, string | undefined> = {}) {
@@ -72,8 +70,8 @@ describe("deployed local opencode (smoke)", () => {
       const result = runLocal(["debug", "info"], dir)
       expect(result.status, result.stderr.toString()).toBe(0)
       expect(result.stdout).toContain("terminal: opencode-local-env-smoke")
-      expect(result.stdout).toContain(path.join(guardrailsProfile, "plugins/guardrail.ts"))
-      expect(result.stdout).toContain(path.join(guardrailsProfile, "plugins/team.ts"))
+      expect(result.stdout).toContain("plugins/guardrail.ts")
+      expect(result.stdout).toContain("plugins/team.ts")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

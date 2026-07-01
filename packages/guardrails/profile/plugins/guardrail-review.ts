@@ -1,10 +1,208 @@
-import { flag, list, num, stash, str } from "./guardrail-patterns"
+import path from "path"
+import { flag, git, list, num, save, stash, str } from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
 
 const REVIEW_POLL_GAP = 750
 const REVIEW_TIMEOUT_MS = 120_000
+const REVIEW_EVIDENCE_FILE = "review-evidence.json"
 
 export function createReviewPipeline(ctx: GuardrailContext) {
+  function evidencePath() {
+    return path.join(path.dirname(ctx.state), REVIEW_EVIDENCE_FILE)
+  }
+
+  function record(data: unknown) {
+    if (data && typeof data === "object" && !Array.isArray(data)) return data as Record<string, unknown>
+    return {}
+  }
+
+  function dirtyPath(line: string) {
+    return line.slice(3).trim()
+  }
+
+  async function currentGitSnapshot() {
+    const head = await git(ctx.input.worktree, ["rev-parse", "HEAD"])
+    if (head.code !== 0 || !head.stdout.trim()) return
+    const branch = await git(ctx.input.worktree, ["branch", "--show-current"])
+    const status = await git(ctx.input.worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
+    const dirtyPaths =
+      status.code === 0
+        ? status.stdout
+            .split(/\r?\n/)
+            .map(dirtyPath)
+            .filter((item) => item && !item.startsWith(".opencode/guardrails/"))
+        : ["<git status failed>"]
+    return {
+      head: head.stdout.trim(),
+      branch: branch.code === 0 ? branch.stdout.trim() : "",
+      dirtyPaths,
+      clean: dirtyPaths.length === 0,
+    }
+  }
+
+  function reviewCounts(data: Record<string, unknown>, kind: "glm" | "codex", findings: ReturnType<typeof parseFindings>) {
+    const glmCritical =
+      kind === "glm"
+        ? findings.critical
+        : str(data.review_glm_state) === "done"
+          ? num(data.review_glm_critical_count) || num(data.review_critical_count)
+          : 0
+    const glmHigh =
+      kind === "glm"
+        ? findings.high
+        : str(data.review_glm_state) === "done"
+          ? num(data.review_glm_high_count) || num(data.review_high_count)
+          : 0
+    const codexCritical =
+      kind === "codex"
+        ? findings.critical
+        : str(data.review_codex_state) === "done"
+          ? num(data.review_codex_critical_count) || num(data.review_critical_count)
+          : 0
+    const codexHigh =
+      kind === "codex"
+        ? findings.high
+        : str(data.review_codex_state) === "done"
+          ? num(data.review_codex_high_count) || num(data.review_high_count)
+          : 0
+    return {
+      ...(kind === "glm"
+        ? { review_glm_critical_count: findings.critical, review_glm_high_count: findings.high }
+        : { review_codex_critical_count: findings.critical, review_codex_high_count: findings.high }),
+      review_critical_count: Math.max(glmCritical, codexCritical),
+      review_high_count: Math.max(glmHigh, codexHigh),
+    }
+  }
+
+  async function saveReviewEvidence(data?: Record<string, unknown>) {
+    const snapshot = await currentGitSnapshot()
+    if (!snapshot) {
+      await ctx.seen("review_evidence.not_saved", { reason: "git_head_unavailable" })
+      return false
+    }
+    const current = data ?? (await stash(ctx.state))
+    await save(evidencePath(), {
+      version: 1,
+      saved_at: new Date().toISOString(),
+      reviewed: flag(current.reviewed),
+      review_glm_state: str(current.review_glm_state),
+      review_codex_state: str(current.review_codex_state),
+      review_state: str(current.review_state),
+      review_at: str(current.review_at),
+      review_agent: str(current.review_agent),
+      review_glm_at: str(current.review_glm_at),
+      review_codex_at: str(current.review_codex_at),
+      review_critical_count: num(current.review_critical_count),
+      review_high_count: num(current.review_high_count),
+      review_severe_count: num(current.review_critical_count) + num(current.review_high_count),
+      review_glm_critical_count: num(current.review_glm_critical_count),
+      review_glm_high_count: num(current.review_glm_high_count),
+      review_codex_critical_count: num(current.review_codex_critical_count),
+      review_codex_high_count: num(current.review_codex_high_count),
+      head: snapshot.head,
+      head_sha: snapshot.head,
+      reviewed_head: snapshot.head,
+      reviewed_head_sha: snapshot.head,
+      review_branch: snapshot.branch,
+      reviewed_branch: snapshot.branch,
+      review_worktree_clean: snapshot.clean,
+      review_dirty_count: snapshot.dirtyPaths.length,
+      review_dirty_paths: snapshot.dirtyPaths,
+    })
+    await ctx.seen("review_evidence.saved", {
+      head: snapshot.head,
+      branch: snapshot.branch,
+      clean: snapshot.clean,
+      dirty_count: snapshot.dirtyPaths.length,
+    })
+    return true
+  }
+
+  async function restoreReviewEvidence(expectedHead?: string) {
+    const snapshot = await currentGitSnapshot()
+    if (!snapshot) {
+      await ctx.seen("review_evidence.not_restored", { reason: "git_head_unavailable" })
+      return false
+    }
+    if (!snapshot.clean) {
+      await ctx.seen("review_evidence.not_restored", {
+        reason: "dirty_worktree",
+        dirty_count: snapshot.dirtyPaths.length,
+      })
+      return false
+    }
+    const evidence = record(
+      await Bun.file(evidencePath())
+        .json()
+        .catch(() => ({})),
+    )
+    const reviewedHead =
+      str(evidence.reviewed_head_sha) || str(evidence.reviewed_head) || str(evidence.head_sha) || str(evidence.head)
+    if (!reviewedHead) {
+      await ctx.seen("review_evidence.not_restored", { reason: "missing" })
+      return false
+    }
+    if (reviewedHead !== snapshot.head) {
+      await ctx.seen("review_evidence.not_restored", {
+        reason: "head_mismatch",
+        reviewed_head: reviewedHead,
+        current_head: snapshot.head,
+      })
+      return false
+    }
+    if (expectedHead && reviewedHead !== expectedHead) {
+      await ctx.seen("review_evidence.not_restored", {
+        reason: "pr_head_mismatch",
+        reviewed_head: reviewedHead,
+        expected_head: expectedHead,
+      })
+      return false
+    }
+    if (evidence.review_worktree_clean === false || evidence.clean === false) {
+      await ctx.seen("review_evidence.not_restored", { reason: "evidence_dirty_worktree" })
+      return false
+    }
+    const current = await stash(ctx.state)
+    const reviewGlm = str(evidence.review_glm_state) === "done" || str(current.review_glm_state) === "done"
+    const reviewCodex = str(evidence.review_codex_state) === "done" || str(current.review_codex_state) === "done"
+    const restored = {
+      reviewed: flag(evidence.reviewed) || reviewGlm || reviewCodex,
+      review_glm_state: reviewGlm ? "done" : "",
+      review_codex_state: reviewCodex ? "done" : "",
+      review_state: str(evidence.review_state),
+      review_at: str(evidence.review_at),
+      review_agent: str(evidence.review_agent),
+      review_glm_at: str(evidence.review_glm_at) || str(current.review_glm_at),
+      review_codex_at: str(evidence.review_codex_at) || str(current.review_codex_at),
+      review_critical_count: num(evidence.review_critical_count),
+      review_high_count: num(evidence.review_high_count),
+      review_severe_count: num(evidence.review_severe_count),
+      review_glm_critical_count: num(evidence.review_glm_critical_count),
+      review_glm_high_count: num(evidence.review_glm_high_count),
+      review_codex_critical_count: num(evidence.review_codex_critical_count),
+      review_codex_high_count: num(evidence.review_codex_high_count),
+      reviewed_head: reviewedHead,
+      reviewed_head_sha: reviewedHead,
+      review_evidence_head: reviewedHead,
+      review_branch: str(evidence.review_branch) || str(evidence.reviewed_branch),
+      reviewed_branch: str(evidence.reviewed_branch) || str(evidence.review_branch),
+      review_worktree_clean: true,
+      review_dirty_count: 0,
+      review_dirty_paths: [],
+      review_evidence_state: "restored",
+      review_evidence_at: str(evidence.saved_at),
+      edits_since_review: 0,
+    }
+    await ctx.mark(restored)
+    await syncReviewState()
+    await ctx.seen("review_evidence.restored", { head: reviewedHead, branch: restored.review_branch })
+    return true
+  }
+
+  async function hydrateReviewEvidence(expectedHead?: string) {
+    return restoreReviewEvidence(expectedHead)
+  }
+
   function reviewGate(data: Record<string, unknown>) {
     const glm = str(data.review_glm_state) === "done"
     const codex = str(data.review_codex_state) === "done"
@@ -115,10 +313,10 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       workflow_review_attempts: attempts,
       review_at: new Date().toISOString(),
       edits_since_review: 0,
-      review_critical_count: findings.critical,
-      review_high_count: findings.high,
+      ...reviewCounts(data, "glm", findings),
     })
     await syncReviewState()
+    await saveReviewEvidence()
     await ctx.seen("auto_review.completed", {
       findings: findings.total,
       critical: findings.critical,
@@ -188,12 +386,18 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       return
     }
     const findings = parseFindings(output)
+    const data = await stash(ctx.state)
+    const now = new Date().toISOString()
     await ctx.mark({
       reviewed: true,
+      review_at: now,
+      review_agent: "codex:mcp",
       review_codex_state: "done",
-      review_codex_at: new Date().toISOString(),
+      review_codex_at: now,
+      ...reviewCounts(data, "codex", findings),
     })
     await syncReviewState()
+    await saveReviewEvidence()
     await ctx.seen("codex_review.completed", { critical: findings.critical, high: findings.high })
   }
 
@@ -215,21 +419,22 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       }
       const findings = parseFindings([cmd, str(out.output)].join("\n"))
       const now = new Date().toISOString()
+      const data = await stash(ctx.state)
       await ctx.mark({
         reviewed: true,
         review_at: now,
         review_agent: `gstack:${gstack.skill}`,
         ...(gstack.kind === "codex"
-          ? { review_codex_state: "done", review_codex_at: now }
+          ? { review_codex_state: "done", review_codex_at: now, ...reviewCounts(data, "codex", findings) }
           : {
               review_glm_state: "done",
               review_glm_at: now,
               edits_since_review: 0,
-              review_critical_count: findings.critical,
-              review_high_count: findings.high,
+              ...reviewCounts(data, "glm", findings),
             }),
       })
       await syncReviewState()
+      await saveReviewEvidence()
       await ctx.seen("gstack_review.completed", {
         skill: gstack.skill,
         kind: gstack.kind,
@@ -252,21 +457,22 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       return
     }
     const findings = parseFindings(output)
+    const now = new Date().toISOString()
     await ctx.mark({
       reviewed: true,
-      review_at: new Date().toISOString(),
+      review_at: now,
       review_agent: isClaudeReviewer
         ? "claude:code-reviewer"
         : isSkillScriptReviewer
           ? "code-reviewer:scripts"
           : "opencode:review",
       review_glm_state: "done",
-      review_glm_at: new Date().toISOString(),
+      review_glm_at: now,
       edits_since_review: 0,
-      review_critical_count: findings.critical,
-      review_high_count: findings.high,
+      ...reviewCounts(await stash(ctx.state), "glm", findings),
     })
     await syncReviewState()
+    await saveReviewEvidence()
     await ctx.seen("external_review.completed", {
       agent: isClaudeReviewer
         ? "claude:code-reviewer"
@@ -294,6 +500,9 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     checklist,
     parseFindings,
     reviewGate,
+    saveReviewEvidence,
+    restoreReviewEvidence,
+    hydrateReviewEvidence,
     syncReviewState,
     handleAutoReviewTrigger,
     handleCodexDetection,
