@@ -1,4 +1,5 @@
 import type { Argv } from "yargs"
+import { Database } from "bun:sqlite"
 import { Effect } from "effect"
 import { cmd } from "./cmd"
 import { effectCmd, fail } from "../effect-cmd"
@@ -7,12 +8,14 @@ import { SessionID } from "../../session/schema"
 import { UI } from "../ui"
 import { Locale } from "@/util/locale"
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { Global } from "@opencode-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
 import { NotFoundError } from "@/storage/storage"
 import { EOL } from "os"
 import path from "path"
 import { which } from "@opencode-ai/core/util/which"
+import { readdirSync } from "fs"
 
 function pagerCmd(): string[] {
   const lessOptions = ["-R", "-S"]
@@ -44,7 +47,8 @@ function pagerCmd(): string[] {
 export const SessionCommand = cmd({
   command: "session",
   describe: "manage sessions",
-  builder: (yargs: Argv) => yargs.command(SessionListCommand).command(SessionDeleteCommand).demandCommand(),
+  builder: (yargs: Argv) =>
+    yargs.command(SessionListCommand).command(SessionLocateCommand).command(SessionDeleteCommand).demandCommand(),
   async handler() {},
 })
 
@@ -115,6 +119,48 @@ export const SessionListCommand = effectCmd({
   }),
 })
 
+type LocatedSession = {
+  database: string
+  id: string
+  title: string
+  directory: string
+  version: string
+  updated: number
+  created: number
+  legacyMessages: number
+  messages: number
+}
+
+export const SessionLocateCommand = cmd({
+  command: "locate <sessionID>",
+  describe: "locate the database containing a session",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("sessionID", {
+        describe: "session ID to locate",
+        type: "string",
+        demandOption: true,
+      })
+      .option("format", {
+        describe: "output format",
+        type: "string",
+        choices: ["table", "json"],
+        default: "table",
+      }),
+  async handler(args) {
+    const sessionID = SessionID.make(args.sessionID)
+    const sessions = locateSession(sessionID)
+    if (sessions.length === 0) {
+      console.error(`Session not found in ${Global.Path.data}/opencode*.db: ${sessionID}`)
+      process.exitCode = 1
+      return
+    }
+
+    const output = args.format === "json" ? formatLocateJSON(sessions) : formatLocateTable(sessions)
+    console.log(output)
+  },
+})
+
 function formatSessionTable(sessions: Session.Info[]): string {
   const lines: string[] = []
 
@@ -144,4 +190,84 @@ function formatSessionJSON(sessions: Session.Info[]): string {
     directory: session.directory,
   }))
   return JSON.stringify(jsonData, null, 2)
+}
+
+function locateSession(sessionID: SessionID): LocatedSession[] {
+  return readdirSync(Global.Path.data)
+    .filter((file) => /^opencode.*\.db$/.test(file))
+    .flatMap((file) => locateSessionInDatabase(path.join(Global.Path.data, file), sessionID))
+}
+
+function locateSessionInDatabase(filename: string, sessionID: SessionID): LocatedSession[] {
+  try {
+    const db = new Database(filename, { readonly: true, strict: true })
+    try {
+      if (!hasTable(db, "session")) return []
+      const row = db
+        .query<
+          {
+            id: string
+            title: string
+            directory: string
+            version: string
+            time_created: number
+            time_updated: number
+          },
+          [string]
+        >("select id, title, directory, version, time_created, time_updated from session where id = ?")
+        .get(sessionID)
+      if (!row) return []
+
+      return [
+        {
+          database: filename,
+          id: row.id,
+          title: row.title,
+          directory: row.directory,
+          version: row.version,
+          updated: row.time_updated,
+          created: row.time_created,
+          legacyMessages: countSessionRows(db, "message", sessionID),
+          messages: countSessionRows(db, "session_message", sessionID),
+        },
+      ]
+    } finally {
+      db.close()
+    }
+  } catch {
+    return []
+  }
+}
+
+function hasTable(db: Database, name: string) {
+  return Boolean(
+    db.query<{ name: string }, [string]>("select name from sqlite_master where type = 'table' and name = ?").get(name),
+  )
+}
+
+function countSessionRows(db: Database, table: "message" | "session_message", sessionID: SessionID) {
+  if (!hasTable(db, table)) return 0
+  return db
+    .query<{ count: number }, [string]>(`select count(*) as count from ${table} where session_id = ?`)
+    .get(sessionID)!.count
+}
+
+function formatLocateTable(sessions: LocatedSession[]) {
+  const lines = ["Database\tMessages\tUpdated\tTitle\tDirectory"]
+  for (const session of sessions) {
+    lines.push(
+      [
+        session.database,
+        `${session.messages}/${session.legacyMessages}`,
+        new Date(session.updated).toISOString(),
+        session.title,
+        session.directory,
+      ].join("\t"),
+    )
+  }
+  return lines.join(EOL)
+}
+
+function formatLocateJSON(sessions: LocatedSession[]) {
+  return JSON.stringify(sessions, null, 2)
 }
