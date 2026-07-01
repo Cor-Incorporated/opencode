@@ -673,6 +673,37 @@ describe("guardrail-git", () => {
     }
   })
 
+  test.serial("blocks FULL tier PR merge when state only has generic head evidence", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/done-with-generic-head.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/done-with-generic-head.ts"],
+      headRefOid: "abc123",
+    })
+    try {
+      await expect(
+        createGitHandlers(fixture.ctx, review()).bashBeforeGit(
+          "gh pr merge 42 --merge",
+          {},
+          {
+            review_glm_state: "done",
+            review_codex_state: "done",
+            head: "abc123",
+            head_sha: "abc123",
+            review_critical_count: 0,
+            review_high_count: 0,
+            edits_since_review: 0,
+          },
+        ),
+      ).rejects.toThrow("restored review evidence is missing the reviewed HEAD SHA")
+
+      expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence missing reviewed HEAD SHA")
+    } finally {
+      restore()
+    }
+  })
+
   test.serial("blocks FULL tier PR merge when existing review evidence head does not match PR head", async () => {
     await using fixture = await diffFixture("packages/opencode/src/done-with-stale-head.ts")
     await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
@@ -698,6 +729,38 @@ describe("guardrail-git", () => {
       ).rejects.toThrow("restored review evidence was captured for a different PR HEAD")
 
       expect(fixture.marks.at(-1)?.last_reason).toBe("review evidence HEAD mismatch")
+    } finally {
+      restore()
+    }
+  })
+
+  test.serial("blocks FULL tier PR merge when hydrate refuses PR head mismatch", async () => {
+    await using fixture = await diffFixture("packages/opencode/src/refused-review-evidence.ts")
+    await Bun.$`git remote add origin git@github.com:owner/repo.git`.cwd(fixture.ctx.input.worktree).quiet()
+    const calls: string[] = []
+    const restore = fakePrMergeGh({
+      pr: "42",
+      files: ["packages/opencode/src/refused-review-evidence.ts"],
+      headRefOid: "newhead",
+    })
+    try {
+      await expect(
+        createGitHandlers(
+          fixture.ctx,
+          review({
+            async hydrateReviewEvidence(expectedHead) {
+              calls.push(expectedHead ?? "")
+              await fixture.ctx.mark({ review_evidence_state: "stale", review_evidence_reason: "pr_head_mismatch" })
+              return false
+            },
+          }),
+        ).bashBeforeGit("gh pr merge 42 --merge", {}, { review_codex_state: "done" }),
+      ).rejects.toThrow("review evidence not accepted: pr_head_mismatch")
+
+      expect(calls).toEqual(["newhead"])
+      expect(fixture.marks.at(-1)?.last_reason).toBe(
+        "FULL tier: pending: GLM code-reviewer; review evidence not accepted: pr_head_mismatch",
+      )
     } finally {
       restore()
     }
