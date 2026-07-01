@@ -9,19 +9,10 @@ import { InstanceRef } from "../../src/effect/instance-ref"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
-import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
-import type {
-  LanguageModelV3CallOptions,
-  LanguageModelV3StreamPart,
-  LanguageModelV3StreamResult,
-} from "@ai-sdk/provider"
-import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
-import { Auth } from "@/auth"
-import { Config } from "@/config/config"
+import { LLMClient, RequestExecutor } from "@opencode-ai/llm/route"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
-import { Plugin } from "@/plugin"
 
 import { testEffect } from "../lib/effect"
 import type { Agent } from "../../src/agent/agent"
@@ -33,6 +24,9 @@ import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -58,15 +52,13 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
   }
 }
 
-const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([LLM.node, Provider.node])))
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
 const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
 
-// drainWith builds an isolated runtime so the custom layer fully owns LLM and
-// its transitive deps — `Effect.provide(layer)` over an existing runtime layers
-// the new services on top, but transitive Service overrides (e.g. RequestExecutor)
-// resolved through the outer LLM.defaultLayer leak through.
+// drainWith builds an isolated runtime so custom replacements fully own LLM and
+// its transitive deps.
 const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
   Effect.gen(function* () {
     const ctx = yield* InstanceRef
@@ -81,15 +73,16 @@ const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
     )
   })
 
-function llmLayerWithExecutor(executor: Layer.Layer<RequestExecutor.Service>, flags: Partial<RuntimeFlags.Info> = {}) {
-  return LLM.layer.pipe(
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(Config.defaultLayer),
-    Layer.provide(Provider.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)))),
-    Layer.provide(RuntimeFlags.layer(flags)),
-  )
+function llmLayerWithExecutor(
+  options: {
+    executor?: Layer.Layer<RequestExecutor.Service>
+    flags?: Partial<RuntimeFlags.Info>
+  } = {},
+) {
+  return AppNodeBuilder.build(LLM.node, [
+    [RuntimeFlags.node, RuntimeFlags.layer(options.flags)],
+    ...(options.executor ? ([[LayerNodePlatform.requestExecutor, options.executor]] as const) : []),
+  ])
 }
 
 describe("session.llm.hasToolCalls", () => {
@@ -758,172 +751,6 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
   })
 }
 
-type WorkflowApprovalResult = Awaited<ReturnType<NonNullable<GitLabWorkflowLanguageModel["approvalHandler"]>>>
-type WorkflowApprovalTestResult = WorkflowApprovalResult | "pending"
-
-class TestGitLabWorkflowLanguageModel extends GitLabWorkflowLanguageModel {
-  approvalResult: WorkflowApprovalTestResult | undefined
-
-  constructor(
-    workDir: string,
-    private readonly approvalTimeoutMs?: number,
-  ) {
-    super(
-      "duo-workflow",
-      {
-        provider: "gitlab.workflow",
-        instanceUrl: "https://gitlab.example",
-        getHeaders: () => ({}),
-      },
-      { workingDirectory: workDir },
-    )
-  }
-
-  override async doStream(_options: LanguageModelV3CallOptions): Promise<LanguageModelV3StreamResult> {
-    const handler = this.approvalHandler
-    if (!handler) throw new Error("approval handler not configured")
-    const approval = handler([{ name: "bash", args: JSON.stringify({ title: "bun test" }) }])
-    this.approvalResult =
-      this.approvalTimeoutMs === undefined
-        ? await approval
-        : await Promise.race<WorkflowApprovalTestResult>([
-            approval,
-            new Promise((resolve) => setTimeout(() => resolve("pending"), this.approvalTimeoutMs)),
-          ])
-    return {
-      stream: new ReadableStream<LanguageModelV3StreamPart>({
-        start(controller) {
-          controller.enqueue({ type: "stream-start", warnings: [] })
-          controller.enqueue({
-            type: "finish",
-            finishReason: { unified: "stop", raw: "stop" },
-            usage: {
-              inputTokens: { total: 0, noCache: 0, cacheRead: undefined, cacheWrite: undefined },
-              outputTokens: { total: 0, text: 0, reasoning: undefined },
-            },
-          })
-          controller.close()
-        },
-      }),
-    }
-  }
-}
-
-function runWorkflowApproval(input: {
-  agentPermission: PermissionV1.Ruleset
-  sessionPermission?: PermissionV1.Ruleset
-  approvalTimeoutMs?: number
-}) {
-  return Effect.gen(function* () {
-    const ctx = yield* InstanceRef
-    if (!ctx) return yield* Effect.die("InstanceRef not provided")
-
-    const workflowModel = new TestGitLabWorkflowLanguageModel(ctx.directory, input.approvalTimeoutMs)
-    const model = workflowModelTestModel()
-    const sessionID = SessionID.make("session-test-workflow-approval")
-    const agent = {
-      name: "test",
-      mode: "primary",
-      options: {},
-      permission: input.agentPermission.map((rule) => ({ ...rule })),
-    } satisfies Agent.Info
-
-    yield* drainWith(workflowApprovalTestLayer(workflowModel, model), {
-      user: {
-        id: MessageID.make("msg_user-workflow-approval"),
-        sessionID,
-        role: "user",
-        time: { created: Date.now() },
-        agent: agent.name,
-        model: { providerID: ProviderV2.ID.gitlab, modelID: model.id },
-      } satisfies SessionV1.User,
-      sessionID,
-      model,
-      agent,
-      permission: input.sessionPermission,
-      system: ["You are a helpful assistant."],
-      messages: [{ role: "user", content: "Hello" }],
-      tools: {
-        bash: tool({
-          description: "Run a command",
-          inputSchema: z.object({}),
-          execute: async () => ({ output: "" }),
-        }),
-      },
-    })
-
-    return {
-      approvalResult: workflowModel.approvalResult,
-      preapprovedTools: [...workflowModel.sessionPreapprovedTools],
-    }
-  })
-}
-
-function workflowModelTestModel() {
-  return {
-    id: ModelV2.ID.make("duo-workflow-test"),
-    providerID: ProviderV2.ID.gitlab,
-    api: { id: "duo-workflow-test", url: "https://gitlab.example", npm: "gitlab-ai-provider" },
-    name: "GitLab Workflow Test",
-    capabilities: {
-      temperature: true,
-      reasoning: false,
-      attachment: false,
-      toolcall: true,
-      input: { text: true, image: false, audio: false, video: false, pdf: false },
-      output: { text: true, image: false, audio: false, video: false, pdf: false },
-      interleaved: false,
-    },
-    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-    limit: { context: 100_000, output: 8_192 },
-    status: "active",
-    options: {},
-    headers: {},
-    release_date: "2026-01-01",
-  } satisfies Provider.Model
-}
-
-function workflowApprovalTestLayer(workflowModel: TestGitLabWorkflowLanguageModel, model: Provider.Model) {
-  return LLM.layer.pipe(
-    Layer.provide(
-      Layer.mock(Auth.Service)({
-        get: () => Effect.succeed(undefined),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Config.Service)({
-        get: () => Effect.succeed({} as ConfigV1.Info),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Provider.Service)({
-        getProvider: () =>
-          Effect.succeed({
-            id: ProviderV2.ID.gitlab,
-            name: "GitLab",
-            source: "config",
-            env: [],
-            options: {},
-            models: { [model.id]: model },
-          } satisfies Provider.Info),
-        getLanguage: () => Effect.succeed(workflowModel),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Plugin.Service)({
-        trigger: <Name extends string, Input, Output>(_name: Name, _input: Input, output: Output) =>
-          Effect.succeed(output),
-        list: () => Effect.succeed([]),
-        init: () => Effect.void,
-      }),
-    ),
-    Layer.provide(
-      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
-    ),
-    Layer.provide(RuntimeFlags.layer({})),
-  )
-}
-
 describe("session.llm.stream", () => {
   const vivgridFixture = { providerID: "vivgrid", modelID: "gemini-3.1-pro-preview" }
   it.instance(
@@ -1136,103 +963,6 @@ describe("session.llm.stream", () => {
     },
   )
 
-  it.instance("keeps workflow approvals asking when only agent default allows all", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "*", pattern: "*", action: "allow" }],
-        approvalTimeoutMs: 50,
-      })
-
-      expect(result.approvalResult).toBe("pending")
-      expect(result.preapprovedTools).not.toContain("bash")
-    }),
-  )
-
-  it.instance("lets session allow-all override workflow approvals for worker sessions", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "*", pattern: "*", action: "allow" }],
-        sessionPermission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-
-      expect(result.approvalResult).toEqual({ approved: true })
-      expect(result.preapprovedTools).toContain("bash")
-    }),
-  )
-
-  it.instance("lets worker session allow-all override explicit agent workflow asks", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
-        sessionPermission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-
-      expect(result.approvalResult).toEqual({ approved: true })
-      expect(result.preapprovedTools).toContain("bash")
-    }),
-  )
-
-  it.instance("honors explicit agent workflow approval allow rules", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "allow" }],
-      })
-
-      expect(result.approvalResult).toEqual({ approved: true })
-      expect(result.preapprovedTools).toContain("bash")
-    }),
-  )
-
-  it.instance("honors explicit agent workflow approval ask rules", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
-        approvalTimeoutMs: 50,
-      })
-
-      expect(result.approvalResult).toBe("pending")
-      expect(result.preapprovedTools).not.toContain("bash")
-    }),
-  )
-
-  it.instance("honors explicit agent workflow approval deny rules", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "workflow_tool_approval", pattern: "*", action: "deny" }],
-      })
-
-      expect(result.approvalResult).toEqual({ approved: false })
-      expect(result.preapprovedTools).not.toContain("bash")
-    }),
-  )
-
-  it.instance("keeps workflow approvals asking for wildcard agent workflow rules", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "workflow_*", pattern: "*", action: "allow" }],
-        approvalTimeoutMs: 50,
-      })
-
-      expect(result.approvalResult).toBe("pending")
-      expect(result.preapprovedTools).not.toContain("bash")
-    }),
-  )
-
-  it.instance("honors explicit session workflow approval rules over session allow-all", () =>
-    Effect.gen(function* () {
-      const result = yield* runWorkflowApproval({
-        agentPermission: [{ permission: "*", pattern: "*", action: "allow" }],
-        sessionPermission: [
-          { permission: "*", pattern: "*", action: "allow" },
-          { permission: "workflow_tool_approval", pattern: "*", action: "deny" },
-        ],
-      })
-
-      expect(result.approvalResult).toEqual({ approved: false })
-      expect(result.preapprovedTools).not.toContain("bash")
-    }),
-  )
-
   it.instance(
     "sends responses API payload for OpenAI models",
     () =>
@@ -1398,14 +1128,10 @@ describe("session.llm.stream", () => {
         } satisfies Agent.Info
 
         yield* drainWith(
-          LLM.layer.pipe(
-            Layer.provide(Auth.defaultLayer),
-            Layer.provide(Config.defaultLayer),
-            Layer.provide(Provider.defaultLayer),
-            Layer.provide(Plugin.defaultLayer),
-            Layer.provide(failingNativeClient),
-            Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
-          ),
+          AppNodeBuilder.build(LLM.node, [
+            [LayerNodePlatform.llmClient, failingNativeClient],
+            [RuntimeFlags.node, RuntimeFlags.layer({ experimentalNativeLlm: false })],
+          ]),
           {
             user: {
               id: MessageID.make("msg_user-native-flag-off"),
@@ -1468,7 +1194,7 @@ describe("session.llm.stream", () => {
           temperature: 0.2,
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor(RequestExecutor.defaultLayer, { experimentalNativeLlm: true }), {
+        yield* drainWith(llmLayerWithExecutor({ flags: { experimentalNativeLlm: true } }), {
           user: {
             id: MessageID.make("msg_user-native"),
             sessionID,
@@ -1551,7 +1277,7 @@ describe("session.llm.stream", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor(executor, { experimentalNativeLlm: true }), {
+        yield* drainWith(llmLayerWithExecutor({ executor, flags: { experimentalNativeLlm: true } }), {
           user: {
             id: MessageID.make("msg_user-native-injected-tool"),
             sessionID,
@@ -1583,6 +1309,7 @@ describe("session.llm.stream", () => {
             type: "function",
             name: "lookup",
             description: "Lookup data",
+            strict: false,
             parameters: {
               type: "object",
               properties: { query: { type: "string" } },
@@ -1639,7 +1366,7 @@ describe("session.llm.stream", () => {
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
         } satisfies Agent.Info
 
-        yield* drainWith(llmLayerWithExecutor(RequestExecutor.defaultLayer, { experimentalNativeLlm: true }), {
+        yield* drainWith(llmLayerWithExecutor({ flags: { experimentalNativeLlm: true } }), {
           user: {
             id: MessageID.make("msg_user-native-tool"),
             sessionID,
@@ -1671,6 +1398,7 @@ describe("session.llm.stream", () => {
             type: "function",
             name: "lookup",
             description: "Lookup data",
+            strict: false,
             parameters: {
               type: "object",
               properties: { query: { type: "string" } },

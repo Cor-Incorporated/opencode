@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { llmClient } from "@opencode-ai/core/effect/layer-node-platform"
+import { llmClient } from "@opencode-ai/core/effect/app-node-platform"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -8,7 +8,7 @@ import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent } from "@opencode-ai/llm"
-import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
+import { LLMClient } from "@opencode-ai/llm/route"
 import type { LLMClientService } from "@opencode-ai/llm/route"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -19,6 +19,7 @@ import { Plugin } from "@/plugin"
 import { Permission } from "@/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Wildcard } from "@/util/wildcard"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { EffectBridge } from "@/effect/bridge"
@@ -145,9 +146,10 @@ const live: Layer.Layer<
           }
         }
 
-        const approvalRuleset = workflowApprovalRuleset(input.agent.permission, input.permission)
+        const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
         workflowModel.sessionPreapprovedTools = Object.keys(prepared.tools).filter((name) => {
-          return Permission.evaluate("workflow_tool_approval", name, approvalRuleset).action === "allow"
+          const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
+          return !match || match.action !== "ask"
         })
 
         const approvedToolsForSession = new Set<string>()
@@ -189,7 +191,7 @@ const live: Layer.Layer<
                 patterns: uniquePatterns,
                 metadata: { tools: approvalTools },
                 always: uniquePatterns,
-                ruleset: approvalRuleset,
+                ruleset: [],
               }),
             )
             for (const name of uniqueNames) approvedToolsForSession.add(name)
@@ -382,47 +384,21 @@ const live: Layer.Layer<
   }),
 )
 
-export const layer = live.pipe(Layer.provide(Permission.defaultLayer), Layer.provide(EventV2Bridge.defaultLayer))
-
-export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(Config.defaultLayer),
-    Layer.provide(Provider.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(
-      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
-    ),
-    Layer.provide(RuntimeFlags.defaultLayer),
-  ),
-)
-
-function workflowApprovalRuleset(
-  agentPermission: PermissionV1.Ruleset | undefined,
-  sessionPermission: PermissionV1.Ruleset | undefined,
-) {
-  return Permission.merge(
-    [{ permission: "workflow_tool_approval", pattern: "*", action: "ask" }],
-    (agentPermission ?? []).filter((rule) => rule.permission === "workflow_tool_approval"),
-    (sessionPermission ?? []).filter(
-      (rule) =>
-        rule.permission === "workflow_tool_approval" ||
-        (rule.permission === "*" && rule.pattern === "*" && rule.action === "allow"),
-    ),
-  )
-}
-
 export const hasToolCalls = LLMRequestPrep.hasToolCalls
 
-export const node = LayerNode.make(layer, [
-  Auth.node,
-  Config.node,
-  Provider.node,
-  Plugin.node,
-  Permission.node,
-  EventV2Bridge.node,
-  llmClient,
-  RuntimeFlags.node,
-])
+export const node = LayerNode.make({
+  service: Service,
+  layer: live,
+  deps: [
+    Auth.node,
+    Config.node,
+    Provider.node,
+    Plugin.node,
+    Permission.node,
+    EventV2Bridge.node,
+    llmClient,
+    RuntimeFlags.node,
+  ],
+})
 
 export * as LLM from "./llm"

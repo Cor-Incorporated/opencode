@@ -1,12 +1,14 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Equal, Hash, Layer, Schema } from "effect"
-import { Tool } from "@opencode-ai/core/public"
+import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
-import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -30,117 +32,112 @@ import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 
-const applicationTools = ApplicationTools.layer
 const it = testEffect(
-  Layer.merge(
-    Layer.mergeAll(applicationTools, Database.defaultLayer, EventV2.defaultLayer),
-    LocationServiceMap.layer.pipe(
-      Layer.provide(applicationTools),
-      Layer.provide(
-        Layer.mergeAll(
-          Project.defaultLayer,
-          EventV2.defaultLayer,
-          Credential.defaultLayer.pipe(Layer.fresh),
-          Npm.defaultLayer,
-          ModelsDev.defaultLayer,
-          FSUtil.defaultLayer,
-          Global.defaultLayer,
-        ),
-      ),
-    ),
-  ),
+  AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
 )
 
 describe("LocationServiceMap", () => {
-  it.effect("compares equivalent location refs by value", () =>
-    Effect.sync(() => {
-      const directory = AbsolutePath.make("/project")
-      expect(Equal.equals(Location.Ref.make({ directory }), Location.Ref.make({ directory }))).toBe(true)
-      expect(Hash.hash(Location.Ref.make({ directory }))).toBe(
-        Hash.hash(Location.Ref.make({ directory, workspaceID: undefined })),
-      )
-    }),
-  )
-
-  it.live(
-    "isolates location state while sharing location policy with catalog",
-    () =>
-      Effect.acquireRelease(
-        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
-        (dirs) =>
-          Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
-      ).pipe(
-        Effect.flatMap(([blocked, allowed]) =>
+  it.live("reuses cached services for constructed and decoded location refs", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.scoped(
           Effect.gen(function* () {
-            yield* (yield* ApplicationTools.Service).register({
-              application_context: Tool.make({
-                description: "Read application context",
-                input: Schema.Struct({}),
-                output: Schema.Struct({ ok: Schema.Boolean }),
-                execute: () => Effect.succeed({ ok: true }),
-              }),
-            })
-            yield* Effect.promise(() =>
-              fs.writeFile(
-                path.join(blocked.path, "opencode.json"),
-                JSON.stringify({
-                  experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
-                }),
-              ),
-            )
+            const locations = yield* LocationServiceMap.Service
+            const directory = AbsolutePath.make(dir.path)
+            const constructed = Location.Ref.make({ directory })
+            const decoded = Schema.decodeUnknownSync(Location.Ref)({ directory })
 
-            const update = (directory: string) =>
-              Effect.gen(function* () {
-                yield* Reference.Service
-                const catalog = yield* Catalog.Service
-                yield* catalog.transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
-                return {
-                  providers: yield* catalog.provider.all(),
-                  tools: yield* toolDefinitions(yield* ToolRegistry.Service),
-                }
-              }).pipe(
-                Effect.scoped,
-                Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
-              )
-
-            const blockedState = yield* update(blocked.path)
-            expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
-            expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual([
-              "application_context",
-              "apply_patch",
-              "bash",
-              "edit",
-              "glob",
-              "grep",
-              "question",
-              "read",
-              "skill",
-              "todowrite",
-              "webfetch",
-              "websearch",
-              "write",
-            ])
-            const allowedState = yield* update(allowed.path)
-            expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
-            expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
-              "application_context",
-              "apply_patch",
-              "bash",
-              "edit",
-              "glob",
-              "grep",
-              "question",
-              "read",
-              "skill",
-              "todowrite",
-              "webfetch",
-              "websearch",
-              "write",
-            ])
+            expect(constructed).toEqual({ directory, workspaceID: undefined })
+            expect(decoded).toEqual(constructed)
+            expect(Equal.equals(constructed, decoded)).toBe(true)
+            expect(Hash.hash(constructed)).toBe(Hash.hash(decoded))
+            expect(yield* locations.contextEffect(constructed)).toBe(yield* locations.contextEffect(decoded))
           }),
         ),
       ),
-    process.env.CI ? 60_000 : 30_000,
+    ),
+  )
+
+  it.live("isolates location state while sharing location policy with catalog", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(
+      Effect.flatMap(([blocked, allowed]) =>
+        Effect.gen(function* () {
+          yield* (yield* ApplicationTools.Service).register({
+            application_context: Tool.make({
+              description: "Read application context",
+              input: Schema.Struct({}),
+              output: Schema.Struct({ ok: Schema.Boolean }),
+              execute: () => Effect.succeed({ ok: true }),
+            }),
+          })
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(blocked.path, "opencode.json"),
+              JSON.stringify({
+                experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
+              }),
+            ),
+          )
+
+          const update = (directory: string) =>
+            Effect.gen(function* () {
+              yield* Reference.Service
+              const catalog = yield* Catalog.Service
+              yield* catalog.transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
+              return {
+                providers: yield* catalog.provider.all(),
+                tools: yield* toolDefinitions(yield* ToolRegistry.Service),
+              }
+            }).pipe(
+              Effect.scoped,
+              Effect.provide(
+                LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(directory) })),
+              ),
+            )
+
+          const blockedState = yield* update(blocked.path)
+          expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
+          expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual([
+            "application_context",
+            "apply_patch",
+            "bash",
+            "edit",
+            "glob",
+            "grep",
+            "question",
+            "read",
+            "skill",
+            "todowrite",
+            "webfetch",
+            "websearch",
+            "write",
+          ])
+          const allowedState = yield* update(allowed.path)
+          expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
+          expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
+            "application_context",
+            "apply_patch",
+            "bash",
+            "edit",
+            "glob",
+            "grep",
+            "question",
+            "read",
+            "skill",
+            "todowrite",
+            "webfetch",
+            "websearch",
+            "write",
+          ])
+        }),
+      ),
+    ),
   )
 
   it.live("rejects an unavailable selected model during location model resolution", () =>
@@ -181,7 +178,7 @@ describe("LocationServiceMap", () => {
                 location,
               }),
             ),
-          ).pipe(Effect.provide(LocationServiceMap.get(location)), Effect.flip)
+          ).pipe(Effect.provide(LocationServiceMap.Service.get(location)), Effect.flip)
 
           expect(failure).toMatchObject({
             _tag: "SessionRunnerModel.ModelUnavailableError",
@@ -221,7 +218,7 @@ describe("LocationServiceMap", () => {
           })
         }).pipe(
           Effect.scoped,
-          Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
         ),
       ),
     ),

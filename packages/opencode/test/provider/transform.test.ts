@@ -4,6 +4,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { LLMRequestPrep } from "@/session/llm/request"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { jsonSchema } from "ai"
 
 describe("ProviderTransform.options - setCacheKey", () => {
   const sessionID = "test-session-123"
@@ -384,7 +385,12 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
         } as any,
         system: [],
         messages: [{ role: "user", content: "Hello" }],
-        tools: {},
+        tools: {
+          lookup: {
+            description: "Look up a value",
+            inputSchema: jsonSchema({ type: "object", properties: {} }),
+          },
+        },
         provider: { id: "azure", options: { useCompletionUrls: true } } as any,
         auth: undefined,
         plugin: {
@@ -399,6 +405,7 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
     expect(result.params.options.reasoningEffort).toBe("high")
     expect(result.params.options.reasoningSummary).toBeUndefined()
     expect(result.params.options.include).toBeUndefined()
+    expect(result.tools.lookup.strict).toBe(false)
   })
 
   test("gpt-5.1 should have textVerbosity set to low", () => {
@@ -2261,6 +2268,82 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
     expect(result[0].content[0].providerOptions?.openai?.reasoningEncryptedContent).toBe("encrypted")
   })
 
+  test("strips GitHub Copilot itemId from the copilot namespace, preserving other copilot options", () => {
+    const copilotModel = {
+      ...openaiModel,
+      id: "github-copilot/gpt-5.5",
+      providerID: "github-copilot",
+      api: {
+        id: "gpt-5.5",
+        url: "https://api.githubcopilot.com",
+        npm: "@ai-sdk/github-copilot",
+      },
+    }
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "thinking...",
+            providerOptions: {
+              copilot: { itemId: "rs_123", reasoningEncryptedContent: "encrypted" },
+            },
+          },
+          {
+            // The stale itemId on tool-call parts is what Copilot echoes back as the
+            // `function_call` item `id`, which is what the upstream connection rejects.
+            type: "tool-call",
+            toolCallId: "call_1",
+            toolName: "bash",
+            input: { command: "ls" },
+            providerOptions: {
+              copilot: { itemId: "fc_456", reasoningEffort: "medium" },
+            },
+          },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, copilotModel, { store: false }) as any[]
+
+    expect(result[0].content[0].providerOptions?.copilot?.itemId).toBeUndefined()
+    expect(result[0].content[0].providerOptions?.copilot?.reasoningEncryptedContent).toBe("encrypted")
+    expect(result[0].content[1].providerOptions?.copilot?.itemId).toBeUndefined()
+    expect(result[0].content[1].providerOptions?.copilot?.reasoningEffort).toBe("medium")
+  })
+
+  test("leaves a stray openai namespace on a Copilot model untouched, since Copilot's Responses model only reads the copilot namespace", () => {
+    const copilotModel = {
+      ...openaiModel,
+      id: "github-copilot/gpt-5.5",
+      providerID: "github-copilot",
+      api: {
+        id: "gpt-5.5",
+        url: "https://api.githubcopilot.com",
+        npm: "@ai-sdk/github-copilot",
+      },
+    }
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Hello",
+            providerOptions: {
+              openai: { itemId: "msg_456" },
+            },
+          },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, copilotModel, { store: false }) as any[]
+
+    expect(result[0].content[0].providerOptions?.openai?.itemId).toBe("msg_456")
+  })
+
   test("preserves metadata for openai package when store is true", () => {
     const msgs = [
       {
@@ -3283,6 +3366,27 @@ describe("ProviderTransform.variants", () => {
       })
     })
 
+    test("anthropic sonnet 5 returns adaptive thinking options with xhigh", () => {
+      const model = createMockModel({
+        id: "anthropic/claude-sonnet-5",
+        providerID: "gateway",
+        api: {
+          id: "anthropic/claude-sonnet-5",
+          url: "https://gateway.ai",
+          npm: "@ai-sdk/gateway",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      expect(result.high).toEqual({
+        thinking: {
+          type: "adaptive",
+          display: "summarized",
+        },
+        effort: "high",
+      })
+    })
+
     test("anthropic opus 4.6 omits display so it keeps the summarized default", () => {
       const model = createMockModel({
         id: "anthropic/claude-opus-4-6",
@@ -3871,6 +3975,12 @@ describe("ProviderTransform.variants", () => {
         expectedHigh: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
       },
       {
+        name: "sonnet 5",
+        apiIds: ["claude-sonnet-5", "claude-sonnet-5-20260630"],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        expectedHigh: { thinking: { type: "adaptive", display: "summarized" }, effort: "high" },
+      },
+      {
         name: "fable 5",
         apiIds: ["claude-fable-5"],
         efforts: ["low", "medium", "high", "xhigh", "max"],
@@ -3967,6 +4077,28 @@ describe("ProviderTransform.variants", () => {
         effort: "high",
       })
     })
+
+    test("sonnet 5 uses adaptive reasoning for Vertex model IDs", () => {
+      const result = ProviderTransform.variants(
+        createMockModel({
+          id: "google-vertex-anthropic/claude-sonnet-5@default",
+          providerID: "google-vertex-anthropic",
+          api: {
+            id: "claude-sonnet-5@default",
+            url: "https://us-central1-aiplatform.googleapis.com",
+            npm: "@ai-sdk/google-vertex/anthropic",
+          },
+        }),
+      )
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      expect(result.high).toEqual({
+        thinking: {
+          type: "adaptive",
+          display: "summarized",
+        },
+        effort: "high",
+      })
+    })
   })
 
   describe("@ai-sdk/amazon-bedrock", () => {
@@ -4025,6 +4157,28 @@ describe("ProviderTransform.variants", () => {
           providerID: "bedrock",
           api: {
             id: "anthropic.claude-opus-4.8",
+            url: "https://bedrock.amazonaws.com",
+            npm: "@ai-sdk/amazon-bedrock",
+          },
+        }),
+      )
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      expect(result.high).toEqual({
+        reasoningConfig: {
+          type: "adaptive",
+          maxReasoningEffort: "high",
+          display: "summarized",
+        },
+      })
+    })
+
+    test("anthropic sonnet 5 returns adaptive reasoning options with xhigh", () => {
+      const result = ProviderTransform.variants(
+        createMockModel({
+          id: "bedrock/anthropic-claude-sonnet-5",
+          providerID: "bedrock",
+          api: {
+            id: "anthropic.claude-sonnet-5",
             url: "https://bedrock.amazonaws.com",
             npm: "@ai-sdk/amazon-bedrock",
           },
@@ -4219,6 +4373,12 @@ describe("ProviderTransform.variants", () => {
       {
         name: "opus 4.8",
         apiIds: ["anthropic--claude-4.8-opus", "anthropic--claude-4-8-opus"],
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+        thinking: { type: "adaptive", display: "summarized" },
+      },
+      {
+        name: "sonnet 5",
+        apiIds: ["anthropic--claude-sonnet-5", "anthropic--claude-5-sonnet"],
         efforts: ["low", "medium", "high", "xhigh", "max"],
         thinking: { type: "adaptive", display: "summarized" },
       },
