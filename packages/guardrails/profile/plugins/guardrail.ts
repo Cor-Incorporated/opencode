@@ -373,24 +373,7 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           /Tool execution aborted|review failed|^error\b/i.test(payload)
         if ((cmd === "review" || agent.includes("review")) && !reviewFailed) {
           const isCodexReview = /codex/i.test(agent) || /codex/i.test(cmd)
-          if (isCodexReview) {
-            await ctx.mark({
-              reviewed: true,
-              review_at: now,
-              review_agent: agent,
-              review_codex_state: "done",
-              review_codex_at: now,
-            })
-          } else {
-            await ctx.mark({
-              reviewed: true,
-              review_at: now,
-              review_agent: agent,
-              review_glm_state: "done",
-              review_glm_at: now,
-            })
-          }
-          await review.syncReviewState()
+          await review.recordReviewResult(isCodexReview ? "codex" : "glm", agent || cmd || "task:review", payload, "task_review.completed")
         } else if (cmd === "review" || agent.includes("review")) {
           await ctx.seen("task_review.not_completed", { agent, payload_length: payload.length })
         }

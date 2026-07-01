@@ -154,6 +154,29 @@ test("codex review saves durable evidence for current HEAD", async () => {
   expect(evidence.review_worktree_clean).toBe(true)
 })
 
+test("external codex exec review marks Codex review done without slash review command", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const state = statePath(tmp.path)
+  await fs.mkdir(path.dirname(state), { recursive: true })
+  await Bun.write(state, JSON.stringify({ review_glm_state: "done" }))
+  const { ctx, events } = await context(state, tmp.path)
+
+  await createReviewPipeline(ctx).handleExternalReviewDetection(
+    { tool: "bash", args: { command: `codex exec -C ${tmp.path} --sandbox read-only 'review PR #53'` } },
+    { output: "Codex review completed. No CRITICAL or HIGH findings were identified.", metadata: { exitCode: 0 } },
+  )
+
+  const data = await Bun.file(state).json()
+  const evidence = await Bun.file(evidencePath(tmp.path)).json()
+  expect(data.review_codex_state).toBe("done")
+  expect(data.review_state).toBe("done")
+  expect(data.review_agent).toBe("codex:exec")
+  expect(evidence.reviewed_head_sha).toBe(await gitOutput(tmp.path, ["rev-parse", "HEAD"]))
+  expect(evidence.review_glm_state).toBe("done")
+  expect(evidence.review_codex_state).toBe("done")
+  expect(events.some((item) => item.type === "external_review.completed" && item.agent === "codex:exec")).toBe(true)
+})
+
 test("review evidence restores for same HEAD and clean worktree", async () => {
   await using tmp = await tmpdir({ git: true })
   const state = statePath(tmp.path)

@@ -5,6 +5,7 @@ import type { GuardrailContext } from "./guardrail-context"
 const REVIEW_POLL_GAP = 750
 const REVIEW_TIMEOUT_MS = 120_000
 const REVIEW_EVIDENCE_FILE = "review-evidence.json"
+type ReviewKind = "glm" | "codex"
 
 export function createReviewPipeline(ctx: GuardrailContext) {
   function evidencePath() {
@@ -225,6 +226,28 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     })
   }
 
+  async function recordReviewResult(kind: ReviewKind, agent: string, output: string, eventType: string) {
+    const data = await stash(ctx.state)
+    const findings = parseFindings(output)
+    const now = new Date().toISOString()
+    await ctx.mark({
+      reviewed: true,
+      review_at: now,
+      review_agent: agent,
+      ...(kind === "codex"
+        ? { review_codex_state: "done", review_codex_at: now, ...reviewCounts(data, "codex", findings) }
+        : {
+            review_glm_state: "done",
+            review_glm_at: now,
+            edits_since_review: 0,
+            ...reviewCounts(data, "glm", findings),
+          }),
+    })
+    await syncReviewState()
+    await saveReviewEvidence()
+    await ctx.seen(eventType, { agent, critical: findings.critical, high: findings.high })
+  }
+
   async function pollIdle(sessionID: string) {
     const start = Date.now()
     for (;;) {
@@ -385,20 +408,7 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       await ctx.seen("codex_review.empty_or_short", { length: output.length })
       return
     }
-    const findings = parseFindings(output)
-    const data = await stash(ctx.state)
-    const now = new Date().toISOString()
-    await ctx.mark({
-      reviewed: true,
-      review_at: now,
-      review_agent: "codex:mcp",
-      review_codex_state: "done",
-      review_codex_at: now,
-      ...reviewCounts(data, "codex", findings),
-    })
-    await syncReviewState()
-    await saveReviewEvidence()
-    await ctx.seen("codex_review.completed", { critical: findings.critical, high: findings.high })
+    await recordReviewResult("codex", "codex:mcp", output, "codex_review.completed")
   }
 
   async function handleExternalReviewDetection(
@@ -446,7 +456,11 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     const isOpenCodeReview = /\bopencode\s+run\b[\s\S]*\b(\/review|review|code-review|code-reviewer)\b/i.test(cmd)
     const isClaudeReviewer = /\bclaude\b[\s\S]*(--agent(?:=|\s+)code-reviewer|--agent(?:=|\s+)review)\b/i.test(cmd)
     const isSkillScriptReviewer = /\b(pr_analyzer|code_quality_checker)\.py\b/i.test(cmd)
-    if (!isOpenCodeReview && !isClaudeReviewer && !isSkillScriptReviewer) return
+    const isCodexExecReview =
+      /\bcodex\s+exec\b/i.test(cmd) &&
+      (/\b(review|code[._-]review|diff[._-]review)\b/i.test(cmd) ||
+        /\bCodex\s+(?:CLI\s+)?review\b/i.test(str(out.output)))
+    if (!isOpenCodeReview && !isClaudeReviewer && !isSkillScriptReviewer && !isCodexExecReview) return
     if (typeof out.metadata?.exitCode === "number" && out.metadata.exitCode !== 0) {
       await ctx.seen("external_review.failed", { command: cmd, exit_code: out.metadata.exitCode })
       return
@@ -456,32 +470,18 @@ export function createReviewPipeline(ctx: GuardrailContext) {
       await ctx.seen("external_review.empty_or_aborted", { command: cmd, length: output.length })
       return
     }
-    const findings = parseFindings(output)
-    const now = new Date().toISOString()
-    await ctx.mark({
-      reviewed: true,
-      review_at: now,
-      review_agent: isClaudeReviewer
-        ? "claude:code-reviewer"
-        : isSkillScriptReviewer
-          ? "code-reviewer:scripts"
-          : "opencode:review",
-      review_glm_state: "done",
-      review_glm_at: now,
-      edits_since_review: 0,
-      ...reviewCounts(await stash(ctx.state), "glm", findings),
-    })
-    await syncReviewState()
-    await saveReviewEvidence()
-    await ctx.seen("external_review.completed", {
-      agent: isClaudeReviewer
-        ? "claude:code-reviewer"
-        : isSkillScriptReviewer
-          ? "code-reviewer:scripts"
-          : "opencode:review",
-      critical: findings.critical,
-      high: findings.high,
-    })
+    await recordReviewResult(
+      isCodexExecReview ? "codex" : "glm",
+      isCodexExecReview
+        ? "codex:exec"
+        : isClaudeReviewer
+          ? "claude:code-reviewer"
+          : isSkillScriptReviewer
+            ? "code-reviewer:scripts"
+            : "opencode:review",
+      output,
+      "external_review.completed",
+    )
   }
 
   function parseGstackReviewLog(cmd: string) {
@@ -499,6 +499,7 @@ export function createReviewPipeline(ctx: GuardrailContext) {
     autoReview,
     checklist,
     parseFindings,
+    recordReviewResult,
     reviewGate,
     saveReviewEvidence,
     restoreReviewEvidence,
