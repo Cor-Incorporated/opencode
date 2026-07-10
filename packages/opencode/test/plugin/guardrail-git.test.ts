@@ -176,6 +176,25 @@ describe("guardrail-git", () => {
     await expect(git.bashBeforeGit("git push -u origin feat/policy", {}, {})).resolves.toBeUndefined()
   })
 
+  test("blocks implicit push (no refspec) while a protected branch is checked out", async () => {
+    await using fixture = await opencodeFixture()
+    await Bun.$`git branch -m dev`.cwd(fixture.ctx.input.worktree).quiet()
+    const git = createGitHandlers(fixture.ctx)
+
+    await expect(git.bashBeforeGit("git push origin", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+    await expect(git.bashBeforeGit("git push", {}, {})).rejects.toThrow("direct push to protected branch blocked")
+  })
+
+  test("allows implicit push (no refspec) while a non-protected branch is checked out", async () => {
+    await using fixture = await opencodeFixture()
+    await Bun.$`git checkout -b feat/policy`.cwd(fixture.ctx.input.worktree).quiet()
+    const git = createGitHandlers(fixture.ctx)
+
+    await expect(git.bashBeforeGit("git push origin", {}, {})).resolves.toBeUndefined()
+  })
+
   test("blocks own-approval of a PR via gh pr review --approve", async () => {
     await using fixture = await context()
     const original = Bun.spawn
@@ -255,6 +274,53 @@ describe("guardrail-git", () => {
     try {
       const git = createGitHandlers(fixture.ctx)
       await expect(git.bashBeforeGit("gh pr review 42 --approve", {}, {})).resolves.toBeUndefined()
+    } finally {
+      Bun.spawn = original
+    }
+  })
+
+  test("blocks own-approval of a PR via gh api REST reviews endpoint", async () => {
+    await using fixture = await context()
+    const original = Bun.spawn
+    Bun.spawn = ((command: string[] | { cmd: string[] }, options?: object) => {
+      const args = Array.isArray(command) ? command.map(String) : command.cmd.map(String)
+      if (args[0] !== "gh") {
+        return Reflect.apply(original, Bun, options === undefined ? [command] : [command, options]) as ReturnType<
+          typeof Bun.spawn
+        >
+      }
+      if (args[1] === "pr" && args[2] === "view") {
+        return {
+          stdout: new Response(JSON.stringify({ number: 42, author: { login: "octocat" } })).body!,
+          stderr: new Response("").body!,
+          exited: Promise.resolve(0),
+          exitCode: 0,
+        } as ReturnType<typeof Bun.spawn>
+      }
+      if (args[1] === "api" && args[2] === "user") {
+        return {
+          stdout: new Response("octocat\n").body!,
+          stderr: new Response("").body!,
+          exited: Promise.resolve(0),
+          exitCode: 0,
+        } as ReturnType<typeof Bun.spawn>
+      }
+      return {
+        stdout: new Response("").body!,
+        stderr: new Response("").body!,
+        exited: Promise.resolve(0),
+        exitCode: 0,
+      } as ReturnType<typeof Bun.spawn>
+    }) as typeof Bun.spawn
+    try {
+      const git = createGitHandlers(fixture.ctx)
+      await expect(
+        git.bashBeforeGit(
+          `gh api repos/Cor-Incorporated/opencode/pulls/42/reviews -f event=APPROVE`,
+          {},
+          {},
+        ),
+      ).rejects.toThrow("cannot approve your own PR")
     } finally {
       Bun.spawn = original
     }
