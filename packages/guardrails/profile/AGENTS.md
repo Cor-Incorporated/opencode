@@ -39,12 +39,12 @@
 
 ## Git Workflow
 
-- Protected branches: dev, develop, main, master — no direct push, PR only
+- Protected branches: dev, develop, main, master — no direct push (hard-blocked by the guardrail plugin; force-push is also hard-blocked), PR only by convention
 - Branch naming: `feat/<desc>`, `fix/<desc>`, `refactor/<desc>`, `chore/<desc>`
 - Commits: `<type>: <description>` — types: feat/fix/refactor/docs/test/chore/perf/ci/release
 - PR granularity: 1 PR = 1 intent, branch type matches PR title type, feat PR includes tests
 - Merge: default `--merge`, `--squash` only when explicitly requested
-- CI gate: `gh pr checks` all green + zero CRITICAL/HIGH before merge
+- Check CI status before merging (`gh pr checks`); GitHub branch protection and repo CI are the authoritative merge gates, not this profile
 
 ## Delegation
 
@@ -59,7 +59,7 @@
 |---------|-------------|
 | `/implement` | Default implementation workflow — code, test, and commit within guardrails. |
 | `/review` | Run a read-only code review on the current diff or PR. |
-| `/ship` | Merge-ready workflow: CI check, review gate, and push. |
+| `/ship` | Merge-ready workflow: verifies CI status and pushes. |
 | `/handoff` | Generate a handoff document for cross-session continuity. |
 | `/plan` | Analyze requirements, assess risks, and produce a phased implementation plan. |
 | `/investigate` | Systematic debugging with root cause analysis — spawns an exploration subagent. |
@@ -84,7 +84,7 @@
 | `investigate` | `/investigate`, debugging tasks | Deep exploration subagent. Reads code, traces data flow, and identifies root causes without edits. |
 | `security` | `/review` (security scope), OWASP checks | Security-focused review subagent. Scans for OWASP Top 10 vulnerabilities, credential leaks, and injection risks. |
 | `code-reviewer` | `/review`, PR review pipeline | Read-only review agent. Analyzes diffs for quality, correctness, and style issues. |
-| `ship` | `/ship` command | Ship agent for merge execution. Verifies all merge gates (CI, review, no CHANGES_REQUESTED) and executes `gh pr merge`. Write-restricted except for merge commands. |
+| `ship` | `/ship` command | Ship agent for merge execution. Verifies CI status and executes `gh pr merge`. Write-restricted except for merge commands. |
 | `terraform-engineer` | Infrastructure-as-code tasks | Terraform specialist for module design, state management, and multi-cloud provisioning. Write-capable with safe Terraform CLI commands only. |
 | `cloud-architect` | Architecture design, Well-Architected reviews | Read-only cloud architecture analyst for system design, scalability, and compliance. |
 | `deployment-engineer` | CI/CD pipeline, container deployments | Write-capable deployment specialist for zero-downtime releases with Docker and Kubernetes read commands. |

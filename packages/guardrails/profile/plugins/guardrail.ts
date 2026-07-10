@@ -2,8 +2,6 @@ import path from "path"
 import { createAccessHandlers } from "./guardrail-access"
 import { createContext, type GuardrailInput } from "./guardrail-context"
 import { createGitHandlers } from "./guardrail-git"
-import { createInstrumentationHandlers } from "./guardrail-instrumentation"
-import { createReviewPipeline } from "./guardrail-review"
 import { ciChecksGreen, flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
 const OPENCODE_IGNORE = ".opencode/"
@@ -50,9 +48,7 @@ export async function ensureLocalOpencodeIgnored(worktree: string) {
 export default async function guardrail(input: GuardrailInput, opts?: Record<string, unknown>) {
   const ctx = await createContext(input, opts)
   const access = createAccessHandlers(ctx)
-  const instrumentation = createInstrumentationHandlers(ctx)
-  const review = createReviewPipeline(ctx)
-  const gitHandlers = createGitHandlers(ctx, review)
+  const gitHandlers = createGitHandlers(ctx)
 
   return {
     config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
@@ -139,19 +135,9 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           review_critical_count: 0,
           review_high_count: 0,
           ci_green: false,
-          uat_evidence_required: false,
-          uat_evidence_done: false,
-          uat_evidence_at: "",
-          browser_evidence_path: "",
-          live_evidence_path: "",
-          playwright_report_path: "",
           detected_stacks: stacks,
           branch_warning: branchWarning,
           gitignore_missing_opencode: false,
-          instrumentation_changes: false,
-          instrumentation_files: [],
-          instrumentation_quality_state: "",
-          instrumentation_quality_blockers: [],
         })
         if (stacks.length > 0) {
           await ctx.seen("auto_init.stacks_detected", { stacks })
@@ -180,7 +166,6 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
             await ctx.seen("codex_mcp.not_configured", { auto_satisfied: true })
           }
         } catch {}
-        await review.hydrateReviewEvidence()
       }
       if (event.type === "permission.asked") {
         await ctx.mark({
@@ -188,9 +173,6 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           last_patterns: event.properties?.patterns,
           last_event: event.type,
         })
-      }
-      if (event.type === "session.idle") {
-        await review.handleAutoReviewTrigger(str(event.properties?.sessionID))
       }
       if (event.type === "session.compacted") {
         await ctx.mark({
@@ -288,12 +270,10 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         await access.toolBeforeAccess(item, out, bashData)
         const cmd = typeof out.args?.command === "string" ? out.args.command : ""
         if (cmd) {
-          await instrumentation.bashBeforeInstrumentation(cmd, bashData)
           await gitHandlers.bashBeforeGit(cmd, out, bashData)
         }
         return
       }
-      await instrumentation.toolBeforeInstrumentation(item, out)
       await access.toolBeforeAccess(item, out)
     },
     "tool.execute.after": async (
@@ -344,39 +324,12 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
       }
 
       await access.toolAfterAccess(item, out, data)
-      await instrumentation.toolAfterInstrumentation(item, out, data)
-
-      if (item.tool === "bash" && /\bgh\s+pr\s+checks\b/i.test(str(item.args?.command))) {
-        const criticalMatches = out.output.match(/CRITICAL[=:]?\s*(\d+)/i)
-        const highMatches = out.output.match(/HIGH[=:]?\s*(\d+)/i)
-        const prNumMatch = str(item.args?.command).match(/\bgh\s+pr\s+checks\s+(\d+)/i)
-        if (criticalMatches || highMatches || prNumMatch) {
-          await ctx.mark({
-            review_critical_count: criticalMatches ? parseInt(criticalMatches[1]) : 0,
-            review_high_count: highMatches ? parseInt(highMatches[1]) : 0,
-            review_pr_number: prNumMatch ? prNumMatch[1] : "",
-            review_checks_at: now,
-          })
-        }
-      }
 
       if (item.tool === "task") {
-        const cmd = typeof item.args?.command === "string" ? item.args.command : ""
         const agent = typeof item.args?.subagent_type === "string" ? item.args.subagent_type : ""
         const rawOutput = str(out.output)
         const taskResultMatch = rawOutput.match(/<task_result>([\s\S]*?)<\/task_result>/)
         const payload = taskResultMatch ? taskResultMatch[1].trim() : rawOutput.trim()
-        const reviewFailed =
-          out.title === "Error" ||
-          (typeof out.metadata?.exitCode === "number" && out.metadata.exitCode !== 0) ||
-          payload.length < 20 ||
-          /Tool execution aborted|review failed|^error\b/i.test(payload)
-        if ((cmd === "review" || agent.includes("review")) && !reviewFailed) {
-          const isCodexReview = /codex/i.test(agent) || /codex/i.test(cmd)
-          await review.recordReviewResult(isCodexReview ? "codex" : "glm", agent || cmd || "task:review", payload, "task_review.completed")
-        } else if (cmd === "review" || agent.includes("review")) {
-          await ctx.seen("task_review.not_completed", { agent, payload_length: payload.length })
-        }
         const activeTasks = json(data.active_tasks)
         const callID = str(item.callID) || str(item.args?.callID) || ""
         if (callID && activeTasks[callID]) {
@@ -398,9 +351,6 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           await ctx.seen("verify_agent.short_output", { agent, payload_length: payload.length })
         }
       }
-
-      await review.handleCodexDetection(item, out)
-      await review.handleExternalReviewDetection(item, out)
 
       if (item.tool === "bash") {
         const secretPatterns: [RegExp, string][] = [
@@ -433,8 +383,6 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           await ctx.seen("secret_masked", { count: maskedCount })
         }
       }
-
-      await gitHandlers.bashAfterGit(item, out, data)
 
       if (item.tool === "bash") {
         const cmd = str(item.args?.command)
@@ -542,25 +490,6 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
             "4. Run /ship to merge\n" +
             "5. Create follow-up issues for out-of-scope problems\n" +
             "Do NOT stop until the pipeline completes or a hard blocker is hit."
-        }
-      }
-      if (
-        item.command === "implement" ||
-        item.command === "auto" ||
-        item.command === "review" ||
-        item.command === "ship"
-      ) {
-        const instrumentationPart = out.parts.find((part) => part.type === "subtask" && typeof part.prompt === "string")
-        if (instrumentationPart?.prompt) {
-          instrumentationPart.prompt =
-            instrumentationPart.prompt +
-            "\n\nInstrumentation quality gate:\n" +
-            "- AI agent instrumentation must use source-level hooks, not global monkey patches.\n" +
-            "- Instrumentation/cross-cutting PRs require an integration or smoke test.\n" +
-            "- Include a traceability matrix from acceptance criteria to implementation.\n" +
-            "- Document each metric's semantics and source code path.\n" +
-            "- Do not claim unmeasurable metrics; return an explicit unavailable reason instead of null.\n" +
-            "- Probe optional dependencies before use and clean up resources with finally/cleanup paths."
         }
       }
       if (!["review", "ship", "handoff", "implement", "auto"].includes(item.command)) return
