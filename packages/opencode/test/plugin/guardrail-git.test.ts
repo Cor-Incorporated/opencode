@@ -135,6 +135,39 @@ describe("guardrail-git", () => {
     )
   })
 
+  test("blocks refspec bypass forms targeting protected branches", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx)
+
+    await expect(git.bashBeforeGit("git push origin feature:dev", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+    await expect(git.bashBeforeGit("git push origin +HEAD:dev", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+    await expect(git.bashBeforeGit("git push origin :dev", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+    await expect(git.bashBeforeGit("git push origin HEAD:refs/heads/dev", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+    await expect(git.bashBeforeGit("git push --delete origin dev", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+    await expect(git.bashBeforeGit("git push origin --all", {}, {})).rejects.toThrow(
+      "direct push to protected branch blocked",
+    )
+  })
+
+  test("allows refspec forms targeting non-protected branches", async () => {
+    await using fixture = await context()
+    const git = createGitHandlers(fixture.ctx)
+
+    await expect(git.bashBeforeGit("git push origin feature:feat/policy", {}, {})).resolves.toBeUndefined()
+    await expect(git.bashBeforeGit("git push origin :feat/policy", {}, {})).resolves.toBeUndefined()
+    await expect(git.bashBeforeGit("git push origin +HEAD:feat/policy", {}, {})).resolves.toBeUndefined()
+  })
+
   test("allows pushes to non-protected branches", async () => {
     await using fixture = await context()
     const git = createGitHandlers(fixture.ctx)

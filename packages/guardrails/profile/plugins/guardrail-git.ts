@@ -110,6 +110,83 @@ export function createGitHandlers(ctx: GuardrailContext) {
     })
   }
 
+  function gitCommandTokens(cmd: string) {
+    const tokens = splitShell(cmd)
+    return tokens.flatMap((token, index) => {
+      if (token !== "git") return []
+      const end = tokens.findIndex(
+        (item, itemIndex) =>
+          itemIndex > index && (item === ";" || item === "&&" || item === "||" || item === "&" || item === "|"),
+      )
+      return [tokens.slice(index, end === -1 ? undefined : end)]
+    })
+  }
+
+  const GIT_GLOBAL_OPTS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"])
+  const PUSH_FLAGS_WITH_VALUE = new Set(["--repo", "--receive-pack", "--push-option", "-o"])
+
+  function pushRefspecDestinations(tokens: string[]) {
+    let i = 1
+    let foundPush = false
+    while (i < tokens.length) {
+      const t = tokens[i]
+      if (t === "push") {
+        foundPush = true
+        i++
+        break
+      }
+      if (GIT_GLOBAL_OPTS_WITH_VALUE.has(t)) {
+        i += 2
+        continue
+      }
+      if (/^--(git-dir|work-tree|namespace)=/.test(t)) {
+        i++
+        continue
+      }
+      if (t.startsWith("-")) {
+        i++
+        continue
+      }
+      return { destinations: [] as string[], hasPushSubcommand: false, hasExplicitRefspec: false }
+    }
+    if (!foundPush) return { destinations: [] as string[], hasPushSubcommand: false, hasExplicitRefspec: false }
+
+    let remote: string | undefined
+    const refspecs: string[] = []
+    let pushesAll = false
+    for (; i < tokens.length; i++) {
+      const t = tokens[i]
+      if (t === "--all" || t === "--mirror" || t === "--branches") {
+        pushesAll = true
+        continue
+      }
+      if (PUSH_FLAGS_WITH_VALUE.has(t)) {
+        i++
+        continue
+      }
+      if (/^(--repo|--receive-pack|--push-option|-o)=/.test(t)) continue
+      if (t.startsWith("-")) continue
+      if (!remote) {
+        remote = t
+        continue
+      }
+      refspecs.push(t)
+    }
+
+    const destinations: string[] = []
+    for (const spec of refspecs) {
+      const stripped = spec.startsWith("+") ? spec.slice(1) : spec
+      const colonIdx = stripped.indexOf(":")
+      let dst = colonIdx === -1 ? stripped : stripped.slice(colonIdx + 1)
+      if (!dst) continue
+      dst = dst.replace(/^refs\/heads\//, "")
+      destinations.push(dst)
+    }
+    if (pushesAll) destinations.push(...protectedBranchNames)
+
+    return { destinations, hasPushSubcommand: true, hasExplicitRefspec: refspecs.length > 0 }
+  }
+
   function optionValue(tokens: string[], long: string, short: string) {
     for (let index = 0; index < tokens.length; index++) {
       const token = tokens[index]
@@ -351,28 +428,27 @@ export function createGitHandlers(ctx: GuardrailContext) {
 
     const protectedBranch = new RegExp(`^(${protectedBranchNames.join("|")})$`)
     if (gitSubcommand(cmd, "push")) {
-      const explicitMatch = cmd.match(/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+(?:HEAD:)?(\S+)/i)
-      if (explicitMatch && protectedBranch.test(explicitMatch[1])) {
-        throw new Error(
-          "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
-        )
-      }
-      const refspecMatch = cmd.match(new RegExp(`HEAD:(${protectedBranchNames.join("|")})(?:\\s|$)`, "i"))
-      if (refspecMatch) {
-        throw new Error(
-          "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
-        )
-      }
-      if (!/\bgit\s+push\s+(?:(?:-\w+|--[\w-]+)\s+)*\S+\s+\S+/i.test(cmd)) {
-        try {
-          const result = await git(ctx.input.worktree, ["branch", "--show-current"])
-          if (result.code === 0 && result.stdout && protectedBranch.test(result.stdout.trim())) {
-            throw new Error(
-              "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
-            )
+      for (const segment of gitCommandTokens(cmd)) {
+        const { destinations, hasPushSubcommand, hasExplicitRefspec } = pushRefspecDestinations(segment)
+        if (!hasPushSubcommand) continue
+
+        if (destinations.some((dst) => protectedBranch.test(dst))) {
+          throw new Error(
+            "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
+          )
+        }
+
+        if (!hasExplicitRefspec) {
+          try {
+            const result = await git(ctx.input.worktree, ["branch", "--show-current"])
+            if (result.code === 0 && result.stdout && protectedBranch.test(result.stdout.trim())) {
+              throw new Error(
+                "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
+              )
+            }
+          } catch (err) {
+            if (String(err).includes("blocked")) throw err
           }
-        } catch (err) {
-          if (String(err).includes("blocked")) throw err
         }
       }
     }
