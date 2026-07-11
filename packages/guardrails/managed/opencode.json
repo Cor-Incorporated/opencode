@@ -180,10 +180,10 @@
     }
   },
   "permission": {
-    "edit": "ask",
-    "task": "ask",
+    "edit": "allow",
+    "task": "allow",
     "webfetch": "allow",
-    "external_directory": "ask",
+    "external_directory": "allow",
     "bash": {
       "*": "ask",
       "node *": "allow",
