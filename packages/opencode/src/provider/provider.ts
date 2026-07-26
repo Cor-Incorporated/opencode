@@ -1268,7 +1268,7 @@ function modelsDevVariants(
   provider: ModelsDev.Provider,
   model: ModelsDev.Model,
   base: Model,
-  variants: Record<string, Model["variants"][string]>,
+  variants: Record<string, NonNullable<Model["variants"]>[string]>,
 ) {
   if (modesOverrideReasoningVariants(model)) return {}
 
