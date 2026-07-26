@@ -1253,15 +1253,26 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
 
   return {
     ...base,
-    variants: modelsDevVariants(provider, model, base),
+    variants: modelsDevVariants(provider, model, base, variants),
   }
 }
 
-function modelsDevVariants(provider: ModelsDev.Provider, model: ModelsDev.Model, base: Model) {
-  if (model.experimental?.modes !== undefined) return {}
+function modesOverrideReasoningVariants(model: ModelsDev.Model) {
+  const effort = model.reasoning_options?.find((item) => item.type === "effort")
+  if (!effort || !model.experimental?.modes) return false
+  const modeKeys = Object.keys(model.experimental.modes)
+  return effort.values.some((value) => typeof value === "string" && modeKeys.includes(value))
+}
 
-  const transformed = ProviderTransform.variants(base)
-  if (Object.keys(transformed).length > 0) return mapValues(transformed, (v) => v)
+function modelsDevVariants(
+  provider: ModelsDev.Provider,
+  model: ModelsDev.Model,
+  base: Model,
+  variants: Record<string, Model["variants"][string]>,
+) {
+  if (modesOverrideReasoningVariants(model)) return {}
+
+  if (Object.keys(variants).length > 0) return mapValues(variants, (v) => v)
 
   const effort = model.reasoning_options?.find((item) => item.type === "effort")
   if (!effort) return {}
