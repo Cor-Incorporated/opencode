@@ -1,6 +1,6 @@
 {
   "name": "@opencode-ai/app",
-  "version": "1.18.5",
+  "version": "1.18.11",
   "description": "",
   "type": "module",
   "exports": {
@@ -19,10 +19,10 @@
     "build": "vite build",
     "serve": "vite preview",
     "test": "bun run test:unit && bun run test:browser",
-    "test:ci": "mkdir -p .artifacts/unit && bun test --preload ./happydom.ts ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
-    "test:unit": "bun test --only-failures --preload ./happydom.ts ./src",
+    "test:ci": "mkdir -p .artifacts/unit && bun test --conditions=solid --preload ./happydom.ts ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
+    "test:unit": "bun test --conditions=solid --only-failures --preload ./happydom.ts ./src",
     "test:browser": "bun test --conditions=browser --preload ./happydom.ts ./test-browser",
-    "test:unit:watch": "bun test --watch --preload ./happydom.ts ./src",
+    "test:unit:watch": "bun test --conditions=solid --watch --preload ./happydom.ts ./src",
     "test:e2e": "playwright test",
     "test:e2e:local": "playwright test",
     "test:e2e:ui": "playwright test --ui",
