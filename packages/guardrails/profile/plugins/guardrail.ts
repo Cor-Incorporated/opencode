@@ -571,9 +571,9 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           }
         }
         const providerTiers: Record<string, string[]> = {
-          high: ["zai-coding-plan", "openai"],
-          standard: ["zai-coding-plan", "openai", "openrouter"],
-          low: ["openrouter", "zai-coding-plan"],
+          high: ["zai-coding-plan", "openai", "deepseek"],
+          standard: ["zai-coding-plan", "openai", "deepseek", "openrouter"],
+          low: ["openrouter", "zai-coding-plan", "deepseek"],
         }
         const recommendedProviders = providerTiers[tier] ?? []
         if (recommendedProviders.length > 0 && !recommendedProviders.includes(provider)) {

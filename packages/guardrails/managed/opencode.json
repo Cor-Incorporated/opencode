@@ -5,6 +5,7 @@
     "zai",
     "zai-coding-plan",
     "openai",
+    "deepseek",
     "openrouter"
   ],
   "share": "disabled",
@@ -61,6 +62,14 @@
         "gpt-5-nano",
         "gpt-5-pro",
         "gpt-4.1"
+      ]
+    },
+    "deepseek": {
+      "whitelist": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner"
       ]
     },
     "openrouter": {
