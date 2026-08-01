@@ -94,6 +94,7 @@ export const paid: Record<string, Set<string>> = {
     "gpt-5.5",
     "gpt-5.5-pro",
   ]),
+  deepseek: new Set(["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]),
 }
 
 export const secEnvExempt = /\.env\.(example|sample|template)$/i
