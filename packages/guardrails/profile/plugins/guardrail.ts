@@ -4,6 +4,7 @@ import { createContext, type GuardrailInput } from "./guardrail-context"
 import { createGitHandlers } from "./guardrail-git"
 import { createHygieneHandlers } from "./hygiene-warning"
 import { createRemovalHandlers } from "./removal-guard"
+import { createSsotHandlers, pendingSsotAdvisory } from "./ssot-guard"
 import { ciChecksGreen, flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
 const OPENCODE_IGNORE = ".opencode/"
@@ -53,6 +54,7 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
   const gitHandlers = createGitHandlers(ctx)
   const removalHandlers = createRemovalHandlers(ctx)
   const hygieneHandlers = createHygieneHandlers(ctx)
+  const ssotHandlers = createSsotHandlers(ctx)
 
   return {
     config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
@@ -143,6 +145,8 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           branch_warning: branchWarning,
           gitignore_missing_opencode: false,
           hygiene_warning: "",
+          ssot_advisory: "",
+          ssot_touched_files: [],
         })
         if (stacks.length > 0) {
           await ctx.seen("auto_init.stacks_detected", { stacks })
@@ -279,6 +283,17 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         })
         await ctx.mark({ hygiene_warning: "" })
       }
+      const ssotWarn = pendingSsotAdvisory(data)
+      if (ssotWarn) {
+        out.parts.push({
+          id: partID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: ssotWarn,
+        })
+        await ctx.mark({ ssot_advisory: "" })
+      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown; callID?: unknown },
@@ -344,6 +359,9 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
       }
 
       await access.toolAfterAccess(item, out, data)
+      try {
+        await ssotHandlers.afterMutatingTool(item, out)
+      } catch {}
 
       if (item.tool === "task") {
         const agent = typeof item.args?.subagent_type === "string" ? item.args.subagent_type : ""

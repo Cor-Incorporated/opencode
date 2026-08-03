@@ -30,6 +30,7 @@
 | **H** | 外部エージェント非依存のダブルチェック | 客観性証明を codex/claudecode に依存 | 自己完結で客観性を証明する手段(反証テスト・結線テスト)を標準装備 |
 | **I** | ガードレールの過剰制限(over-restriction) | サブエージェントの git deny 過剰反応 / 「high」ワードでマージ停止 / メインがマージ不可・サブ経由のみ可能 | ガードは「危険パターンのみ」をブロックし、**安全な操作を妨げないことを証明**できない。ワードベース誤検知・権限の非対称 |
 | **J** | CI の過剰適用(変更種別と強度の不一致) | docs のみの変更(specs 1 ファイル)に e2e / nix-eval / unit / typecheck のフル CI が走る(本 ADR の PR #283 で実測) | 変更のリスクに応じた最小 CI を選べない。docs → lint のみ / code → full の層化が無い |
+| **K** | SSOT 同期ドリフト(片側だけ更新) | Grift #1761(migration DROP のみで initial-schema / version pin 59 が stale) | 同一最終状態に一致すべき複数アーティファクトのうち片側だけ更新し、他方を stale に残す。逆被参照では検出不能(重複定義) |
 
 ### 既存の対応と限界
 
@@ -61,6 +62,7 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 | H(外部依存ダブルチェック) | Skill + CI 結線テスト(自己完結の客観性証明) | `packages/guardrails/profile/skills/` |
 | I(過剰制限) | **過剰制限しない証明を全ガードの必須受入条件に** — 下記 Decision 4 | 全ガード共通 |
 | J(CI 過剰適用) | CI を変更種別で層化(docs → lint のみ / code → full)。`/plan-light` と連動 | `.github/workflows/` + `packages/guardrails/profile/` |
+| K(SSOT 同期) | Command `/ssot-check` + Plugin 助言(ブロックしない) + Skill `ssot-sync` + version-pin 結線テスト | `packages/guardrails/profile/` |
 
 ### 4. ガードは「過剰制限しない」ことを証明する(パターン I への対策)
 
@@ -94,11 +96,25 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 
 各ガード(plugin / command / permission)は、**実装時に「ガードを無効化すると落ちる」ことを実測**してからマージする。ガード自体が 8 パターン(F)の適用対象である。
 
+
+### 6. SSOT 同期ドリフトを仕組みで防ぐ(パターン K への対策)
+
+同一最終状態に一致すべき複数アーティファクト(migration vs `initial-schema`、OpenAPI vs generated、version pin の N 箇所宣言)は、**逆被参照では検出できない**(重複定義であり参照ではない)。
+
+必須の仕組み:
+
+1. **Command `/ssot-check`**: PR 前に migrate-vs-SSOT / pin 等値比較をローカルで走らせる
+2. **Plugin(助言のみ)**: mirror set 内の片側変更を検知して同期確認を促す。ハードブロックしない(パターン I)
+3. **Version-pin 結線テスト**: 全宣言箇所の等値アサート
+4. **Skill `ssot-sync`**: impact-analysis と平行して重複定義側を列挙・更新
+
+受入証拠は Decision 4 と同じく、陰性(全側更新で警告なし)/ 陽性(片側のみで助言)/ 反証(`OPENCODE_SSOT_GUARD=off` で助言消える)を必須とする。
+
 ## Consequences
 
 ### 良い面
 
-- 8 パターンが**エージェントを問わず** OpenCode の仕組みで止まる(Claude Code / Codex / Cursor / Grok / OpenCode のどれで作業しても同じガードが効く)
+- 抽象化したパターンが**エージェントを問わず** OpenCode の仕組みで止まる(Claude Code / Codex / Cursor / Grok / OpenCode のどれで作業しても同じガードが効く)
 - 「ドキュメントに書いたのに繰り返す」問題を、CI テスト + plugin フック + permission の 3 層で解消
 - guardrails profile は `packages/guardrails` の既存設計(thin distribution layer)と整合
 
@@ -116,4 +132,5 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 | 各ガードが「過剰制限しない」(安全な操作が通る)陰性テストを持つ | 実装 PR + テスト | 実装 Issue の各 PR | 未着手 |
 | CI が変更種別で層化される(docs PR にフル CI が走らない) | CI ワークフロー diff | 実装 Issue(J) | 未着手 |
 | guardrails profile にガードが追加される | 実装 diff | `packages/guardrails/profile/` | 未着手 |
+| パターン K(SSOT)が command/plugin/skill + pin 結線テストを持つ | 実装 PR + テスト | Issue #288 | 未着手 |
 | 全リポジトリ(Grift 含む)でガードが効く | 運用記録 | 次回以降の PR | 未着手 |

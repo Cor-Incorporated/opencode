@@ -78,6 +78,7 @@ Defaults: read-only workers `600000` (10m); write workers and deepseek `1200000`
 | `/plan-light` | Declare the minimal verification path before implementing (anti-patterns C/G). |
 | `/env-check` | Confirm an existing environment is insufficient before creating a new one (D). |
 | `/repo-hygiene` | List stale branches/worktrees and dry-run cleanup candidates (E). |
+| `/ssot-check` | Compare mirrored SSOT artifacts (migrations/schema, version pins, OpenAPI) before PR (K). |
 | `/investigate` | Systematic debugging with root cause analysis — spawns an exploration subagent. |
 | `/test` | Run the TDD workflow: RED, GREEN, IMPROVE, then verify coverage. |
 | `/delegate` | Route work to parallel subagents or Codex CLI based on task shape. |
