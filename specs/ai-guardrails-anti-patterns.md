@@ -31,6 +31,10 @@
 | **I** | ガードレールの過剰制限(over-restriction) | サブエージェントの git deny 過剰反応 / 「high」ワードでマージ停止 / メインがマージ不可・サブ経由のみ可能 | ガードは「危険パターンのみ」をブロックし、**安全な操作を妨げないことを証明**できない。ワードベース誤検知・権限の非対称 |
 | **J** | CI の過剰適用(変更種別と強度の不一致) | docs のみの変更(specs 1 ファイル)に e2e / nix-eval / unit / typecheck のフル CI が走る(本 ADR の PR #283 で実測) | 変更のリスクに応じた最小 CI を選べない。docs → lint のみ / code → full の層化が無い |
 | **K** | SSOT 同期ドリフト(片側だけ更新) | Grift #1761(migration DROP のみで initial-schema / version pin 59 が stale) | 同一最終状態に一致すべき複数アーティファクトのうち片側だけ更新し、他方を stale に残す。逆被参照では検出不能(重複定義) |
+| **L** | テスト SKIP の黙認 | Grift #1761/#1762(PostgreSQL 停止でも mise run test が green、DB 証明が t.Skip) | 「テストが走る前提」で skip を検証完了と誤認する |
+| **M** | worktree 環境未プロビジョニング | Grift #1762(新規 worktree に node_modules 無し → ERR_MODULE_NOT_FOUND) | worktree 作成後の実行環境準備を支援しない |
+| **N** | テストランナー API 制限による反証不能 | Grift #1666(fireEvent が isComposing を nativeEvent に渡せず IME テストが vacuous pass) | ハーネスが検出を不可能にするケースを教えない |
+| **O** | 環境変数依存のテスト不安定性 | Grift #1762(VITE_CLERK_PUBLISHABLE_KEY 有無で streaming テストが分岐、CI は緑) | テストが ambient env に依存し密閉されない |
 
 ### 既存の対応と限界
 
@@ -63,6 +67,10 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 | I(過剰制限) | **過剰制限しない証明を全ガードの必須受入条件に** — 下記 Decision 4 | 全ガード共通 |
 | J(CI 過剰適用) | CI を変更種別で層化(docs → lint のみ / code → full)。`/plan-light` と連動 | `.github/workflows/` + `packages/guardrails/profile/` |
 | K(SSOT 同期) | Command `/ssot-check` + Plugin 助言(ブロックしない) + Skill `ssot-sync` + version-pin 結線テスト | `packages/guardrails/profile/` |
+| L(SKIP 黙認) | Plugin: テスト出力の skip 解析 + Command `/test-honesty` | `packages/guardrails/profile/` |
+| M(worktree 未準備) | Plugin: worktree の node_modules 欠如を助言 | `packages/guardrails/profile/` |
+| N(ハーネス制限) | Skill `harness-api-gotcha` + falsifiable-change チェックリスト | `packages/guardrails/profile/skills/` |
+| O(env 密閉) | Skill `env-hermetic-tests` + gate/mock 結線ヘルパー | `packages/guardrails/profile/` |
 
 ### 4. ガードは「過剰制限しない」ことを証明する(パターン I への対策)
 
@@ -110,6 +118,18 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 
 受入証拠は Decision 4 と同じく、陰性(全側更新で警告なし)/ 陽性(片側のみで助言)/ 反証(`OPENCODE_SSOT_GUARD=off` で助言消える)を必須とする。
 
+
+### 7. テスト検証の信頼性を仕組みで防ぐ(パターン L–O への対策)
+
+コーディングツールの完成度は「テストが緑に見えること」ではなく「検証が実際に走ったこと」で測る。
+
+1. **L**: テスト出力の skip を数え、critical skip を未検証として扱う(`/test-honesty` + plugin 助言)
+2. **M**: worktree 作成/セッション開始時に `node_modules` 欠如を助言(symlink 手順付き、ブロックしない)
+3. **N**: ハーネス API 制限のカタログ skill(`harness-api-gotcha`)を falsifiable-change に接続
+4. **O**: env-gated 経路を触るテストは mock 必須(`env-hermetic-tests` + 結線ヘルパー)
+
+各ガードは Decision 4 どおり、陰性/陽性/反証を必須とする。ハードブロックは避け、助言 + 結線テストで強制する。
+
 ## Consequences
 
 ### 良い面
@@ -133,4 +153,5 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 | CI が変更種別で層化される(docs PR にフル CI が走らない) | CI ワークフロー diff | 実装 Issue(J) | 未着手 |
 | guardrails profile にガードが追加される | 実装 diff | `packages/guardrails/profile/` | 未着手 |
 | パターン K(SSOT)が command/plugin/skill + pin 結線テストを持つ | 実装 PR + テスト | Issue #288 | 未着手 |
+| パターン L–O(テスト検証信頼性)が plugin/command/skill + 結線ヘルパーを持つ | 実装 PR + テスト | Issue #290 | 未着手 |
 | 全リポジトリ(Grift 含む)でガードが効く | 運用記録 | 次回以降の PR | 未着手 |

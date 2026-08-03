@@ -79,6 +79,7 @@ Defaults: read-only workers `600000` (10m); write workers and deepseek `1200000`
 | `/env-check` | Confirm an existing environment is insufficient before creating a new one (D). |
 | `/repo-hygiene` | List stale branches/worktrees and dry-run cleanup candidates (E). |
 | `/ssot-check` | Compare mirrored SSOT artifacts (migrations/schema, version pins, OpenAPI) before PR (K). |
+| `/test-honesty` | Treat skipped tests as incomplete verification; report passed/failed/skipped (L–O). |
 | `/investigate` | Systematic debugging with root cause analysis — spawns an exploration subagent. |
 | `/test` | Run the TDD workflow: RED, GREEN, IMPROVE, then verify coverage. |
 | `/delegate` | Route work to parallel subagents or Codex CLI based on task shape. |
