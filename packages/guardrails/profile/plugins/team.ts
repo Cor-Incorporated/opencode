@@ -12,7 +12,15 @@ const seen = new WeakMap<object, Seen>()
 const sweeping = new Map<string, Promise<void>>()
 const models = new Map<string, Lane>()
 const sweepWait = 1000
-const defaultIdleTimeout = 10 * 60 * 1000
+/** Read-only / investigate workers: keep the historic 10m ceiling. */
+export const DEFAULT_TEAM_READ_IDLE_TIMEOUT_MS = 10 * 60 * 1000
+/**
+ * Write / implementation workers: raised from 600s after deepseek-v4-flash
+ * and multi-file implement tasks repeatedly hit the hard wait (Issue #286).
+ */
+export const DEFAULT_TEAM_WRITE_IDLE_TIMEOUT_MS = 20 * 60 * 1000
+/** Default hard wait when task shape is unknown — prefer the write budget. */
+export const DEFAULT_TEAM_IDLE_TIMEOUT_MS = DEFAULT_TEAM_WRITE_IDLE_TIMEOUT_MS
 
 type Note = {
   id?: string
@@ -847,13 +855,62 @@ async function dirtyOverlap(dir: string, files: string[]) {
   return files.filter((file) => dirty.has(file))
 }
 
-async function idle(client: Client, id: string, dir: string, abort: AbortSignal) {
+export function resolveIdleTimeout(
+  input: {
+    write?: boolean
+    provider?: string
+    model?: string
+    env?: NodeJS.ProcessEnv
+  } = {},
+) {
+  const env = input.env ?? process.env
+  const explicit = Number(env.OPENCODE_TEAM_IDLE_TIMEOUT_MS)
+  if (Number.isFinite(explicit) && explicit > 0) return explicit
+
+  const provider = (input.provider ?? "").toLowerCase()
+  const model = (input.model ?? "").toLowerCase()
+  const providerKey = provider.replace(/[^a-z0-9]+/gi, "_").toUpperCase()
+  if (providerKey) {
+    const scoped = Number(env[`OPENCODE_TEAM_IDLE_TIMEOUT_MS_${providerKey}`])
+    if (Number.isFinite(scoped) && scoped > 0) return scoped
+  }
+
+  // deepseek implementers routinely exceed 600s on multi-file write tasks
+  if (provider === "deepseek" || model.includes("deepseek")) return DEFAULT_TEAM_WRITE_IDLE_TIMEOUT_MS
+
+  if (input.write === true) {
+    const write = Number(env.OPENCODE_TEAM_WRITE_IDLE_TIMEOUT_MS)
+    if (Number.isFinite(write) && write > 0) return write
+    return DEFAULT_TEAM_WRITE_IDLE_TIMEOUT_MS
+  }
+
+  return DEFAULT_TEAM_READ_IDLE_TIMEOUT_MS
+}
+
+export function formatTimeoutProgress(messages: Msg[], statusLabel: string) {
+  const bits = [statusLabel]
+  const assistant = [...messages].reverse().find((item) => item.info.role === "assistant")
+  if (!assistant) return bits.join("; ")
+  const tool = [...assistant.parts].reverse().find((item) => item.type === "tool")
+  if (tool) bits.push(`last_tool=${tool.state?.status || "pending"}`)
+  const text = body(assistant.parts)
+  if (text) bits.push(`last_text=${clip(text, 120)}`)
+  return bits.join("; ")
+}
+
+async function idle(
+  client: Client,
+  id: string,
+  dir: string,
+  abort: AbortSignal,
+  opts: { write?: boolean; provider?: string; model?: string } = {},
+) {
   const started = Date.now()
-  const timeout = millis("OPENCODE_TEAM_IDLE_TIMEOUT_MS", defaultIdleTimeout)
+  const timeout = resolveIdleTimeout(opts)
   let last = "starting"
   const hit = mark(client)
   if (process.env.DEBUG_TEAM) {
-    console.log("idle.begin", id, hit.idle.has(id), hit.per.size, hit.on)
+    console.log("idle.begin", id, hit.idle.has(id), hit.per.size, hit.on, timeout)
   }
   for (;;) {
     if (abort.aborted) throw new Error("Aborted")
@@ -863,7 +920,12 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
     const done = await snap(client, id, dir, true)
     if (done.completed) return
     if (Date.now() - started > timeout) {
-      throw new Error(`Timed out waiting for worker session ${id} after ${Math.round(timeout / 1000)}s (${last})`)
+      const list = await client.session.messages({ path: { id }, query: { directory: dir } }).catch(() => ({ data: [] }))
+      const progress = formatTimeoutProgress(list.data ?? [], last)
+      throw new Error(
+        `Timed out waiting for worker session ${id} after ${Math.round(timeout / 1000)}s (${progress}). ` +
+          `Raise OPENCODE_TEAM_IDLE_TIMEOUT_MS (or OPENCODE_TEAM_IDLE_TIMEOUT_MS_<PROVIDER>) to extend the hard wait ceiling.`,
+      )
     }
     const stat = await client.session.status({
       query: {
@@ -881,11 +943,6 @@ async function idle(client: Client, id: string, dir: string, abort: AbortSignal)
     if (item.type === "idle") return
     await Bun.sleep(gap)
   }
-}
-
-function millis(name: string, fallback: number) {
-  const value = Number(process.env[name])
-  return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
 async function snap(client: Client, id: string, dir: string, completedOnly = false) {
@@ -1256,7 +1313,11 @@ export default async function team(input: { client: Client; worktree: string; di
       })
       if (process.env.DEBUG_TEAM) console.log("job.prompted", run.id, item.id)
 
-      await idle(input.client, child, box, ctx.abort)
+      await idle(input.client, child, box, ctx.abort, {
+        write: item.write,
+        provider: item.provider,
+        model: item.model,
+      })
       if (process.env.DEBUG_TEAM) console.log("job.idle-return", run.id, item.id)
       const out = await snap(input.client, child, box)
       if (process.env.DEBUG_TEAM) console.log("job.snapped", run.id, item.id, out.completed)

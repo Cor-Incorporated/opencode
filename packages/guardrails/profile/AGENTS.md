@@ -28,6 +28,19 @@
 - `curl` alone is NOT E2E — E2E requires browser verification
 - TDD cycle: RED → GREEN → IMPROVE → check coverage
 - Test falsifiability: prove the test fails when the bug exists (see `/test`)
+- Prefer in-repo `bun test` for guardrail verification. Inline interpreter shells (`bun -e`, `python -c`, `node --eval`, etc.) are blocked by the access guard because they can mutate `.opencode/guardrails` runtime state — do not rely on `/tmp` one-off scripts for proof.
+
+## Team / background timeouts
+
+`/team` and background workers use a **hard wait ceiling** (not true idle detection). Override with env vars:
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `OPENCODE_TEAM_IDLE_TIMEOUT_MS` | Global hard wait for any worker | write budget (20m) when unset and task is write/deepseek; else see below |
+| `OPENCODE_TEAM_WRITE_IDLE_TIMEOUT_MS` | Write/implement workers | `1200000` (20m) |
+| `OPENCODE_TEAM_IDLE_TIMEOUT_MS_<PROVIDER>` | Provider-scoped override (e.g. `OPENCODE_TEAM_IDLE_TIMEOUT_MS_DEEPSEEK`) | unset |
+
+Defaults: read-only workers `600000` (10m); write workers and deepseek `1200000` (20m). Timeout errors include last status/tool/text and remind you of these variables.
 
 ## Quality
 
