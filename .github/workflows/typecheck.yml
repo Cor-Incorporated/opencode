@@ -3,8 +3,17 @@ name: typecheck
 on:
   push:
     branches: [dev]
+  # Pattern J: docs/specs-only PRs skip typecheck; guardrails still triggers.
   pull_request:
     branches: [dev]
+    paths:
+      - "**"
+      - "!specs/**"
+      - "!docs/**"
+      - "!**/*.md"
+      - "!**/*.mdx"
+      - "packages/guardrails/**"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 jobs:

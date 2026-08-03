@@ -2,6 +2,8 @@ import path from "path"
 import { createAccessHandlers } from "./guardrail-access"
 import { createContext, type GuardrailInput } from "./guardrail-context"
 import { createGitHandlers } from "./guardrail-git"
+import { createHygieneHandlers } from "./hygiene-warning"
+import { createRemovalHandlers } from "./removal-guard"
 import { ciChecksGreen, flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
 const OPENCODE_IGNORE = ".opencode/"
@@ -49,6 +51,8 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
   const ctx = await createContext(input, opts)
   const access = createAccessHandlers(ctx)
   const gitHandlers = createGitHandlers(ctx)
+  const removalHandlers = createRemovalHandlers(ctx)
+  const hygieneHandlers = createHygieneHandlers(ctx)
 
   return {
     config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
@@ -138,6 +142,7 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           detected_stacks: stacks,
           branch_warning: branchWarning,
           gitignore_missing_opencode: false,
+          hygiene_warning: "",
         })
         if (stacks.length > 0) {
           await ctx.seen("auto_init.stacks_detected", { stacks })
@@ -150,6 +155,9 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         if (branchWarning) {
           await ctx.seen("branch_workflow.warning", { warning: branchWarning })
         }
+        try {
+          await hygieneHandlers.onSessionCreated()
+        } catch {}
         try {
           const settingsPath = path.join(process.env.HOME || "~", ".claude", "settings.json")
           const settings = JSON.parse(
@@ -260,6 +268,17 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         })
         await ctx.mark({ branch_warning: "" })
       }
+      const hygieneWarn = str(data.hygiene_warning)
+      if (hygieneWarn) {
+        out.parts.push({
+          id: partID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: hygieneWarn,
+        })
+        await ctx.mark({ hygiene_warning: "" })
+      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown; callID?: unknown },
@@ -271,6 +290,7 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         const cmd = typeof out.args?.command === "string" ? out.args.command : ""
         if (cmd) {
           await gitHandlers.bashBeforeGit(cmd, out, bashData)
+          await removalHandlers.bashBeforeRemoval(cmd)
         }
         return
       }

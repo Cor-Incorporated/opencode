@@ -1,0 +1,43 @@
+name: docs-lint
+
+# Pattern J: docs/specs-only changes get a light lint lane instead of full CI.
+on:
+  pull_request:
+    paths:
+      - "specs/**"
+      - "docs/**"
+      - "**/*.md"
+      - "**/*.mdx"
+      - "!packages/guardrails/**"
+      - "!.github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Lint markdown / specs presence
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files 'specs/**/*.md' 'docs/**/*.md' '*.md' ':!:packages/guardrails/**' ':!:**/node_modules/**' | head -200)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No docs files to lint"
+            exit 0
+          fi
+          empty=0
+          for f in "${files[@]}"; do
+            if [ ! -s "$f" ]; then
+              echo "::error::empty docs file: $f"
+              empty=1
+            fi
+          done
+          if [ "$empty" -ne 0 ]; then
+            exit 1
+          fi
+          echo "docs-lint ok (${#files[@]} files sampled)"

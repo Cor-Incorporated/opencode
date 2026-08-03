@@ -62,6 +62,9 @@
 | `/ship` | Merge-ready workflow: verifies CI status and pushes. |
 | `/handoff` | Generate a handoff document for cross-session continuity. |
 | `/plan` | Analyze requirements, assess risks, and produce a phased implementation plan. |
+| `/plan-light` | Declare the minimal verification path before implementing (anti-patterns C/G). |
+| `/env-check` | Confirm an existing environment is insufficient before creating a new one (D). |
+| `/repo-hygiene` | List stale branches/worktrees and dry-run cleanup candidates (E). |
 | `/investigate` | Systematic debugging with root cause analysis — spawns an exploration subagent. |
 | `/test` | Run the TDD workflow: RED, GREEN, IMPROVE, then verify coverage. |
 | `/delegate` | Route work to parallel subagents or Codex CLI based on task shape. |

@@ -6,6 +6,12 @@ permission:
   plan_enter: allow
   bash:
     "*": allow
+    "git worktree list*": allow
+    "git merge-base *": allow
+    "git status*": allow
+    "git log*": allow
+    "git worktree add *": ask
+    "git branch -D *": ask
     "git checkout -- *": deny
     "git merge *": deny
     "git push --force*": deny
