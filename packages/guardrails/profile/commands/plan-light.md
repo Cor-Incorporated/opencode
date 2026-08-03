@@ -28,6 +28,10 @@ Respond with:
 2. Why heavier steps are deferred
 3. What evidence would justify adding one heavier step later
 
+## SSOT / mirror sets (pattern K)
+
+If the change touches migrations, `initial-schema`/contracts, version pins, or OpenAPI/codegen, add `/ssot-check` to the minimal path **before PR**. Updating one side alone is a half-change even when reverse references are empty.
+
 ## Arguments
 
 $ARGUMENTS
