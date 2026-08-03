@@ -14,5 +14,7 @@ A change is not done until removing it makes a test fail.
 3. Temporarily disable or revert the fix and re-run — the test must fail again (falsify).
 4. Restore the fix and confirm green.
 5. Report with the falsify command/output, not narrative alone.
+6. **Harness delivery (pattern N):** confirm the test runner actually supplies the event/async properties under test (see `harness-api-gotcha`). Vacuous passes are not falsification.
+7. **Skip honesty (pattern L):** report `passed/failed/skipped`. Critical skips mean unverified.
 
 If you cannot falsify, the claim is unverified — say so explicitly.

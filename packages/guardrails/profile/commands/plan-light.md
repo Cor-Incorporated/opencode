@@ -32,6 +32,15 @@ Respond with:
 
 If the change touches migrations, `initial-schema`/contracts, version pins, or OpenAPI/codegen, add `/ssot-check` to the minimal path **before PR**. Updating one side alone is a half-change even when reverse references are empty.
 
+## Test reliability (patterns L–O)
+
+Include in the minimal path when relevant:
+
+- **L:** report skip counts; critical DB skips ⇒ not verified (`/test-honesty`)
+- **M:** provision worktree `node_modules` before JS tests
+- **N:** harness must deliver props under test (`harness-api-gotcha`)
+- **O:** mock env-gated auth/config (`env-hermetic-tests`)
+
 ## Arguments
 
 $ARGUMENTS

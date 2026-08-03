@@ -5,6 +5,8 @@ import { createGitHandlers } from "./guardrail-git"
 import { createHygieneHandlers } from "./hygiene-warning"
 import { createRemovalHandlers } from "./removal-guard"
 import { createSsotHandlers, pendingSsotAdvisory } from "./ssot-guard"
+import { createTestHonestyHandlers } from "./test-honesty"
+import { createWorktreeBootstrapHandlers } from "./worktree-bootstrap"
 import { ciChecksGreen, flag, git, json, list, num, save, stash, str } from "./guardrail-patterns"
 
 const OPENCODE_IGNORE = ".opencode/"
@@ -55,6 +57,8 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
   const removalHandlers = createRemovalHandlers(ctx)
   const hygieneHandlers = createHygieneHandlers(ctx)
   const ssotHandlers = createSsotHandlers(ctx)
+  const testHonestyHandlers = createTestHonestyHandlers(ctx)
+  const worktreeBootstrapHandlers = createWorktreeBootstrapHandlers(ctx)
 
   return {
     config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
@@ -147,6 +151,8 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
           hygiene_warning: "",
           ssot_advisory: "",
           ssot_touched_files: [],
+          test_honesty_advisory: "",
+          worktree_bootstrap_advisory: "",
         })
         if (stacks.length > 0) {
           await ctx.seen("auto_init.stacks_detected", { stacks })
@@ -161,6 +167,9 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         }
         try {
           await hygieneHandlers.onSessionCreated()
+        } catch {}
+        try {
+          await worktreeBootstrapHandlers.onSessionCreated()
         } catch {}
         try {
           const settingsPath = path.join(process.env.HOME || "~", ".claude", "settings.json")
@@ -294,6 +303,28 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
         })
         await ctx.mark({ ssot_advisory: "" })
       }
+      const bootstrapWarn = str(data.worktree_bootstrap_advisory)
+      if (bootstrapWarn) {
+        out.parts.push({
+          id: partID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: bootstrapWarn,
+        })
+        await ctx.mark({ worktree_bootstrap_advisory: "" })
+      }
+      const honestyWarn = str(data.test_honesty_advisory)
+      if (honestyWarn) {
+        out.parts.push({
+          id: partID(),
+          sessionID: out.message.sessionID,
+          messageID: out.message.id,
+          type: "text",
+          text: honestyWarn,
+        })
+        await ctx.mark({ test_honesty_advisory: "" })
+      }
     },
     "tool.execute.before": async (
       item: { tool: string; args?: unknown; callID?: unknown },
@@ -361,6 +392,12 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
       await access.toolAfterAccess(item, out, data)
       try {
         await ssotHandlers.afterMutatingTool(item, out)
+      } catch {}
+      try {
+        await testHonestyHandlers.afterBash(item, out)
+      } catch {}
+      try {
+        await worktreeBootstrapHandlers.afterBash(item, out)
       } catch {}
 
       if (item.tool === "task") {
