@@ -3,8 +3,20 @@ name: nix-eval
 on:
   push:
     branches: [dev]
+  # Pattern J: docs/specs-only PRs skip nix-eval; guardrails still triggers.
   pull_request:
     branches: [dev]
+    paths:
+      - "**"
+      - "!specs/**"
+      - "!docs/**"
+      - "!**/*.md"
+      - "!**/*.mdx"
+      - "packages/guardrails/**"
+      - ".github/workflows/**"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
   workflow_dispatch:
 
 concurrency:

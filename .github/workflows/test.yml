@@ -4,7 +4,16 @@ on:
   push:
     branches:
       - dev
+  # Pattern J: skip full unit/e2e for docs-only PRs; guardrails changes still match.
   pull_request:
+    paths:
+      - "**"
+      - "!specs/**"
+      - "!docs/**"
+      - "!**/*.md"
+      - "!**/*.mdx"
+      - "packages/guardrails/**"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 concurrency:

@@ -213,12 +213,19 @@
       "pwd": "allow",
       "which *": "allow",
       "echo *": "allow",
+      "git worktree list*": "allow",
+      "git merge-base *": "allow",
       "cat *": "ask",
+      "git worktree add *": "ask",
+      "git branch -D *": "ask",
+      "git branch -d *": "ask",
       "rm -rf *": "deny",
       "rm -r *": "deny",
       "sudo *": "deny",
       "curl * | sh*": "deny",
-      "wget * | sh*": "deny"
+      "wget * | sh*": "deny",
+      "git push --force*": "deny",
+      "git push * --force*": "deny"
     },
     "read": {
       "*": "allow",
