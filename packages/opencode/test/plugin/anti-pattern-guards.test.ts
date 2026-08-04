@@ -126,6 +126,9 @@ function profileBashRuleset() {
 
 function implementBashRuleset() {
   // Mirrors agents/implement.md bash block (pattern I symmetry fixture).
+  // NOTE: "gh pr merge *" is intentionally absent — the default primary agent
+  // must honor the config allow (issue #292). See loadAgentBashRuleset for the
+  // real-file guard that prevents this fixture from drifting.
   return Permission.fromConfig({
     bash: {
       "*": "allow",
@@ -140,7 +143,6 @@ function implementBashRuleset() {
       "git push --force*": "deny",
       "git push * --force*": "deny",
       "git reset --hard*": "deny",
-      "gh pr merge *": "deny",
       "rm -rf *": "deny",
       "rm -r *": "deny",
       "sudo *": "deny",
@@ -276,6 +278,60 @@ describe("anti-pattern B/I — permission symmetry and over-restriction proofs",
   test("word 'high' is not a permission pattern and does not deny", async () => {
     const rules = await profileBashRuleset()
     expect(Permission.evaluate("bash", "echo high severity review", rules).action).not.toBe("deny")
+  })
+})
+
+// agent.ts builds a user-defined primary agent's permission as
+//   merge(merge(defaults, userConfig), agentDefinition)
+// and Permission.evaluate uses findLast, so the agent definition is applied
+// AFTER the user config and overrides it. For the DEFAULT primary agent
+// (implement, the main session agent), a deny in implement.md therefore
+// overrides an explicit allow in opencode.json — the main session silently
+// loses the ability the config grants (issue #292). These proofs read the real
+// agent files so fixture drift cannot hide the regression again.
+describe("anti-pattern I — primary-agent permission leak (issue #292)", () => {
+  async function loadAgentBashRuleset(filename: string) {
+    const matter = (await import("gray-matter")).default
+    const file = await Bun.file(path.join(profileRoot, "agents", filename)).text()
+    const parsed = matter(file)
+    const bash = parsed.data?.permission?.bash ?? {}
+    return Permission.fromConfig({ bash })
+  }
+
+  test("implement (default primary) effective permission allows gh pr merge per config", async () => {
+    const configBash = await profileBashRuleset()
+    const implementBash = await loadAgentBashRuleset("implement.md")
+    // Faithful to agent.ts bash precedence: config first, agent definition last.
+    const effective = Permission.merge(configBash, implementBash)
+    expect(Permission.evaluate("bash", "gh pr merge 1777 --merge", effective).action).toBe("allow")
+  })
+
+  test("falsify: a primary-agent deny layered on a config allow is what blocks the main session", async () => {
+    const configBash = await profileBashRuleset()
+    const withLeak = Permission.merge(configBash, Permission.fromConfig({ bash: { "gh pr merge *": "deny" } }))
+    // PROOF: when implement.md declares the deny, evaluate lands on deny and
+    // overrides the config allow. This is the exact regression the test above
+    // guards against — flip implement.md back to denying and it resurfaces.
+    expect(Permission.evaluate("bash", "gh pr merge 1777 --merge", withLeak).action).toBe("deny")
+  })
+
+  test("negative: destructive ops the config also denies remain denied for implement", async () => {
+    const configBash = await profileBashRuleset()
+    const implementBash = await loadAgentBashRuleset("implement.md")
+    const effective = Permission.merge(configBash, implementBash)
+    expect(Permission.evaluate("bash", "rm -rf node_modules", effective).action).toBe("deny")
+    expect(Permission.evaluate("bash", "git push --force origin feat", effective).action).toBe("deny")
+    expect(Permission.evaluate("bash", "git reset --hard origin/dev", effective).action).toBe("deny")
+  })
+
+  test("specialized primary (planner) is read-only by design and may still self-restrict", async () => {
+    // planner is a read-only primary agent; its gh pr merge deny is intentional
+    // and not the #292 bug. Only the DEFAULT primary (implement) must honor an
+    // explicit config allow, because that is the main session agent.
+    const configBash = await profileBashRuleset()
+    const plannerBash = await loadAgentBashRuleset("planner.md")
+    const effective = Permission.merge(configBash, plannerBash)
+    expect(Permission.evaluate("bash", "gh pr merge 1 --merge", effective).action).toBe("deny")
   })
 })
 

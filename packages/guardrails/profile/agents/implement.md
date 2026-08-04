@@ -1,6 +1,12 @@
 ---
 description: Default guarded implementation agent for internal development workflows.
 mode: primary
+# implement is the DEFAULT primary agent (the main session agent). agent.ts merges
+# a user-defined agent's permission AFTER the config, and evaluate() is last-wins,
+# so any deny here overrides opencode.json. Do NOT deny a command the config
+# explicitly allows (e.g. "gh pr merge *": allow) — that silently blocks the main
+# session (issue #292). Self-restriction belongs on specialized primary agents
+# like planner, or on subagents. Enforced by test/plugin/anti-pattern-guards.test.ts.
 permission:
   question: allow
   plan_enter: allow
@@ -17,7 +23,6 @@ permission:
     "git push --force*": deny
     "git push * --force*": deny
     "git reset --hard*": deny
-    "gh pr merge *": deny
     "rm -rf *": deny
     "rm -r *": deny
     "sudo *": deny
