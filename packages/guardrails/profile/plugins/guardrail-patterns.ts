@@ -115,6 +115,84 @@ export function has(file: string, list: RegExp[]) {
   return list.some((item) => item.test(file))
 }
 
+/** OC-D1 helpers: path-like tokens only (not whole-command substring matches). */
+export function pathLikeToken(token: string): boolean {
+  const t = token.replaceAll("\\", "/")
+  if (!t || t.startsWith("-")) return false
+  if (t.includes("/")) return true
+  if (/^\.?[\w.-]+\.[\w.-]+$/.test(t)) return true
+  if (/^\.(?:env|pem|key|p12|pfx|crt|cer|der)$/i.test(t)) return true
+  if (/^id_(?:rsa|ed25519)/i.test(t)) return true
+  return false
+}
+
+export function splitShellTokens(cmd: string): string[] {
+  const tokens: string[] = []
+  let current = ""
+  let quote = ""
+  let escaped = false
+  for (let index = 0; index < cmd.length; index++) {
+    const char = cmd[index]
+    if (escaped) {
+      current += char
+      escaped = false
+      continue
+    }
+    if (char === "\\") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (char === quote) quote = ""
+      else current += char
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current)
+        current = ""
+      }
+      continue
+    }
+    if (char === ";" || char === "|" || char === "&") {
+      if (current) {
+        tokens.push(current)
+        current = ""
+      }
+      continue
+    }
+    current += char
+  }
+  if (current) tokens.push(current)
+  return tokens
+}
+
+/** True when a bash command references secret paths as path-like tokens (not as search text). */
+export function bashTouchesProtectedSecrets(cmd: string): boolean {
+  const tokens = splitShellTokens(cmd)
+  if (tokens.length === 0) return false
+  const searchTools = new Set(["grep", "egrep", "fgrep", "rg", "find"])
+  const skip = new Set<number>()
+  for (let i = 0; i < tokens.length; i++) {
+    const base = tokens[i].replace(/^.*\//, "")
+    if (!searchTools.has(base)) continue
+    let j = i + 1
+    while (j < tokens.length && tokens[j].startsWith("-")) j++
+    if (j < tokens.length) skip.add(j)
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    if (skip.has(i)) continue
+    const token = tokens[i].replaceAll("\\", "/")
+    if (!pathLikeToken(token)) continue
+    if (has(token, sec)) return true
+  }
+  return false
+}
+
 export function ext(file: string) {
   return path.extname(file).toLowerCase()
 }

@@ -1,5 +1,18 @@
 import path from "path"
-import { MUTATING_TOOLS, bash, cfg, has, json, list, num, pick, rel, sec, stash, str, text } from "./guardrail-patterns"
+import {
+  MUTATING_TOOLS,
+  bash,
+  bashTouchesProtectedSecrets,
+  cfg,
+  json,
+  list,
+  num,
+  pick,
+  rel,
+  stash,
+  str,
+  text,
+} from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
 
 export function createAccessHandlers(ctx: GuardrailContext) {
@@ -70,7 +83,7 @@ export function createAccessHandlers(ctx: GuardrailContext) {
       const cmd = typeof out.args?.command === "string" ? out.args.command : ""
       const file = cmd.replaceAll("\\", "/")
       if (!cmd) return
-      if (has(file, sec)) {
+      if (bashTouchesProtectedSecrets(cmd)) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "shell access to protected files" })
         throw new Error(text("shell access to protected files"))
       }
@@ -79,7 +92,8 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
       }
-      if (inlineInterpreterShell(cmd)) {
+      // OC-D2: interpreter block only when the command also mentions guardrail runtime path
+      if (inlineInterpreterShell(cmd) && cmd.includes(".opencode/guardrails")) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "interpreter shell can mutate guardrail runtime" })
         throw new Error(text("interpreter shell can mutate guardrail runtime"))
       }
