@@ -63,7 +63,7 @@ Planned next slices are tracked in the fork:
 
 ## AI agent instrumentation quality gate
 
-Historical note: a Traceability Matrix that pointed at `guardrail-instrumentation.ts` was removed (file deleted in #277). Live push protection is implemented by `profile/plugins/guardrail-git.ts`. Acceptance evidence for anti-pattern work lives in `specs/ai-guardrails-anti-patterns.md`.
+Historical note: a Traceability Matrix that pointed at a deleted instrumentation plugin (removed in #277) was retired from this README. Live push protection is implemented by `profile/plugins/guardrail-git.ts`. Acceptance evidence for anti-pattern work lives in `specs/ai-guardrails-anti-patterns.md`.
 
 ## Usage
 
