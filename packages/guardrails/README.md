@@ -19,7 +19,7 @@ This package exists to preserve the operating model imported from `claude-code-s
 - pointer-based instructions instead of bloated always-loaded prompts
 - runtime verifiability over "the code exists, so it must work"
 
-Those principles come from `claude-code-skills` epic `#130` and are tracked in this fork under `docs/ai-guardrails/`.
+Those principles come from `claude-code-skills` epic `#130` and are tracked in this fork under `specs/ai-guardrails-anti-patterns.md`.
 They now also explicitly inherit Anthropic's `The Complete Guide to Building Skills for Claude` as the BDF-equivalent source for progressive disclosure, use-case-first design, and measurable testing discipline.
 
 ## Positioning
@@ -63,23 +63,7 @@ Planned next slices are tracked in the fork:
 
 ## AI agent instrumentation quality gate
 
-The packaged guardrail plugin enforces AI agent instrumentation and metric changes through source-level hooks. It blocks global monkey patches during edit hooks and blocks PR/merge commands when instrumentation evidence is missing.
-
-Traceability Matrix:
-
-| Acceptance Criteria                                                                 | Implementation code path                                                     |
-| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Source-level hooks are required and global monkey patches are prohibited            | `profile/plugins/guardrail-instrumentation.ts#createInstrumentationHandlers` |
-| Instrumentation/cross-cutting PRs require integration or smoke coverage             | `profile/plugins/guardrail-instrumentation.ts#integrationTestEvidence`       |
-| Metric semantics and source code path must be explicit                              | `profile/plugins/guardrail-instrumentation.ts#metricSemanticsEvidence`       |
-| Unmeasurable metrics must not be claimed                                            | `profile/plugins/guardrail-instrumentation.ts#unmeasurableMetricClaim`       |
-| Optional dependency availability must be probed before use                          | `profile/plugins/guardrail-instrumentation.ts#dependencyProbeEvidence`       |
-| Resource lifecycle cleanup/finally paths are required for instrumentation resources | `profile/plugins/guardrail-instrumentation.ts#resourceLifecycleEvidence`     |
-| Unavailable metric state must carry an explicit reason instead of null              | `profile/plugins/guardrail-instrumentation.ts#nullUnavailableReason`         |
-
-Metric semantics: `instrumentation_quality_state` records only this gate's evaluated state (`done` or `blocked`) for the current diff. `instrumentation_quality_blockers` records concrete blocker strings from the code path above; it does not claim runtime observability metrics that the guardrail cannot directly measure.
-
-Dependency availability probe: PR/merge evidence must show the dependency, provider, SDK, CLI, or MCP dependency was checked and that unavailable data includes `unavailable_reason` or equivalent `reason`.
+Historical note: a Traceability Matrix that pointed at a deleted instrumentation plugin (removed in #277) was retired from this README. Live push protection is implemented by `profile/plugins/guardrail-git.ts`. Acceptance evidence for anti-pattern work lives in `specs/ai-guardrails-anti-patterns.md`.
 
 ## Usage
 
