@@ -151,7 +151,7 @@ ADR・ハンドオーバー文書は**ソフト規約**として残すが、実�
 | 各ガードが「無効化すると落ちる」反証を持つ | 実装 PR + テスト | 実装 Issue の各 PR | 未着手 |
 | 各ガードが「過剰制限しない」(安全な操作が通る)陰性テストを持つ | 実装 PR + テスト | 実装 Issue の各 PR | 未着手 |
 | CI が変更種別で層化される(docs PR にフル CI が走らない) | CI ワークフロー diff | 実装 Issue(J) | 未着手 |
-| guardrails profile にガードが追加される | 実装 diff | `packages/guardrails/profile/` | 未着手 |
-| パターン K(SSOT)が command/plugin/skill + pin 結線テストを持つ | 実装 PR + テスト | Issue #288 | 未着手 |
-| パターン L–O(テスト検証信頼性)が plugin/command/skill + 結線ヘルパーを持つ | 実装 PR + テスト | Issue #290 | 未着手 |
+| guardrails profile にガードが追加される | 実装 diff | PR #285 `3522f97ec5` 2026-08-03 | 取得済み |
+| パターン K(SSOT)が command/plugin/skill + pin 結線テストを持つ | 実装 PR + テスト | PR #289 `2c33562a54` 2026-08-03 | 取得済み |
+| パターン L–O(テスト検証信頼性)が plugin/command/skill + 結線ヘルパーを持つ | 実装 PR + テスト | PR #291 `1883ff4f14` 2026-08-03。付記: entrypoint pin が #292 自己被弾の直接トリガー | 取得済み |
 | 全リポジトリ(Grift 含む)でガードが効く | 運用記録 | 次回以降の PR | 未着手 |
