@@ -1,5 +1,5 @@
 import type { GuardrailContext } from "./guardrail-context"
-import { git } from "./guardrail-patterns"
+import { git, stash } from "./guardrail-patterns"
 
 export const DEFAULT_HYGIENE_THRESHOLDS = {
   worktrees: 8,
@@ -70,11 +70,48 @@ export function createHygieneHandlers(ctx: GuardrailContext, thresholds: Hygiene
     const stats = await collectHygieneStats(ctx.input.worktree)
     const warning = hygieneWarningMessage(stats, thresholds)
     if (!warning) {
-      await ctx.mark({ hygiene_warning: "" })
+      await ctx.mark({ hygiene_warning: "", hygiene_ignore_streak: 0 })
       return
     }
-    await ctx.mark({ hygiene_warning: warning })
-    await ctx.seen("repo_hygiene.warning", stats)
+    // OC-D7: ledger every threshold warning + auto issue after 3 consecutive ignored sessions
+    await ctx.seen("repo_hygiene.warning", {
+      ...stats,
+      component: "OC-D7",
+      event: "advise",
+    })
+    const prev = await stash(ctx.state)
+    const sameAsPrev = typeof prev.hygiene_warning === "string" && prev.hygiene_warning === warning
+    const streak = sameAsPrev ? Number(prev.hygiene_ignore_streak ?? 0) + 1 : 1
+    await ctx.mark({ hygiene_warning: warning, hygiene_ignore_streak: streak })
+    if (streak >= 3) {
+      await ctx.seen("repo_hygiene.auto_issue_candidate", {
+        component: "OC-D7",
+        event: "advise",
+        rule: "hygiene-ignore-streak",
+        streak,
+        detail: warning,
+      })
+      // Advise-only: do not block. Prefer gh issue when available; never fail session.
+      try {
+        const proc = Bun.spawn(
+          [
+            "gh",
+            "issue",
+            "create",
+            "--title",
+            `chore(hygiene): ignored warning ${streak} sessions`,
+            "--body",
+            `OC-D7 auto issue (advise-only).\n\nStreak: ${streak}\nWarning: ${warning}\n\nDo not block; review cleanup candidates.`,
+          ],
+          { cwd: ctx.input.worktree, stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+        )
+        await proc.exited
+        await ctx.seen("repo_hygiene.auto_issue_created", { streak, exit: proc.exitCode })
+        await ctx.mark({ hygiene_ignore_streak: 0 })
+      } catch {
+        await ctx.seen("repo_hygiene.auto_issue_failed", { streak })
+      }
+    }
   }
 
   return { onSessionCreated }
