@@ -152,7 +152,13 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
 
   async function mark(data: Record<string, unknown>) {
     const prev = await stash(state)
-    await save(state, { ...prev, ...data, mode, updated_at: new Date().toISOString() })
+    const next = { ...prev, ...data, mode, updated_at: new Date().toISOString() }
+    // OC-D3 write-through: keep state_sha256 aligned with self-writes so
+    // tool.execute.after does not treat our own mark() as external tampering.
+    const { state_sha256: _s, updated_at: _u, ...rest } = next
+    const hasher = new Bun.CryptoHasher("sha256")
+    hasher.update(JSON.stringify(rest))
+    await save(state, { ...next, state_sha256: hasher.digest("hex") })
   }
 
   async function seen(type: string, data: Record<string, unknown>) {

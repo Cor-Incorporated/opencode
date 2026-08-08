@@ -433,6 +433,13 @@ export function createGitHandlers(ctx: GuardrailContext) {
         if (!hasPushSubcommand) continue
 
         if (destinations.some((dst) => protectedBranch.test(dst))) {
+          // OC-A3: record block events so defense ledger is observable
+          await ctx.seen("block", {
+            guard: "git",
+            rule: "protected-branch-push",
+            cmd_head: cmd.slice(0, 120),
+          })
+          await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected branch push" })
           throw new Error(
             "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
           )
@@ -442,6 +449,12 @@ export function createGitHandlers(ctx: GuardrailContext) {
           try {
             const result = await git(ctx.input.worktree, ["branch", "--show-current"])
             if (result.code === 0 && result.stdout && protectedBranch.test(result.stdout.trim())) {
+              await ctx.seen("block", {
+                guard: "git",
+                rule: "protected-branch-push-implicit",
+                cmd_head: cmd.slice(0, 120),
+              })
+              await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected branch push" })
               throw new Error(
                 "Guardrail policy blocked this action: direct push to protected branch blocked — use a PR workflow",
               )
