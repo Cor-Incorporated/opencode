@@ -204,7 +204,11 @@ describe("guardrail-access", () => {
     )
   })
 
-  test("blocks inline interpreter shell even when guardrail runtime path is assembled dynamically", async () => {
+  test("allows inline interpreter shell when guardrail runtime path is assembled dynamically (accepted C15 limitation)", async () => {
+    // OC-D1/D2 (PR #298): 検知は `inlineInterpreterShell(cmd) && cmd.includes(".opencode/guardrails")`
+    // の条件結合に緩和された。動的組み立てパス（文字列分割）は表面形検知では原理的に閉じない
+    // （C15: シェルの表現力 > 検知空間）。根本保証はファイルシステム側（state/events への書込を
+    // guardrail.ts の mark/seen 経路に限定する構造）に置く。rollout/opencode.md §3 D2 参照。
     const { ctx, marks } = context()
     const access = createAccessHandlers(ctx)
     const command =
@@ -215,16 +219,9 @@ describe("guardrail-access", () => {
         { tool: "bash", args: { command } },
         { args: { command } },
       ),
-    ).rejects.toThrow("interpreter shell can mutate guardrail runtime")
+    ).resolves.toBeUndefined()
 
-    expect(marks).toHaveLength(1)
-    expect(marks[0]).toEqual(
-      expect.objectContaining({
-        last_block: "bash",
-        last_command: command,
-        last_reason: "interpreter shell can mutate guardrail runtime",
-      }),
-    )
+    expect(marks).toHaveLength(0)
   })
 
   test("clears stale review evidence state after mutating tool edits", async () => {
