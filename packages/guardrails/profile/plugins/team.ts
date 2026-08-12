@@ -1,6 +1,6 @@
 import { cp, lstat, mkdir, readdir, readlink, realpath, rm, symlink } from "fs/promises"
 import path from "path"
-import { tool } from "@opencode-ai/plugin"
+import { tool, type ToolContext } from "@opencode-ai/plugin"
 import { Background } from "../../../opencode/src/util/background"
 
 const z = tool.schema
@@ -1419,7 +1419,12 @@ export default async function team(input: { client: Client; worktree: string; di
         ctx,
         args.tasks.map((item) => `${item.description ?? item.id}\n${item.prompt}`).join("\n"),
       )
-      const exec = route ? { ...ctx, directory: route, worktree: route } : ctx
+      // ToolContext has no `permission` at runtime (registry.ts builds the plugin
+      // ctx without it) — declare it optional so permit() can receive parent rules
+      // when the host ever provides them; otherwise the deny-floor applies.
+      const exec: ToolContext & { permission?: Rule[] } = route
+        ? { ...ctx, directory: route, worktree: route }
+        : ctx
       const runRoot = projectRoot(exec.directory, exec.worktree)
       const canIsolate = Boolean(exec.worktree && exec.worktree !== "/")
       const strategy = args.strategy ?? "parallel"
@@ -1556,7 +1561,12 @@ export default async function team(input: { client: Client; worktree: string; di
     },
     async execute(args, ctx) {
       const route = await routedProjectRoot(ctx, `${args.description ?? ""}\n${args.prompt}`)
-      const exec = route ? { ...ctx, directory: route, worktree: route } : ctx
+      // ToolContext has no `permission` at runtime (registry.ts builds the plugin
+      // ctx without it) — declare it optional so permit() can receive parent rules
+      // when the host ever provides them; otherwise the deny-floor applies.
+      const exec: ToolContext & { permission?: Rule[] } = route
+        ? { ...ctx, directory: route, worktree: route }
+        : ctx
       const runRoot = projectRoot(exec.directory, exec.worktree)
       const canIsolate = Boolean(exec.worktree && exec.worktree !== "/")
       const detachedAbort = new AbortController()
