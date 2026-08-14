@@ -3765,6 +3765,22 @@ describe("ProviderTransform.variants", () => {
     expect(result).toEqual({})
   })
 
+  test("glm-5.3 returns native effort variants for openai-compatible providers", () => {
+    const model = createMockModel({
+      id: "zhipuai/glm-5.3",
+      providerID: "zhipuai",
+      api: {
+        id: "glm-5.3",
+        url: "https://open.bigmodel.cn/api/paas/v4",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    expect(ProviderTransform.variants(model)).toEqual({
+      high: { reasoningEffort: "high" },
+      max: { reasoningEffort: "max" },
+    })
+  })
+
   test("glm-5.2 returns native effort variants for openai-compatible providers", () => {
     const model = createMockModel({
       id: "zhipuai/glm-5.2",

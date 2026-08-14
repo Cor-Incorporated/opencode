@@ -348,7 +348,7 @@ function recordModel(
 }
 
 function currentLane(sessionID: string) {
-  return models.get(sessionID) ?? { provider: "zai-coding-plan", model: "glm-5.2", variant: "" }
+  return models.get(sessionID) ?? { provider: "zai-coding-plan", model: "glm-5.3", variant: "" }
 }
 
 function lane(_item: Pick<Step, "id" | "description" | "agent" | "prompt" | "depends">, current: Lane) {

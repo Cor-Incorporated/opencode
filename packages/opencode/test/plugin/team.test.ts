@@ -107,9 +107,9 @@ test("team uses default limit when caller omits limit", async () => {
   expect(prompted).toBe(true)
   expect(model).toEqual({
     providerID: "zai-coding-plan",
-    modelID: "glm-5.2",
+    modelID: "glm-5.3",
   })
-  expect(out).toContain("model=zai-coding-plan/glm-5.2")
+  expect(out).toContain("model=zai-coding-plan/glm-5.3")
   expect(out).toContain("default-limit: done")
 })
 
@@ -389,7 +389,7 @@ test("team worker model inherits the parent session model", async () => {
   })
 })
 
-test("team carries local .opencode files into worker worktrees and uses permissive child permissions", async () => {
+test("team carries local .opencode files into worker worktrees and inherits parent permissions", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -590,19 +590,15 @@ alwaysApply: true
 
   expect(out).toContain("run_id:")
   expect(body?.parentID).toBe("ses_parent")
-  expect(body?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "*", pattern: "*", action: "allow" })
-  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "*", action: "allow" })
-  expect(evaluate("bash", "git worktree list", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("bash", "git checkout feat/alpha-quality-gates", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("bash", "gh pr merge 150", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("bash", "opencode run /init", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("bash", "rm -rf .opencode", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("external_directory", "/Users/test/project/*", body?.permission ?? []).action).toBe("allow")
+  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "git push --force*", action: "deny" })
+  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "rm -rf *", action: "deny" })
+  expect(body?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "ask" })
+  expect(body?.permission?.some((item) => item.permission === "*" && item.action === "allow")).toBe(false)
+  expect(evaluate("edit", "README.md", body?.permission ?? []).action).toBe("ask")
   expect(box).toContain(path.join(".opencode", "team"))
 })
 
-test("team allows isolated write workers without inheriting parent edit prompts", async () => {
+test("team isolated write workers inherit parent edit prompts", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -722,9 +718,10 @@ test("team allows isolated write workers without inheriting parent edit prompts"
   )
 
   expect(out).toContain("write-doc: done")
-  expect(evaluate("edit", "docs/spikes/worker.md", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("edit", "secrets/key.txt", body?.permission ?? []).action).toBe("allow")
-  expect(evaluate("external_directory", "../outside.txt", body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("edit", "docs/spikes/worker.md", body?.permission ?? []).action).toBe("ask")
+  expect(evaluate("edit", "secrets/key.txt", body?.permission ?? []).action).toBe("ask")
+  expect(evaluate("external_directory", "../outside.txt", body?.permission ?? []).action).toBe("ask")
+  expect(body?.permission).toContainEqual({ permission: "bash", pattern: "rm -rf *", action: "deny" })
 })
 
 test("team carries local .opencode config even when the project gitignore ignores .opencode", async () => {
@@ -2097,7 +2094,7 @@ test("background failure with notify false is persisted without sending parent p
   expect(status).toContain("Blocked on permission: bash (background deployment) :: deploy production")
 })
 
-test("background workers use permissive child permissions and keep write tools enabled", async () => {
+test("background workers inherit parent permissions and keep write tools enabled", async () => {
   await using tmp = await tmpdir({
     git: true,
     init: async (dir) => {
@@ -2225,17 +2222,10 @@ test("background workers use permissive child permissions and keep write tools e
   expect(out).toContain("run_id:")
   expect(createBody?.parentID).toBe("ses_parent")
   expect(createBody?.title).toBe("background-permissions")
-  expect(createBody?.permission).toContainEqual({ permission: "*", pattern: "*", action: "allow" })
-  expect(createBody?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "allow" })
-  expect(createBody?.permission).toContainEqual({ permission: "external_directory", pattern: "*", action: "allow" })
-  expect(createBody?.permission).toContainEqual({ permission: "bash", pattern: "*", action: "allow" })
-  expect(createBody?.permission?.filter((item) => item.action === "deny")).toEqual([])
-  expect(evaluate("bash", "git commit -am background", createBody?.permission ?? []).action).toBe("allow")
-  expect(evaluate("external_directory", "../outside.txt", createBody?.permission ?? []).action).toBe("allow")
-  expect(evaluate("edit", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
-  expect(evaluate("write", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
-  expect(evaluate("apply_patch", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
-  expect(evaluate("todowrite", "docs/background.md", createBody?.permission ?? []).action).toBe("allow")
+  expect(createBody?.permission).toContainEqual({ permission: "bash", pattern: "git push --force*", action: "deny" })
+  expect(createBody?.permission).toContainEqual({ permission: "edit", pattern: "*", action: "ask" })
+  expect(createBody?.permission?.some((item) => item.permission === "*" && item.action === "allow")).toBe(false)
+  expect(evaluate("edit", "docs/background.md", createBody?.permission ?? []).action).toBe("ask")
   expect(promptBody?.tools).toEqual({
     task: false,
     team: false,
@@ -5108,7 +5098,7 @@ test("team routes prompts for another git project into that project root", async
   expect(out).toContain("external-project: done")
   expect(await Bun.file(path.join(realTarget, "worker.txt")).text()).toBe("worker output\n")
   expect(await Bun.file(path.join(parent.path, "worker.txt")).exists()).toBe(false)
-  expect(evaluate("external_directory", `${realTarget}/*`, body?.permission ?? []).action).toBe("allow")
+  expect(evaluate("external_directory", `${realTarget}/*`, body?.permission ?? []).action).toBe("ask")
   expect(metadata).toContainEqual(expect.objectContaining({ routed_project: realTarget }))
 })
 

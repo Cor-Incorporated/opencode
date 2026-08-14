@@ -126,9 +126,9 @@ ACTIVE_BINARY="$PACKAGE/dist/opencode-$platform-$arch/bin/opencode"
 CACHED_BUNDLE="$PACKAGE/bin/.opencode"
 CACHED_TARGET="../dist/opencode-$platform-$arch/bin/opencode"
 ZAI_CODING_PLAN_PROVIDER="zai-coding-plan"
-ZAI_CODING_PLAN_MODEL="glm-5.2"
+ZAI_CODING_PLAN_MODEL="glm-5.3"
 ZAI_CODING_PLAN_MODEL_REF="$ZAI_CODING_PLAN_PROVIDER/$ZAI_CODING_PLAN_MODEL"
-ZAI_CODING_PLAN_STALE_DEFAULT="$ZAI_CODING_PLAN_PROVIDER/glm-5.1"
+ZAI_CODING_PLAN_STALE_DEFAULT="$ZAI_CODING_PLAN_PROVIDER/glm-5.2"
 MANAGED_PROFILE="$ROOT/packages/guardrails/managed/opencode.json"
 
 usage() {
@@ -424,12 +424,12 @@ guardrails_team_fallback_smoke() {
         },
       )
 
-      if (!output.includes("model=zai-coding-plan/glm-5.2")) {
-        console.error(`team fallback output did not expose GLM-5.2: ${output}`)
+      if (!output.includes("model=zai-coding-plan/glm-5.3")) {
+        console.error(`team fallback output did not expose GLM-5.3: ${output}`)
         process.exit(1)
       }
-      if (model?.providerID !== "zai-coding-plan" || model?.modelID !== "glm-5.2") {
-        console.error(`team fallback model was ${JSON.stringify(model)}, expected zai-coding-plan/glm-5.2`)
+      if (model?.providerID !== "zai-coding-plan" || model?.modelID !== "glm-5.3") {
+        console.error(`team fallback model was ${JSON.stringify(model)}, expected zai-coding-plan/glm-5.3`)
         process.exit(1)
       }
     } finally {

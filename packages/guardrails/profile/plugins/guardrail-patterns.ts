@@ -77,7 +77,7 @@ export const paid: Record<string, Set<string>> = {
     "glm-5.1",
     "glm-5v-turbo",
   ]),
-  "zai-coding-plan": new Set(["glm-4.5-air", "glm-4.7", "glm-5-turbo", "glm-5.1", "glm-5.2", "glm-5v-turbo"]),
+  "zai-coding-plan": new Set(["glm-4.5-air", "glm-4.7", "glm-5-turbo", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5v-turbo"]),
   openai: new Set([
     "gpt-5.1-codex",
     "gpt-5.1-codex-max",

@@ -730,7 +730,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   if (!model.capabilities.reasoning) return {}
 
   const id = model.id.toLowerCase()
-  const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2"].some(
+  const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2", "glm-5.3", "glm-5-3", "glm-5p3"].some(
     (name) => id.includes(name) || model.api.id.toLowerCase().includes(name),
   )
   if (
@@ -751,7 +751,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   const adaptiveThinkingOmitted = anthropicOmitsThinking(model.api.id)
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
   if (glm52 && model.api.npm === "@openrouter/ai-sdk-provider") {
-    // OpenRouter maps xhigh to GLM-5.2's native max effort.
+    // OpenRouter maps xhigh to GLM-5.2/5.3 native max effort.
     return {
       high: { reasoning: { effort: "high" } },
       xhigh: { reasoning: { effort: "xhigh" } },
