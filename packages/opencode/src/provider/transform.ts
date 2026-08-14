@@ -84,6 +84,8 @@ function sdkKey(npm: string): string | undefined {
       return "gateway"
     case "@openrouter/ai-sdk-provider":
       return "openrouter"
+    case "merge-gateway-ai-sdk-provider":
+      return "mergeGateway"
     case "ai-gateway-provider":
       // ai-gateway-provider/unified wraps createOpenAICompatible({ name: "Unified" }),
       // and @ai-sdk/openai-compatible parses compatibleOptions from one of
@@ -551,6 +553,12 @@ export function topP(model: Provider.Model) {
   if (["minimax-m2", "kimi-k2.5", "kimi-k2p5", "kimi-k2-5"].some((s) => id.includes(s))) {
     return 0.95
   }
+  if (
+    ["deepseek-v4-flash-0731", "deepseek-v4-flash:0731"].some((name) => id.includes(name)) ||
+    (id.includes("deepseek-v4-flash") && (model.providerID === "deepseek" || model.providerID.startsWith("opencode")))
+  ) {
+    return 0.95
+  }
   return undefined
 }
 
@@ -722,7 +730,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   if (!model.capabilities.reasoning) return {}
 
   const id = model.id.toLowerCase()
-  const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2"].some(
+  const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2", "glm-5.3", "glm-5-3", "glm-5p3"].some(
     (name) => id.includes(name) || model.api.id.toLowerCase().includes(name),
   )
   if (
@@ -743,7 +751,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   const adaptiveThinkingOmitted = anthropicOmitsThinking(model.api.id)
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
   if (glm52 && model.api.npm === "@openrouter/ai-sdk-provider") {
-    // OpenRouter maps xhigh to GLM-5.2's native max effort.
+    // OpenRouter maps xhigh to GLM-5.2/5.3 native max effort.
     return {
       high: { reasoning: { effort: "high" } },
       xhigh: { reasoning: { effort: "xhigh" } },
@@ -1270,8 +1278,14 @@ export function options(input: {
     result["gateway"] = { caching: "auto" }
   }
 
-  if (input.model.api.npm === "@ai-sdk/azure" && input.model.api.id.includes("gpt-5.5")) {
-    result["reasoningSummary"] = "auto"
+  // Any gpt version above 5.4 in combination with azure does not support reasoningEffort
+  // so we should return early here.
+  const [, gptMajorVersion, gptMinorVersion] = input.model.api.id.match(/gpt-(\d+)\.(\d+)/) ?? []
+  const isGpt55OrNewer = Number(gptMajorVersion) > 5 || (Number(gptMajorVersion) === 5 && Number(gptMinorVersion) >= 5)
+  if (input.model.api.npm === "@ai-sdk/azure" && input.providerOptions?.useCompletionUrls) {
+    if (!isGpt55OrNewer) {
+      result["reasoningEffort"] = "medium"
+    }
     return result
   }
 
@@ -1760,6 +1774,7 @@ function reasoningEffort(model: Provider.Model, effort: string) {
     case "@ai-sdk/togetherai":
     case "venice-ai-sdk-provider":
     case "ai-gateway-provider":
+    case "merge-gateway-ai-sdk-provider":
       return { reasoningEffort: effort }
     case "@ai-sdk/cohere":
     case "@ai-sdk/perplexity":
