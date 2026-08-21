@@ -209,6 +209,48 @@ guardrails_profile_has_team_plugin() {
   ' "$GUARDRAILS_PROFILE/opencode.json" >/dev/null
 }
 
+guardrails_profile_contract_smoke() {
+  "$BUN_BIN" --eval '
+    const text = await Bun.file(process.argv[1]).text()
+    const required = [
+      "停止条件と最大反復",
+      "報告間隔 / 無進捗タイムアウト",
+      "課金上限",
+      "発射前の実現可能性チェック",
+      "人間ゲート列挙（「リマインドのみ」セクションに分離）+ 待ち中の可否",
+      "反証可能な完了条件",
+      "事前スパイク回答欄",
+      "完了条件の検査",
+      "追加を提案しない",
+      "強制点の実測表",
+      "### 一次資料",
+      "### 要求インベントリ",
+      "### 突合表",
+      "### 標準質問",
+      "### 北極星",
+      "### 反証軸",
+      "### 撤収",
+      "## 診断プロトコル（可視化のみ）",
+      "これは可視化であり、hook・workflow・required check による強制ではない（C9 適用限界）。",
+      "修正前に、仮説を最安で壊す全体クエリを 1 本打つ。",
+      "- fleet 分布: 対象全体を状態・鮮度・tenant/org 別に集計し、逸脱数を先に出す。",
+      "- production callsite 数: production entrypoint 配下を `rg` し、実呼出し件数を先に数える。",
+      "- 実行 role: read-only query で `current_user` と `rolbypassrls` を確認する。",
+      "本番接続・資格情報・有料実行は人間ゲートを越えない。",
+      "## Git 履歴のツール帰属（可視化のみ）",
+      "AI が作成する非 merge commit の末尾に、次の trailer を 1 行記録する。",
+      "`Agent-Lane: <claude-code|codex|cursor|opencode>`",
+      "これは可視化であり強制ではない。Claude Code の Co-Authored-By は削除せず併記する。",
+      "trailer が無い、値が不正、または複数値が競合する commit は H10 で unknown として数える。",
+    ]
+    const missing = required.filter((item) => !text.includes(item))
+    if (missing.length) {
+      console.error(`guardrails profile contract missing: ${missing.join(" | ")}`)
+      process.exit(1)
+    }
+  ' "$GUARDRAILS_PROFILE/AGENTS.md" >/dev/null
+}
+
 guardrails_policy_plugins_smoke() {
   "$BUN_BIN" --conditions=browser --eval '
     const { mkdtemp, rm } = await import("node:fs/promises")
@@ -844,6 +886,7 @@ mark "$(grep -Fq "OPENCODE_CONFIG_DIR" "$GUARDRAILS_BIN" 2>/dev/null && echo ok 
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/auto.md" ]] && echo ok || echo fail)" "guardrails profile includes /auto"
 mark "$([[ -f "$GUARDRAILS_PROFILE/commands/plan.md" ]] && echo ok || echo fail)" "guardrails profile includes /plan"
 mark "$(guardrails_profile_has_team_plugin && echo ok || echo fail)" "guardrails profile enables guardrail and team plugins"
+mark "$(guardrails_profile_contract_smoke && echo ok || echo fail)" "guardrails profile includes Route B/H8/diagnostic/trailer contract"
 mark "$(guardrails_policy_plugins_smoke && echo ok || echo fail)" "guardrails review/git policy smoke passes"
 mark "$(guardrails_aggregate_policy_fire_smoke && echo ok || echo fail)" "guardrails aggregate plugin fires review/git/UAT policy hooks"
 mark "$(guardrails_team_plugin_loads && echo ok || echo fail)" "guardrails team plugin loads team/background/team_status"
