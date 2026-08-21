@@ -50,6 +50,71 @@ Defaults: read-only workers `600000` (10m); write workers and deepseek `1200000`
 - Bug fixes: grep all instances → fix all → re-grep to confirm zero remaining
 - Fact-check: back every claim with CLI output, git diff, or API response; mark estimates as "(unverified)"
 
+## Route B/C 委任受領契約
+
+handover を受領したら、次の 10 欄が一字一句一致で存在し、内容が埋まっていることを着手前に確認する。不足欄を推測で補わない。
+
+1. 停止条件と最大反復
+2. 報告間隔 / 無進捗タイムアウト
+3. 課金上限
+4. 発射前の実現可能性チェック
+5. 人間ゲート列挙（「リマインドのみ」セクションに分離）+ 待ち中の可否
+6. 反証可能な完了条件
+7. 事前スパイク回答欄
+8. 完了条件の検査
+9. 追加を提案しない
+10. 強制点の実測表
+
+H8 の補助欄は次の 7 欄を一字一句一致で記載し、各欄を 20 文字以上の実質内容で埋める。
+
+### 一次資料
+
+推測ではなく、判定に用いる Issue・正本・実装・実測証跡を列挙する。
+
+### 要求インベントリ
+
+要求を原子単位で列挙し、実装・検証・人間ゲートの境界を分ける。
+
+### 突合表
+
+要求と実装、実装と配備、配備と実測を対応づけて漏れを示す。
+
+### 標準質問
+
+過大主張、未検証境界、権限越境、既存装置の破壊がないかを問う。
+
+### 北極星
+
+活動量ではなく、今回の変更で到達させる利用者価値または事故削減を示す。
+
+### 反証軸
+
+実装前に、F1 の軸列挙、F2 の事故入力、F3 の片側変異のいずれかを 20 文字以上で書く。「テスト green」だけは不可。
+
+### 撤収
+
+worktree の回収先として commit / PR 番号または retire 判定を書き、`active` / `recover` / `preserve` / `retire` のいずれかを含める。
+
+## 診断プロトコル（可視化のみ）
+
+これは可視化であり、hook・workflow・required check による強制ではない（C9 適用限界）。
+修正前に、仮説を最安で壊す全体クエリを 1 本打つ。
+
+- fleet 分布: 対象全体を状態・鮮度・tenant/org 別に集計し、逸脱数を先に出す。
+- production callsite 数: production entrypoint 配下を `rg` し、実呼出し件数を先に数える。
+- 実行 role: read-only query で `current_user` と `rolbypassrls` を確認する。
+
+本番接続・資格情報・有料実行は人間ゲートを越えない。
+
+## Git 履歴のツール帰属（可視化のみ）
+
+AI が作成する非 merge commit の末尾に、次の trailer を 1 行記録する。
+
+`Agent-Lane: <claude-code|codex|cursor|opencode>`
+
+これは可視化であり強制ではない。Claude Code の Co-Authored-By は削除せず併記する。
+trailer が無い、値が不正、または複数値が競合する commit は H10 で unknown として数える。
+
 ## Git Workflow
 
 - Protected branches: dev, develop, main, master — no direct push (hard-blocked by the guardrail plugin; force-push is also hard-blocked), PR only by convention
