@@ -1,9 +1,19 @@
 name: compliance-close
 
 on:
-  schedule:
-    # Run every 30 minutes to check for expired compliance windows
-    - cron: "*/30 * * * *"
+
+# 2026-09-01 (fork): schedule トリガを外した。workflow_dispatch は残してある。
+# これらは upstream (anomalyco/opencode) の「外部コントリビュータ取り締まり」自動化で、
+# 見知らぬ他人が OSS に PR を投げてくる前提の設計。本 fork は保守者 1 名の私有リポで、
+# upstream 追随などの正当な保守 PR を自動 close してしまう。
+# 実際 2026-09-01 に PR #315（upstream 116 commit 取り込み、CI 12/12 green）が
+# compliance-close により 2 時間で close された。
+# 検査そのもの（pr-standards.yml のコメント / ラベル / status check）は残す。
+# 手動で回したいときは workflow_dispatch から実行できる。
+# 理由: 30 分ごとに走り、テンプレート違反を 2 時間で close する
+#  schedule:
+#    # Run every 30 minutes to check for expired compliance windows
+#    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
