@@ -62,6 +62,18 @@ describe("model whitelist stays consistent across its copies", () => {
     expect(whitelist(managed as Config, "openai")).toContain("gpt-5.6-luna")
   })
 
+  // The three copies agreeing with each other says nothing about whether they
+  // agree with the catalog -- on 2026-09-02 all three were stale together. The
+  // committed snapshot is what makes that answerable offline, and this is the
+  // check that fails when a model reaches the catalog and not the whitelist.
+  test("the whitelist covers every model in the committed catalog snapshot", () => {
+    const script = new URL("../../../../scripts/sync-model-whitelist.py", import.meta.url).pathname
+    const run = Bun.spawnSync(["python3", script])
+    const output = new TextDecoder().decode(run.stdout) + new TextDecoder().decode(run.stderr)
+    expect(output).not.toContain("snapshot missing")
+    expect(run.exitCode, `sync-model-whitelist.py --check failed:\n${output}`).toBe(0)
+  })
+
   test("Codex subscription models survive catalog-driven edits", () => {
     // models.dev does not list the gpt-5.x-codex ids, which are reachable only
     // through the Codex OAuth flow. A refresh that syncs blindly to the catalog
