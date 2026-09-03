@@ -1439,7 +1439,7 @@ Cor's fork also ships an opt-in, fully offline `cor-local` provider that points 
         "deepseek-v4-flash-0731": {
           "name": "DeepSeek V4 Flash 0731 (local)",
           "limit": {
-            "context": 32768,
+            "context": 65536,
             "output": 16384
           }
         }
@@ -1450,6 +1450,8 @@ Cor's fork also ships an opt-in, fully offline `cor-local` provider that points 
 ```
 
 `options.headerTimeout` covers the router's cold-start load time (models load on first request, up to roughly a minute); `options.chunkTimeout` bounds the gap between streamed SSE chunks once generation starts, so a stalled response still aborts instead of hanging forever.
+
+`limit.context` must equal the router's `-c` context-size flag (65536). A smaller value here does not just truncate — with the guardrails profile's AGENTS.md and tool schemas already consuming a chunk of the window, opencode's compaction (`packages/opencode/src/session/compaction.ts`) fires a synthetic "Continue if you have next steps…" after every single step, and the agent loops re-planning without ever finishing.
 
 This provider is pre-wired in `packages/guardrails/managed/opencode.json` and `packages/guardrails/profile/opencode.json` with three model ids (`deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`), and does not change the default model — select it explicitly with `--model cor-local/glm53-flash`. See `packages/guardrails/README.md` for the offline usage recipe and cold-start notes.
 
