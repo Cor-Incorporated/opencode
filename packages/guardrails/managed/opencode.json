@@ -6,7 +6,8 @@
     "zai-coding-plan",
     "openai",
     "deepseek",
-    "openrouter"
+    "openrouter",
+    "cor-local"
   ],
   "share": "disabled",
   "server": {
@@ -427,6 +428,52 @@
             "output": [
               "text"
             ]
+          }
+        }
+      }
+    },
+    "cor-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Cor local (llama-server router / Mac Studio)",
+      "options": {
+        "baseURL": "http://127.0.0.1:18082/v1",
+        "headerTimeout": 900000,
+        "timeout": false
+      },
+      "whitelist": [
+        "glm53-flash",
+        "deepseek-v4-flash-0731",
+        "qwen3.8-27b"
+      ],
+      "models": {
+        "glm53-flash": {
+          "name": "GLM 5.3 Flash (local)",
+          "tool_call": true,
+          "reasoning": true,
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 32768,
+            "output": 16384
+          }
+        },
+        "deepseek-v4-flash-0731": {
+          "name": "DeepSeek V4 Flash 0731 (local)",
+          "tool_call": true,
+          "reasoning": true,
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 32768,
+            "output": 16384
+          }
+        },
+        "qwen3.8-27b": {
+          "name": "Qwen3.8 27B (local)",
+          "tool_call": true,
+          "reasoning": true,
+          "interleaved": "reasoning_content",
+          "limit": {
+            "context": 32768,
+            "output": 16384
           }
         }
       }

@@ -21,7 +21,7 @@
 import { describe, expect, test } from "bun:test"
 import managed from "../../managed/opencode.json"
 import profile from "../opencode.json"
-import { paid } from "./guardrail-patterns"
+import { free, paid, preview } from "./guardrail-patterns"
 
 type Config = { provider?: Record<string, { whitelist?: string[] }> }
 
@@ -80,6 +80,36 @@ describe("model whitelist stays consistent across its copies", () => {
     // deletes them and quietly removes the subscription route.
     for (const model of ["gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.2-codex", "gpt-5.3-codex"]) {
       expect(whitelist(managed as Config, "openai")).toContain(model)
+    }
+  })
+
+  // Packet P5: cor-local (llama-server router, Mac Studio, fully offline/opt-in).
+  // These ids report cost 0 because the router is self-hosted, not because
+  // they are a free tier -- pin the whitelist and the preview()/free() truth
+  // table so a future edit cannot silently let denyFree block the local lane
+  // or denyPreview reject these ids as previews.
+  describe("cor-local (local llama-server router)", () => {
+    const ids = ["glm53-flash", "deepseek-v4-flash-0731", "qwen3.8-27b"]
+
+    test("whitelist is exactly the 3 local model ids in both copies", () => {
+      expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
+      expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
+    })
+
+    for (const id of ids) {
+      test(`${id}: preview() is false`, () => {
+        expect(preview({ id, status: "active" })).toBe(false)
+      })
+
+      test(`${id}: free() is false (self-hosted, not free-tier)`, () => {
+        expect(
+          free({
+            providerID: "cor-local",
+            id,
+            cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          }),
+        ).toBe(false)
+      })
     }
   })
 })

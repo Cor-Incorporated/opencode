@@ -62,9 +62,10 @@ SNAPSHOT = ROOT / "packages/guardrails/model-catalog-snapshot.json"
 DEFAULT_CATALOG = Path.home() / ".cache/opencode/models.json"
 
 # Providers whose models report cost 0 because a plan or subscription covers
-# them. `paid` marks those so isFree() does not treat them as genuinely free.
+# them (or, for cor-local, because they are self-hosted with no billing at
+# all). `paid` marks those so isFree() does not treat them as genuinely free.
 # openrouter reports real per-token cost and is deliberately absent.
-PAID_PROVIDERS = ("zai", "zai-coding-plan", "deepseek", "openai")
+PAID_PROVIDERS = ("zai", "zai-coding-plan", "deepseek", "openai", "cor-local")
 
 
 def enabled_providers() -> list[str]:

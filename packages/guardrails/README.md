@@ -79,6 +79,36 @@ The packaged profile defaults to the `implement` agent. Review and release-readi
 
 Provider admission is also packaged here. Standard confidential-code work is admitted on the `zai`, `zai-coding-plan`, `openai`, and `deepseek` lane. `zai-coding-plan` is kept as a separate provider because Z.AI's official OpenCode guide tells Coding Plan subscribers to select `Z.AI Coding Plan` explicitly. OpenRouter-backed candidates remain available for evaluation and multi-vendor routing without replacing the default implementation path.
 
+## cor-local (ローカル lane)
+
+`cor-local` is an opt-in, fully offline provider that routes through a local `llama-server`-based router (Mac Studio) exposing an OpenAI-compatible endpoint at `http://127.0.0.1:18082/v1`. It is wired into `managed/opencode.json` and `profile/opencode.json` (both copies, kept identical) via `@ai-sdk/openai-compatible`, the same mechanism documented for the upstream `llama.cpp` / `lmstudio` recipes in `packages/web/src/content/docs/providers.mdx`. It does not change the default model (`zai-coding-plan/glm-5.3`) — it is only reachable by asking for it explicitly.
+
+Three model ids are whitelisted: `glm53-flash`, `deepseek-v4-flash-0731`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/plugins/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. None of the three ids match the `denyPreview` regex (`preview|alpha|beta|exp|experimental|:free|free`).
+
+Usage:
+
+```sh
+opencode run --model cor-local/glm53-flash "..."
+```
+
+or, in a project `opencode.json`:
+
+```json
+{ "model": "cor-local/glm53-flash" }
+```
+
+Offline environment recipe (no network calls, no auto-update, no telemetry):
+
+```sh
+OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/glm53-flash "..."
+```
+
+`share` is already `disabled` in both guardrails profiles, so no extra flag is needed for that.
+
+Cold-start note: the router loads models on first request. GLM in particular can block up to roughly 60 seconds before the first byte arrives — this is expected, not a hang. All three models return `reasoning_content` (surfaced via each model's `interleaved: "reasoning_content"` declaration), structured `tool_calls`, and SSE streaming. Context window is 32768 tokens, max output 16384 tokens.
+
+Offline verification (no network): `bun run local:check-offline` runs the guardrails whitelist/paid/preview pin tests plus `scripts/sync-model-whitelist.py`'s consistency check across the three copies (managed, profile, `paid`).
+
 ## Managed deployment
 
 Copy [managed/opencode.json](/Users/teradakousuke/Developer/opencode/packages/guardrails/managed/opencode.json) into the system managed config directory:
