@@ -438,16 +438,17 @@
       "options": {
         "baseURL": "http://127.0.0.1:18082/v1",
         "headerTimeout": 900000,
-        "timeout": false
+        "timeout": false,
+        "chunkTimeout": 120000
       },
       "whitelist": [
-        "glm53-flash",
         "deepseek-v4-flash-0731",
+        "glm53-flash",
         "qwen3.8-27b"
       ],
       "models": {
-        "glm53-flash": {
-          "name": "GLM 5.3 Flash (local)",
+        "deepseek-v4-flash-0731": {
+          "name": "DeepSeek V4 Flash 0731 (local)",
           "tool_call": true,
           "reasoning": true,
           "interleaved": "reasoning_content",
@@ -456,8 +457,8 @@
             "output": 16384
           }
         },
-        "deepseek-v4-flash-0731": {
-          "name": "DeepSeek V4 Flash 0731 (local)",
+        "glm53-flash": {
+          "name": "GLM 5.3 Flash (local)",
           "tool_call": true,
           "reasoning": true,
           "interleaved": "reasoning_content",

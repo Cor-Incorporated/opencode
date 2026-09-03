@@ -89,7 +89,7 @@ describe("model whitelist stays consistent across its copies", () => {
   // table so a future edit cannot silently let denyFree block the local lane
   // or denyPreview reject these ids as previews.
   describe("cor-local (local llama-server router)", () => {
-    const ids = ["glm53-flash", "deepseek-v4-flash-0731", "qwen3.8-27b"]
+    const ids = ["deepseek-v4-flash-0731", "glm53-flash", "qwen3.8-27b"]
 
     test("whitelist is exactly the 3 local model ids in both copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)

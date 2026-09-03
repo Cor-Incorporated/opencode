@@ -11,7 +11,7 @@
 - Use `implement` as the guarded default primary agent. Route review, ship, and handoff work through the packaged `/review`, `/ship`, and `/handoff` commands instead of freeform release flows.
 - Keep review paths read-only. If a workflow needs edits, return to `implement` or a project-local implementation agent instead of widening the review agent.
 - All configured providers are available for standard work. The `provider-eval` agent and `/provider-eval` command remain available for dedicated evaluation workflows.
-- `cor-local` is an opt-in, fully offline lane routed through a local `llama-server` router (Mac Studio, `http://127.0.0.1:18082/v1`, no API key). It never changes the default model — select it explicitly with `--model cor-local/<id>` (`glm53-flash`, `deepseek-v4-flash-0731`, or `qwen3.8-27b`) when the task must run air-gapped. See `packages/guardrails/README.md`'s "cor-local (ローカル lane)" section for the offline env recipe and cold-start behavior.
+- `cor-local` is an opt-in, fully offline lane routed through a local `llama-server` router (Mac Studio, `http://127.0.0.1:18082/v1`, no API key). It never changes the default model — select it explicitly with `--model cor-local/<id>` (`deepseek-v4-flash-0731`, `glm53-flash`, or `qwen3.8-27b`) when the task must run air-gapped. See `packages/guardrails/README.md`'s "cor-local (ローカル lane)" section for the offline env recipe and cold-start behavior.
 
 ## Code Style
 
