@@ -23,10 +23,18 @@ import managed from "../../managed/opencode.json"
 import profile from "../opencode.json"
 import { free, paid, preview } from "./guardrail-patterns"
 
-type Config = { provider?: Record<string, { whitelist?: string[] }> }
+type ModelLimit = { context?: number; output?: number }
+type Config = {
+  provider?: Record<
+    string,
+    { whitelist?: string[]; models?: Record<string, { limit?: ModelLimit }> }
+  >
+}
 
 const providers = (config: Config) => Object.keys(config.provider ?? {})
 const whitelist = (config: Config, id: string) => config.provider?.[id]?.whitelist ?? []
+const modelLimit = (config: Config, providerID: string, modelID: string) =>
+  config.provider?.[providerID]?.models?.[modelID]?.limit ?? {}
 
 describe("model whitelist stays consistent across its copies", () => {
   test("managed and packaged profiles declare the same providers", () => {
@@ -95,6 +103,27 @@ describe("model whitelist stays consistent across its copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
       expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
     })
+
+    // 2026-09-03: with limit.context at 32768, the guardrails profile's
+    // AGENTS.md + system prompt + tool schemas left so little headroom that
+    // opencode's compaction (packages/opencode/src/session/compaction.ts)
+    // fired its synthetic "Continue if you have next steps..." after every
+    // single step -- qwen3.8-27b and glm53-flash both fixed the target bug
+    // (pytest green) but looped re-planning and never terminated. The router
+    // (ai-cluster repo, llama-server launcher) moved to `-c 65536`; this pins
+    // limit.context to the same value so the two sides cannot drift again.
+    for (const id of ids) {
+      test(`${id}: limit.context is 65536 (router -c) and limit.output is 16384 in both copies`, () => {
+        expect(modelLimit(managed as Config, "cor-local", id)).toEqual({
+          context: 65536,
+          output: 16384,
+        })
+        expect(modelLimit(profile as Config, "cor-local", id)).toEqual({
+          context: 65536,
+          output: 16384,
+        })
+      })
+    }
 
     for (const id of ids) {
       test(`${id}: preview() is false`, () => {

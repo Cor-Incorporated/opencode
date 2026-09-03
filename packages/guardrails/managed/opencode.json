@@ -453,7 +453,7 @@
           "reasoning": true,
           "interleaved": "reasoning_content",
           "limit": {
-            "context": 32768,
+            "context": 65536,
             "output": 16384
           }
         },
@@ -463,7 +463,7 @@
           "reasoning": true,
           "interleaved": "reasoning_content",
           "limit": {
-            "context": 32768,
+            "context": 65536,
             "output": 16384
           }
         },
@@ -473,7 +473,7 @@
           "reasoning": true,
           "interleaved": "reasoning_content",
           "limit": {
-            "context": 32768,
+            "context": 65536,
             "output": 16384
           }
         }
