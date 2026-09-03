@@ -17,21 +17,23 @@ and `gpt-5.6-luna` -- the last being the model Codex itself runs. The provider
 
 The refresh that closed that gap was done by hand. Doing it by hand is the
 defect: nothing detects the next drift. This script makes the refresh
-mechanical and, more importantly, gives `--check` a way to fail.
+mechanical and, more importantly, gives the check a way to fail.
 
 The snapshot
 ------------
-`--check` must run offline, in CI, without a warm `~/.cache/opencode`. So the
+Running with no arguments (`python3 scripts/sync-model-whitelist.py`) is the
+check: it must run offline, in CI, without a warm `~/.cache/opencode`. So the
 catalog subset we care about is committed to the repo as a snapshot, and the
-test compares whitelist against snapshot. Refreshing is two steps that belong
-in one commit:
+check compares whitelist against snapshot. Refreshing is two steps that
+belong in one commit:
 
     python3 scripts/sync-model-whitelist.py --refresh-snapshot   # catalog -> snapshot
     python3 scripts/sync-model-whitelist.py --apply              # snapshot -> whitelist
 
 The snapshot is the declaration of "what the catalog offered on date X"; the
-whitelist is "what we allow". `--check` links the two, so a snapshot refresh
-that forgets to apply fails, and so does a hand-edit that drops a model.
+whitelist is "what we allow". The no-args check links the two, so a snapshot
+refresh that forgets to apply fails, and so does a hand-edit that drops a
+model.
 
 Detecting drift against the *live* catalog still needs network; that stays
 with `local-dev-deploy.sh --check-openrouter-catalog`.
@@ -62,9 +64,10 @@ SNAPSHOT = ROOT / "packages/guardrails/model-catalog-snapshot.json"
 DEFAULT_CATALOG = Path.home() / ".cache/opencode/models.json"
 
 # Providers whose models report cost 0 because a plan or subscription covers
-# them. `paid` marks those so isFree() does not treat them as genuinely free.
+# them (or, for cor-local, because they are self-hosted with no billing at
+# all). `paid` marks those so isFree() does not treat them as genuinely free.
 # openrouter reports real per-token cost and is deliberately absent.
-PAID_PROVIDERS = ("zai", "zai-coding-plan", "deepseek", "openai")
+PAID_PROVIDERS = ("zai", "zai-coding-plan", "deepseek", "openai", "cor-local")
 
 
 def enabled_providers() -> list[str]:

@@ -143,6 +143,14 @@ export const paid: Record<string, Set<string>> = {
     "deepseek-v4-flash-vision-exp",
     "deepseek-v4-pro",
   ]),
+  // cor-local: self-hosted llama-server router (Mac Studio). Cost is always 0 (no
+  // billing), but these are not free-tier models — list them here so free() stays
+  // false and denyFree does not block the opt-in local lane.
+  "cor-local": new Set([
+    "deepseek-v4-flash-0731",
+    "glm53-flash",
+    "qwen3.8-27b",
+  ]),
 }
 
 export const secEnvExempt = /\.env\.(example|sample|template)$/i
