@@ -6,6 +6,17 @@ on:
 
 jobs:
   check-duplicates:
+    # fork では no-op 化する（80dcff8a87「chore(ci): forkのCI/CD実行を最適化」と
+    # 同じ repository guard の作法。workflow 本体は残す）。
+    #
+    # この job は非 team member の PR に対して `curl opencode.ai/install | bash` で
+    # opencode を入れ、LLM に重複 PR を判定させる upstream 専用の triage 自動化である。
+    # fork の作者は .github/TEAM_MEMBERS に居ないので毎 PR で全経路が走り、
+    # 2026-09-04 に実測でタイムアウトした（TimeoutError / 2m36s 消費 / PR #328）。
+    #
+    # 最適化 commit は duplicate-issues.yml に guard を入れたが、**本 workflow は
+    # 漏れていた。** 同じ理由なので同じ guard を入れる。
+    if: github.repository == 'anomalyco/opencode'
     runs-on: ubuntu-latest
     permissions:
       contents: read
