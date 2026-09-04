@@ -30,7 +30,7 @@
  * Run: bun test packages/guardrails/profile/plugins/gate-fires.test.ts
  */
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext, type GuardrailInput } from "./guardrail-context"
@@ -137,6 +137,56 @@ describe("gate() は実際に拒否する（発火検証）", () => {
       // 「free 判定は cost 以外で決まる」ことの記録になる。
       expect(free(zeroCost)).toBe(false)
     }
+  })
+})
+
+describe("block は events.jsonl に 1 行残す（H6: 発火時に台帳へ追記）", () => {
+  // 2026-09-04 の実環境: state.json は last_block='chat.params' になったのに
+  // events.jsonl には block 行が無く、「全期間で何回 block したか」を数えられなかった。
+  // mark() が last_block を受け取ったときに append-only の行を残すことをここで固定する。
+  const events = join(dir, ".opencode", "guardrails", "events.jsonl")
+  const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object"
+  const lines = (): Record<string, unknown>[] =>
+    existsSync(events)
+      ? readFileSync(events, "utf-8")
+          .split("\n")
+          .filter((l) => l.length > 0)
+          .map((l): unknown => JSON.parse(l))
+          .filter(isRecord)
+      : []
+  const blocks = () => lines().filter((e) => e.type === "guardrail.block")
+
+  test("F1 発火: last_block 付きの mark() で guardrail.block 行が 1 行増える", async () => {
+    const before = blocks().length
+    await ctx.mark({
+      last_block: "chat.params",
+      last_provider: "deepseek",
+      last_model: "deepseek-v4-flash-vision-exp",
+      last_agent: "implement",
+      last_reason: "deepseek/deepseek-v4-flash-vision-exp is preview-only",
+    })
+    const after = blocks()
+    expect(after.length).toBe(before + 1)
+    const last = after[after.length - 1]
+    expect(last?.tool).toBe("chat.params")
+    expect(last?.model).toBe("deepseek-v4-flash-vision-exp")
+    expect(last?.reason).toContain("preview-only")
+    expect(last?.component).toBe("OC-gate")
+    expect(last?.event).toBe("block")
+  })
+
+  test("F2 統制: last_block の無い mark() は行を増やさない（advisory は台帳を汚さない）", async () => {
+    const before = blocks().length
+    await ctx.mark({ git_freshness_checked: true })
+    expect(blocks().length).toBe(before)
+  })
+
+  test("F1 発火: bash の block（last_file なし）でも行が残る", async () => {
+    const before = blocks().length
+    await ctx.mark({ last_block: "bash", last_command: "rm -rf .opencode", last_reason: "protected runtime or config mutation" })
+    const after = blocks()
+    expect(after.length).toBe(before + 1)
+    expect(after[after.length - 1]?.tool).toBe("bash")
   })
 })
 
