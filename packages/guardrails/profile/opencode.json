@@ -462,7 +462,8 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "Cor local (llama-server router / Mac Studio)",
       "options": {
-        "baseURL": "http://127.0.0.1:18082/v1",
+        "baseURL": "{env:COR_LOCAL_BASE_URL}",
+        "apiKey": "{env:COR_LOCAL_API_KEY}",
         "headerTimeout": 900000,
         "timeout": false,
         "chunkTimeout": 120000

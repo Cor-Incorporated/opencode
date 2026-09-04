@@ -81,7 +81,28 @@ Provider admission is also packaged here. Standard confidential-code work is adm
 
 ## cor-local (ローカル lane)
 
-`cor-local` is an opt-in, fully offline provider that routes through a local `llama-server`-based router (Mac Studio) exposing an OpenAI-compatible endpoint at `http://127.0.0.1:18082/v1`. It is wired into `managed/opencode.json` and `profile/opencode.json` (both copies, kept identical) via `@ai-sdk/openai-compatible`, the same mechanism documented for the upstream `llama.cpp` / `lmstudio` recipes in `packages/web/src/content/docs/providers.mdx`. It does not change the default model (`zai-coding-plan/glm-5.3`) — it is only reachable by asking for it explicitly.
+`cor-local` is an opt-in, fully offline provider that routes through a local `llama-server`-based router (Mac Studio) exposing an OpenAI-compatible endpoint, normally `http://127.0.0.1:18082/v1`. It is wired into `managed/opencode.json` and `profile/opencode.json` (both copies, kept identical) via `@ai-sdk/openai-compatible`, the same mechanism documented for the upstream `llama.cpp` / `lmstudio` recipes in `packages/web/src/content/docs/providers.mdx`. It does not change the default model (`zai-coding-plan/glm-5.3`) — it is only reachable by asking for it explicitly.
+
+### baseURL / apiKey (env vars)
+
+`options.baseURL` and `options.apiKey` are `{env:COR_LOCAL_BASE_URL}` / `{env:COR_LOCAL_API_KEY}` (see `packages/opencode/src/config/config.mdx`'s Env vars section and `packages/opencode/src/config/variable.ts`), not hardcoded strings — this is what lets a MacBook reach the Mac Studio router over tailnet with one key exported, without editing this repo.
+
+`{env:VAR}` resolves an *unset* variable to `""` unconditionally (`variable.ts`'s `substitute()` never errors on a missing env var, unlike `{file:...}`), so an empty `COR_LOCAL_BASE_URL` would break every existing Mac Studio call the moment this change lands. The deployed live wrapper (`scripts/local-dev-deploy.sh`'s `repair_links` heredoc, installed at `~/.local/bin/opencode-live-guardrails-wrapper` by `bun run local:deploy` / `local:fix`) is the layer that keeps that from happening:
+
+- `COR_LOCAL_BASE_URL` defaults to `http://127.0.0.1:18082/v1` (`: "${COR_LOCAL_BASE_URL:=...}"`) when unset or empty.
+- `COR_LOCAL_API_KEY`, when *unset* (not merely empty — an explicit `COR_LOCAL_API_KEY=""` from the caller is left alone), is read from `~/cluster-ops/cor-local.key` if that file exists and is readable.
+
+`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so a keyless router (today's state — see ai-cluster packet A3a for the `--api-key` rollout) keeps working with `apiKey` resolving to `""`. This defaulting is covered by `packages/guardrails/profile/plugins/cor-local-wrapper-env-defaults.test.ts`, which extracts and replays the actual wrapper heredoc (not a hand-copied duplicate) to prove the default/fallback/override behavior offline.
+
+MacBook usage (once the router is reachable over tailnet — see ai-cluster packet A3a for the `tailscale serve` step):
+
+```sh
+export COR_LOCAL_BASE_URL=http://mac-studio.tailb30e58.ts.net:18082/v1
+export COR_LOCAL_API_KEY=<key from 1Password — never paste it into chat>
+opencode run --model cor-local/qwen3.8-27b "..."
+```
+
+On Mac Studio itself, no export is needed — the live wrapper's defaults already point at the local router.
 
 Three model ids are whitelisted: `deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/plugins/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
 
