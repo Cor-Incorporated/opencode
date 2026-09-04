@@ -24,7 +24,7 @@ import {
   removalGuardDisabled,
 } from "../../../../packages/guardrails/profile/plugins/removal-guard"
 import type { GuardrailContext } from "../../../../packages/guardrails/profile/plugins/guardrail-context"
-import guardrail from "../../../../packages/guardrails/profile/plugins/guardrail"
+import { guardrail } from "../../../../packages/guardrails/profile/plugins/guardrail"
 
 const profileRoot = path.resolve(import.meta.dir, "../../../../packages/guardrails/profile")
 

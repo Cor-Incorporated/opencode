@@ -1788,3 +1788,4 @@ async function teamServer(input: { client: Client; worktree: string; directory: 
 //   failed to load plugin .../team.ts  error="Plugin export is not a function"
 // で落ちていた（2026-09-04 実測）。default を object にすれば loader は server だけを呼ぶ。
 export default { id: "aidd-team", server: teamServer }
+export { teamServer as team }

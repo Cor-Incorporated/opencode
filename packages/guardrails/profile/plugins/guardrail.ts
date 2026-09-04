@@ -747,3 +747,6 @@ async function guardrailServer(input: GuardrailInput, opts?: Record<string, unkn
 // 判定内容（gate / hooks の中身）は 1 バイトも変えていない。変えたのは export の形だけである。
 // 検出は plugin-loads.test.ts が担う（loader の判定を複製し、この形でなければ red）。
 export default { id: "aidd-guardrail", server: guardrailServer }
+// テスト（packages/opencode/test/plugin/*）は plugin 関数を直接呼ぶ。v1 default が
+// あれば loader は legacy 経路に入らないので、named export は loader から見えない。
+export { guardrailServer as guardrail }

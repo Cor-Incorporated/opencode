@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import guardrail from "../../../../packages/guardrails/profile/plugins/guardrail"
+import { guardrail } from "../../../../packages/guardrails/profile/plugins/guardrail"
 import { tmpdir } from "../fixture/fixture"
 
 test("guardrail masks secrets from bash output", async () => {

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import team, {
+import {
+  team,
   DEFAULT_TEAM_IDLE_TIMEOUT_MS,
   DEFAULT_TEAM_READ_IDLE_TIMEOUT_MS,
   DEFAULT_TEAM_WRITE_IDLE_TIMEOUT_MS,
