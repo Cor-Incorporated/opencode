@@ -159,6 +159,24 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     const hasher = new Bun.CryptoHasher("sha256")
     hasher.update(JSON.stringify(rest))
     await save(state, { ...next, state_sha256: hasher.digest("hex") })
+    // 台帳: block は state.json の last_block（last-writer-wins）だけに書かれていた。
+    // 2026-09-04 の実環境貫通で「chat.params の block は events.jsonl に全期間で 0 件」と
+    // 測られたが、それは gate が死んでいたからではなく **block が行を残さない**からでもあった。
+    // 発火回数を数えられる append-only の行を、mark() の呼び出し元 18 箇所すべてに対して
+    // ここ 1 箇所で残す（H6: 発火時に台帳へ 1 行追記）。
+    const tool = typeof data.last_block === "string" ? data.last_block : ""
+    if (tool) {
+      await seen("guardrail.block", {
+        component: "OC-gate",
+        event: "block",
+        tool,
+        reason: typeof data.last_reason === "string" ? data.last_reason : "",
+        file: typeof data.last_file === "string" ? data.last_file : undefined,
+        model: typeof data.last_model === "string" ? data.last_model : undefined,
+        provider: typeof data.last_provider === "string" ? data.last_provider : undefined,
+        agent: typeof data.last_agent === "string" ? data.last_agent : undefined,
+      })
+    }
   }
 
   async function seen(type: string, data: Record<string, unknown>) {
