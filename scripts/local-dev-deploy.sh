@@ -718,19 +718,6 @@ repair_links() {
 export OPENCODE_BIN_PATH=$active_q
 export OPENCODE_DB=\${OPENCODE_DB:-$local_db_q}
 export OPENCODE_LOCAL_GUARDRAILS_PROFILE=$profile_q
-# packet A3b: cor-local's options.baseURL/apiKey are {env:COR_LOCAL_BASE_URL}/
-# {env:COR_LOCAL_API_KEY} (packages/guardrails/{managed,profile}/opencode.json).
-# variable.ts substitutes an unset {env:VAR} to "" (never errors), so an empty
-# COR_LOCAL_BASE_URL would break every existing Mac Studio cor-local call.
-# Default it here to the router already running on this box, and only touch
-# COR_LOCAL_API_KEY when it is unset -- an explicit empty string from the
-# caller is left alone so a deliberate "no key" override still works.
-: "\${COR_LOCAL_BASE_URL:=http://127.0.0.1:18082/v1}"
-export COR_LOCAL_BASE_URL
-if [[ -z "\${COR_LOCAL_API_KEY+set}" && -r "\$HOME/cluster-ops/cor-local.key" ]]; then
-  COR_LOCAL_API_KEY="\$(cat "\$HOME/cluster-ops/cor-local.key")"
-fi
-export COR_LOCAL_API_KEY
 exec $bun_q $guard_q "\$@"
 EOF
   chmod 755 "$LIVE_WRAPPER"

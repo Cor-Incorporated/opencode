@@ -87,12 +87,16 @@ Provider admission is also packaged here. Standard confidential-code work is adm
 
 `options.baseURL` and `options.apiKey` are `{env:COR_LOCAL_BASE_URL}` / `{env:COR_LOCAL_API_KEY}` (see `packages/opencode/src/config/config.mdx`'s Env vars section and `packages/opencode/src/config/variable.ts`), not hardcoded strings — this is what lets a MacBook reach the Mac Studio router over tailnet with one key exported, without editing this repo.
 
-`{env:VAR}` resolves an *unset* variable to `""` unconditionally (`variable.ts`'s `substitute()` never errors on a missing env var, unlike `{file:...}`), so an empty `COR_LOCAL_BASE_URL` would break every existing Mac Studio call the moment this change lands. The deployed live wrapper (`scripts/local-dev-deploy.sh`'s `repair_links` heredoc, installed at `~/.local/bin/opencode-live-guardrails-wrapper` by `bun run local:deploy` / `local:fix`) is the layer that keeps that from happening:
+`{env:VAR}` resolves an *unset* variable to `""` unconditionally (`variable.ts`'s `substitute()` never errors on a missing env var, unlike `{file:...}`), so an empty `COR_LOCAL_BASE_URL` would break every cor-local call the moment this change lands. `packages/guardrails/bin/opencode-guardrails` — the single Node entry point that runs before every invocation (managed deploy, the deployed live wrapper, and a direct `opencode-guardrails` call alike) — is the layer that keeps that from happening, via `packages/guardrails/bin/cor-local-env.js`:
 
-- `COR_LOCAL_BASE_URL` defaults to `http://127.0.0.1:18082/v1` (`: "${COR_LOCAL_BASE_URL:=...}"`) when unset or empty.
-- `COR_LOCAL_API_KEY`, when *unset* (not merely empty — an explicit `COR_LOCAL_API_KEY=""` from the caller is left alone), is read from `~/cluster-ops/cor-local.key` if that file exists and is readable.
+- `COR_LOCAL_BASE_URL` defaults to `http://127.0.0.1:18082/v1` when unset or empty. A project `.env` (loaded earlier in the entry point) or an exported shell value both win over this default.
+- `COR_LOCAL_API_KEY`, when unset or empty, is read from a key file: `COR_LOCAL_KEY_FILE` if set, else `~/cluster-ops/cor-local.key`. The file must be owner-only permissions (`chmod 600`) and contain exactly one line matching `[A-Za-z0-9._~+/=-]+` — because `{env:VAR}` splices raw, unescaped bytes into the JSON config text (unlike `{file:...}`, which is `JSON.stringify`-escaped), a key containing `"`, `\`, or a newline would corrupt the whole config and take down every provider, not just cor-local. A file that fails validation is ignored with `cor-local: key file ignored (invalid format)` on stderr — the warning never includes the file's contents.
 
-`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so a keyless router (today's state — see ai-cluster packet A3a for the `--api-key` rollout) keeps working with `apiKey` resolving to `""`. This defaulting is covered by `packages/guardrails/profile/plugins/cor-local-wrapper-env-defaults.test.ts`, which extracts and replays the actual wrapper heredoc (not a hand-copied duplicate) to prove the default/fallback/override behavior offline.
+`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so a keyless router (today's state — see ai-cluster packet A3a for the `--api-key` rollout) keeps working with `apiKey` resolving to `""`. This defaulting is covered by `packages/guardrails/profile/plugins/cor-local-bin-defaults.test.ts`, which unit-tests `cor-local-env.js` directly and runs the real `bin/opencode-guardrails` entry point against a stub binary to prove the `.env`-vs-default ordering, offline.
+
+**`opencode debug config` prints the resolved config, including the substituted `apiKey` — never paste its output into a GitHub issue or share it outside a private channel.**
+
+Key rotation: replace `~/cluster-ops/cor-local.key`'s contents (owner-only permissions) and every subsequent `opencode-guardrails` invocation picks up the new key — no redeploy needed. To point at a different file instead, set `COR_LOCAL_KEY_FILE=/path/to/key` before invoking.
 
 MacBook usage (once the router is reachable over tailnet — see ai-cluster packet A3a for the `tailscale serve` step):
 
@@ -102,7 +106,7 @@ export COR_LOCAL_API_KEY=<key from 1Password — never paste it into chat>
 opencode run --model cor-local/qwen3.8-27b "..."
 ```
 
-On Mac Studio itself, no export is needed — the live wrapper's defaults already point at the local router.
+On Mac Studio itself, no export is needed — `bin/opencode-guardrails`'s defaults already point at the local router and read the key from `~/cluster-ops/cor-local.key`, including under a managed deploy.
 
 Three model ids are whitelisted: `deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/plugins/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
 

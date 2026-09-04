@@ -1469,7 +1469,7 @@ In this example:
 
 Cor's fork also ships an opt-in, fully offline `cor-local` provider that points at an internal `llama-server`-based router (Mac Studio) instead of a single llama.cpp instance. It follows the same recipe as the [llama.cpp](#llamacpp) section above.
 
-```json title="opencode.json" "cor-local" {5, 6, 8-10, 12-17}
+```json title="opencode.json" "cor-local" {5, 6, 8-11, 13-21}
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
@@ -1477,7 +1477,8 @@ Cor's fork also ships an opt-in, fully offline `cor-local` provider that points 
       "npm": "@ai-sdk/openai-compatible",
       "name": "Cor local (llama-server router / Mac Studio)",
       "options": {
-        "baseURL": "http://127.0.0.1:18082/v1",
+        "baseURL": "{env:COR_LOCAL_BASE_URL}",
+        "apiKey": "{env:COR_LOCAL_API_KEY}",
         "headerTimeout": 900000,
         "chunkTimeout": 120000
       },
@@ -1494,6 +1495,8 @@ Cor's fork also ships an opt-in, fully offline `cor-local` provider that points 
   }
 }
 ```
+
+`options.baseURL` and `options.apiKey` are `{env:VAR}` substitutions rather than hardcoded strings, so the same config reaches the router whether it is `http://127.0.0.1:18082/v1` on the box itself or a tailnet address from another machine, with the key never committed to the repo. `{env:VAR}` resolves an unset variable to `""` unconditionally (it never errors, unlike `{file:...}`), so Cor's fork defaults both variables — and validates the key file — in `packages/guardrails/bin/cor-local-env.js`, imported by the packaged `opencode-guardrails` entry point. See `packages/guardrails/README.md`'s "cor-local (ローカル lane)" section if you are adapting this recipe for your own opt-in local lane.
 
 `options.headerTimeout` covers the router's cold-start load time (models load on first request, up to roughly a minute); `options.chunkTimeout` bounds the gap between streamed SSE chunks once generation starts, so a stalled response still aborts instead of hanging forever.
 
