@@ -1259,7 +1259,7 @@ async function stop(client: Client, run: Run) {
   ).catch(() => undefined)
 }
 
-export default async function team(input: { client: Client; worktree: string; directory: string }) {
+async function teamServer(input: { client: Client; worktree: string; directory: string }) {
   const inputRoot = projectRoot(input.directory, input.worktree)
   void sweep(input.client, inputRoot)
   const job = async (ctx: Ctx, run: Run, item: Step) => {
@@ -1781,3 +1781,10 @@ export default async function team(input: { client: Client; worktree: string; di
     },
   }
 }
+
+// v1 形で export する理由は guardrail.ts 末尾のコメントと同じ。
+// 本ファイルは定数（DEFAULT_TEAM_*_TIMEOUT_MS）や補助関数を named export しており、
+// legacy 経路では非関数の export に対して
+//   failed to load plugin .../team.ts  error="Plugin export is not a function"
+// で落ちていた（2026-09-04 実測）。default を object にすれば loader は server だけを呼ぶ。
+export default { id: "aidd-team", server: teamServer }
