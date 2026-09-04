@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import guardrail, {
+import {
+  guardrail,
   ensureLocalOpencodeIgnored,
   partID,
   teamWorkerWorktree,

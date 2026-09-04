@@ -3,7 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import type { GuardrailContext } from "../../../../packages/guardrails/profile/plugins/guardrail-context"
-import guardrail from "../../../../packages/guardrails/profile/plugins/guardrail"
+import { guardrail } from "../../../../packages/guardrails/profile/plugins/guardrail"
 import {
   assertVersionPinsEqual,
   collectTouchedPaths,

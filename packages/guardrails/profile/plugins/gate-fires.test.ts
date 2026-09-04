@@ -1,20 +1,31 @@
 /**
- * The guardrail must actually BLOCK, not merely be consistent.
+ * gate() の判定ロジックを **loader を迂回して** 直接検査する。
  *
- * 既存の 2 本（model-whitelist / team-permission）は**宣言の一致**を検査する。
- * 3 コピーの whitelist が揃っているか、権限表が矛盾していないか。
- * どちらも「実際に止まるか」は一度も確かめていない。
+ * ## このテストが保証しないこと（2026-09-04 に実環境で反証された）
  *
- * 宣言が揃っていても gate() が素通りすれば、ガードは無いのと同じである。
- * 2026-09-04 の upstream 取り込み（49 commit / 137 files）でこの穴に気づいた:
- * 取り込み後に harness テストは 30 pass だったが、**その 30 本は 1 度も
- * 発火経路を通っていなかった。**
+ * 本テストは `createContext` を直接 import して `gate()` を呼ぶ。
+ * **opencode の plugin loader は通らない。** したがって次は一切保証しない:
+ *   - profile の plugin が実 CLI でロードされること
+ *   - `chat.params` フックが登録されること
+ *   - 実セッションで gate() に到達すること
  *
- * 軸:
+ * 実測（2026-09-04、実 `opencode run`）: 本テストが 6 pass の状態で
+ *   failed to load plugin .../guardrail.ts  (paths[0] must be of type string, got object)
+ *   failed to load plugin .../team.ts       (Plugin export is not a function)
+ * が出ており、`chat.params` の block は events.jsonl に**全期間で 0 件**だった。
+ * つまり **本テストが緑のまま、本番の強制経路は死んでいた。**
+ *
+ * 当初のヘッダは「The guardrail must actually BLOCK」と書き、発火検証済みと読めた。
+ * それは過大だった。ロード経路の検査は plugin-loads.test.ts が担う。
+ *
+ * ## 本テストが保証すること
+ *
  *   F1 発火   拒否すべき入力で gate() が理由文字列を返す
  *   F2 統制   通すべき入力で gate() が undefined を返す
  *             （F2 が無いと「全部拒否する壊れた gate」と区別できない）
  *   F3 変異   拒否理由を 1 つずつ外すと、対応する入力だけが通るようになる
+ *
+ * これは「gate() が正しく判定するか」であって「gate() が呼ばれるか」ではない。
  *
  * Run: bun test packages/guardrails/profile/plugins/gate-fires.test.ts
  */

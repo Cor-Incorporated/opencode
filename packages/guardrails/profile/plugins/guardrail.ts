@@ -50,7 +50,7 @@ export async function ensureLocalOpencodeIgnored(worktree: string) {
   return true
 }
 
-export default async function guardrail(input: GuardrailInput, opts?: Record<string, unknown>) {
+async function guardrailServer(input: GuardrailInput, opts?: Record<string, unknown>) {
   const ctx = await createContext(input, opts)
   const access = createAccessHandlers(ctx)
   const gitHandlers = createGitHandlers(ctx)
@@ -727,3 +727,26 @@ export default async function guardrail(input: GuardrailInput, opts?: Record<str
     },
   }
 }
+
+// ## なぜ v1 形（object with server）で export するか — 2026-09-04 実環境で反証された欠陥
+//
+// opencode の loader（packages/opencode/src/plugin/index.ts applyPlugin）は、まず
+// `readV1Plugin(mod, spec, "server", "detect")` で **default が object かつ
+// id/server/tui を持つか** を見る。持たなければ legacy 経路 `getLegacyPlugins` に落ち、
+// **module の全 export を plugin と見なして `server(input, options)` で呼ぶ。**
+//
+// 以前は `export default async function guardrail(...)` だった。関数なので v1 と
+// 認識されず legacy に落ち、named export の `ensureLocalOpencodeIgnored(worktree)` に
+// `input` オブジェクトが渡って `path.join(object)` で落ちた:
+//   failed to load plugin .../guardrail.ts  error="The \"paths[0]\" property must be of type string, got object"
+// その結果 `chat.params` は登録されず、gate() は**全期間で 0 回**しか呼ばれていなかった
+// （.opencode/guardrails/events.jsonl に chat.params の block が 1 件も無い）。
+// 一方で hygiene 系の副作用イベントは書かれるので、**台帳は動いて見えるのに強制は死んでいた。**
+//
+// v1 形なら loader は default object の `server` だけを呼び、named export には触れない。
+// 判定内容（gate / hooks の中身）は 1 バイトも変えていない。変えたのは export の形だけである。
+// 検出は plugin-loads.test.ts が担う（loader の判定を複製し、この形でなければ red）。
+export default { id: "aidd-guardrail", server: guardrailServer }
+// テスト（packages/opencode/test/plugin/*）は plugin 関数を直接呼ぶ。v1 default が
+// あれば loader は legacy 経路に入らないので、named export は loader から見えない。
+export { guardrailServer as guardrail }

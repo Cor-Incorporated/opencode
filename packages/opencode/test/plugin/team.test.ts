@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import team from "../../../../packages/guardrails/profile/plugins/team"
+import { team } from "../../../../packages/guardrails/profile/plugins/team"
 import { evaluate } from "../../src/permission/evaluate"
 import { Background } from "../../src/util/background"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
