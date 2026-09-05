@@ -27,7 +27,11 @@ type ModelLimit = { context?: number; output?: number }
 type Config = {
   provider?: Record<
     string,
-    { whitelist?: string[]; models?: Record<string, { limit?: ModelLimit }> }
+    {
+      whitelist?: string[]
+      models?: Record<string, { limit?: ModelLimit }>
+      options?: Record<string, unknown>
+    }
   >
 }
 
@@ -35,6 +39,7 @@ const providers = (config: Config) => Object.keys(config.provider ?? {})
 const whitelist = (config: Config, id: string) => config.provider?.[id]?.whitelist ?? []
 const modelLimit = (config: Config, providerID: string, modelID: string) =>
   config.provider?.[providerID]?.models?.[modelID]?.limit ?? {}
+const providerOptions = (config: Config, providerID: string) => config.provider?.[providerID]?.options ?? {}
 
 describe("model whitelist stays consistent across its copies", () => {
   test("managed and packaged profiles declare the same providers", () => {
@@ -102,6 +107,24 @@ describe("model whitelist stays consistent across its copies", () => {
     test("whitelist is exactly the 3 local model ids in both copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
       expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
+    })
+
+    // Packet A3b (2026-09-05): baseURL/apiKey moved from the hardcoded
+    // `http://127.0.0.1:18082/v1` / no-key pair to `{env:...}` substitution
+    // so a MacBook can reach the router over tailnet with one key, without
+    // touching this repo. `{env:VAR}` resolves an unset var to "" (see
+    // packages/opencode/src/config/variable.ts) rather than erroring, so the
+    // live wrapper (scripts/local-dev-deploy.sh) must supply a default for
+    // baseURL -- pin the `{env:...}` form here so a future edit cannot
+    // silently reintroduce a hardcoded URL/key and orphan the wrapper's
+    // defaulting logic (covered separately in
+    // cor-local-wrapper-env-defaults.test.ts).
+    test("baseURL/apiKey are {env:...} substitutions in both copies", () => {
+      for (const config of [managed as Config, profile as Config]) {
+        const options = providerOptions(config, "cor-local")
+        expect(options.baseURL).toBe("{env:COR_LOCAL_BASE_URL}")
+        expect(options.apiKey).toBe("{env:COR_LOCAL_API_KEY}")
+      }
     })
 
     // 2026-09-03: with limit.context at 32768, the guardrails profile's
