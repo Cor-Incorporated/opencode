@@ -454,7 +454,7 @@
           "reasoning": true,
           "interleaved": "reasoning_content",
           "limit": {
-            "context": 65536,
+            "context": 262144,
             "output": 16384
           }
         },
@@ -464,7 +464,7 @@
           "reasoning": true,
           "interleaved": "reasoning_content",
           "limit": {
-            "context": 65536,
+            "context": 262144,
             "output": 16384
           }
         },
@@ -474,7 +474,7 @@
           "reasoning": true,
           "interleaved": "reasoning_content",
           "limit": {
-            "context": 65536,
+            "context": 262144,
             "output": 16384
           }
         }

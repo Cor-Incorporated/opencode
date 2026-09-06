@@ -135,14 +135,17 @@ describe("model whitelist stays consistent across its copies", () => {
     // (pytest green) but looped re-planning and never terminated. The router
     // (ai-cluster repo, llama-server launcher) moved to `-c 65536`; this pins
     // limit.context to the same value so the two sides cannot drift again.
+    // 2026-09-07: the router moved again to `-c 262144` (a two-line config
+    // edit on glm53-flash consumed 62% of the 64k window; all three GGUFs
+    // have native context >= 262144 and the KV fits the coding budget).
     for (const id of ids) {
-      test(`${id}: limit.context is 65536 (router -c) and limit.output is 16384 in both copies`, () => {
+      test(`${id}: limit.context is 262144 (router -c) and limit.output is 16384 in both copies`, () => {
         expect(modelLimit(managed as Config, "cor-local", id)).toEqual({
-          context: 65536,
+          context: 262144,
           output: 16384,
         })
         expect(modelLimit(profile as Config, "cor-local", id)).toEqual({
-          context: 65536,
+          context: 262144,
           output: 16384,
         })
       })
