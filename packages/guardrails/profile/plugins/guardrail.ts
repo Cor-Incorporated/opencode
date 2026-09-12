@@ -109,6 +109,7 @@ async function guardrailServer(input: GuardrailInput, opts?: Record<string, unkn
       for (const key of Object.keys(ctx.allow)) delete ctx.allow[key]
       await dropKeylessCatalogLanes(cfg)
       for (const [key, val] of Object.entries(cfg.provider ?? {})) {
+        if (!val) continue
         const ids = list(val.whitelist)
         if (!ids.length) continue
         ctx.allow[key] = new Set(ids)

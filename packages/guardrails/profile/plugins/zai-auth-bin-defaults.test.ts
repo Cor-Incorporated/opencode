@@ -46,7 +46,7 @@ function writeAuthFile(dir: string, auth: unknown) {
 
 describe("zai-auth-env.js: extractZaiKey precedence", () => {
   test("(a) a zai-coding-plan api key is adopted", () => {
-    expect(extractZaiKey({ "zai-coding-plan": { type: "api", key: "620714abcdef" } })).toBe("620714abcdef")
+    expect(extractZaiKey({ "zai-coding-plan": { type: "api", key: "test-key-123456" } })).toBe("test-key-123456")
   })
 
   test("(b) a direct zai api key wins over zai-coding-plan", () => {
@@ -73,10 +73,10 @@ describe("zai-auth-env.js: extractZaiKey precedence", () => {
 describe("zai-auth-env.js: applyZaiAuthDefaults", () => {
   test("(a) coding-plan key in the auth file is exported as ZHIPU_API_KEY", () => {
     withTmpDir("zai-auth-apply-", (dir) => {
-      const authFile = writeAuthFile(dir, { "zai-coding-plan": { type: "api", key: "620714abcdef" } })
+      const authFile = writeAuthFile(dir, { "zai-coding-plan": { type: "api", key: "test-key-123456" } })
       const env: Record<string, string> = { HOME: dir }
       applyZaiAuthDefaults(env, { authFile, warn: () => {} })
-      expect(env.ZHIPU_API_KEY).toBe("620714abcdef")
+      expect(env.ZHIPU_API_KEY).toBe("test-key-123456")
     })
   })
 
