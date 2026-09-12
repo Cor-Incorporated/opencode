@@ -25,6 +25,7 @@ import { free, paid, preview } from "./guardrail-patterns"
 
 type ModelLimit = { context?: number; output?: number }
 type Config = {
+  enabled_providers?: string[]
   provider?: Record<
     string,
     {
@@ -70,9 +71,21 @@ describe("model whitelist stays consistent across its copies", () => {
     // Regression pins for 2026-09-02. glm-5.3-flash is the model whose absence
     // surfaced the staleness; gpt-5.6-luna is what Codex runs today.
     expect(whitelist(managed as Config, "zai-coding-plan")).toContain("glm-5.3-flash")
-    expect(whitelist(managed as Config, "zai")).toContain("glm-5.3-flash")
     expect(whitelist(managed as Config, "openrouter")).toContain("z-ai/glm-5.3-flash")
     expect(whitelist(managed as Config, "openai")).toContain("gpt-5.6-luna")
+  })
+
+  test("the zai platform lane is not admitted in either copy", () => {
+    // 2026-09-11: config-declared `zai` loaded keylessly (provider.ts's config
+    // re-apply merge) and every zai/* call died with z.ai error 1001
+    // "Authentication parameter not received in Header, unable to authenticate"
+    // — the coding-plan key cannot authenticate the PAYG endpoint. The lane was
+    // removed from both copies; re-adding it needs a credential story first
+    // (guardrail.ts's dropKeylessCatalogLanes stays as defense-in-depth).
+    for (const config of [managed as Config, profile as Config]) {
+      expect(providers(config)).not.toContain("zai")
+      expect(config.enabled_providers ?? []).not.toContain("zai")
+    }
   })
 
   // The three copies agreeing with each other says nothing about whether they

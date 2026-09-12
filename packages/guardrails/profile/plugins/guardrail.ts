@@ -1,3 +1,4 @@
+import os from "os"
 import path from "path"
 import { createAccessHandlers } from "./guardrail-access"
 import { createContext, type GuardrailInput } from "./guardrail-context"
@@ -50,6 +51,49 @@ export async function ensureLocalOpencodeIgnored(worktree: string) {
   return true
 }
 
+// Catalog (models.dev) lanes that only make sense with their own credential.
+// The `zai` (Z.AI pay-as-you-go) lane was retired from the packaged config on
+// 2026-09-11 after the keyless-lane incident: opencode loads every config-declared
+// provider even without one (packages/opencode/src/provider/provider.ts's
+// "load config - re-apply" merge), so a whitelist-only `provider.zai` block put
+// keyless zai/* models into the picker and every call died with z.ai error 1001:
+//   {"error":{"code":"1001","message":"Authentication parameter not received in
+//    Header, unable to authenticate"}}
+// (reproduced with a headerless curl to https://api.z.ai/api/paas/v4/chat/completions;
+// the coding-plan key in auth.json is scoped to /api/coding and cannot authenticate
+// the pay-as-you-go endpoint). This gate stays as defense-in-depth: if any config
+// (packaged, managed, or project-local) re-declares the lane, machines without the
+// lane's credential still never see it. Credential = the provider's env var or a
+// same-id auth-store entry.
+const CATALOG_LANES_REQUIRING_KEYS = {
+  zai: { envKey: "ZHIPU_API_KEY", authID: "zai" },
+} as const
+
+type GuardrailConfig = {
+  provider?: { [id: string]: { whitelist?: string[] } | undefined }
+}
+
+async function laneHasCredential(lane: { envKey: string; authID: string }) {
+  if (process.env[lane.envKey]) return true
+  // Same path opencode's Auth store uses: Global.Path.data = xdgData/opencode.
+  const file = Bun.file(
+    path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"), "opencode", "auth.json"),
+  )
+  if (!(await file.exists())) return false
+  // Fail open on an unreadable store so a glitch can never hide a working lane.
+  const auth = await file.json().catch(() => undefined)
+  if (auth === undefined) return true
+  return typeof auth === "object" && auth !== null && lane.authID in auth
+}
+
+export async function dropKeylessCatalogLanes(cfg: GuardrailConfig) {
+  for (const [id, lane] of Object.entries(CATALOG_LANES_REQUIRING_KEYS)) {
+    if (!cfg.provider?.[id]) continue
+    if (await laneHasCredential(lane)) continue
+    delete cfg.provider[id]
+  }
+}
+
 async function guardrailServer(input: GuardrailInput, opts?: Record<string, unknown>) {
   const ctx = await createContext(input, opts)
   const access = createAccessHandlers(ctx)
@@ -61,8 +105,9 @@ async function guardrailServer(input: GuardrailInput, opts?: Record<string, unkn
   const worktreeBootstrapHandlers = createWorktreeBootstrapHandlers(ctx)
 
   return {
-    config: async (cfg: { provider?: Record<string, { whitelist?: string[] }> }) => {
+    config: async (cfg: GuardrailConfig) => {
       for (const key of Object.keys(ctx.allow)) delete ctx.allow[key]
+      await dropKeylessCatalogLanes(cfg)
       for (const [key, val] of Object.entries(cfg.provider ?? {})) {
         const ids = list(val.whitelist)
         if (!ids.length) continue

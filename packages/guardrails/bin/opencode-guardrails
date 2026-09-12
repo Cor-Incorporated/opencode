@@ -6,6 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseEnv } from "node:util"
 import { applyCorLocalDefaults } from "./cor-local-env.js"
+import { applyZaiAuthDefaults } from "./zai-auth-env.js"
 
 function fail(msg) {
   console.error(msg)
@@ -45,6 +46,7 @@ const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "pr
 load(process.cwd())
 process.env.OPENCODE_CONFIG_DIR ||= dir
 applyCorLocalDefaults()
+applyZaiAuthDefaults()
 process.env.OPENCODE_EXPERIMENTAL_PLAN_MODE ||= "true"
 
 const out = spawnSync(process.env.OPENCODE_BIN_PATH || bin(), process.argv.slice(2), {
