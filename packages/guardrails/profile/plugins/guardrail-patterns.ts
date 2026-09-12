@@ -114,6 +114,7 @@ export const paid: Record<string, Set<string>> = {
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
+    "gpt-6-astra",
     "gpt-realtime-2.1",
     "o1",
     "o1-pro",
@@ -124,10 +125,8 @@ export const paid: Record<string, Set<string>> = {
   ]),
   deepseek: new Set([
     "deepseek-chat",
+    "deepseek-flash",
     "deepseek-reasoner",
-    "deepseek-v4-flash",
-    "deepseek-v4-flash-vision-exp",
-    "deepseek-v4-pro",
   ]),
   // cor-local: self-hosted llama-server router (Mac Studio). Cost is always 0 (no
   // billing), but these are not free-tier models — list them here so free() stays
