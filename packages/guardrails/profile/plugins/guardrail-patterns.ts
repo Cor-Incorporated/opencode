@@ -62,24 +62,10 @@ export const src = new Set([
 ])
 
 export const paid: Record<string, Set<string>> = {
-  zai: new Set([
-    "glm-4.5",
-    "glm-4.5-air",
-    "glm-4.5-flash",
-    "glm-4.5v",
-    "glm-4.6",
-    "glm-4.6v",
-    "glm-4.7",
-    "glm-4.7-flash",
-    "glm-4.7-flashx",
-    "glm-5",
-    "glm-5-turbo",
-    "glm-5.1",
-    "glm-5.2",
-    "glm-5.3",
-    "glm-5.3-flash",
-    "glm-5v-turbo",
-  ]),
+  // `zai` (Z.AI platform lane, api.z.ai/api/paas/v4) is deliberately absent:
+  // it is not in enabled_providers (Coding Plan accounts have no platform
+  // balance, so every model on the lane fails), and a `paid` entry with no
+  // whitelist breaks model-whitelist.test.ts's paid-coverage loop.
   "zai-coding-plan": new Set([
     "glm-4.5-air",
     "glm-4.7",
@@ -146,11 +132,7 @@ export const paid: Record<string, Set<string>> = {
   // cor-local: self-hosted llama-server router (Mac Studio). Cost is always 0 (no
   // billing), but these are not free-tier models — list them here so free() stays
   // false and denyFree does not block the opt-in local lane.
-  "cor-local": new Set([
-    "deepseek-v4-flash-0731",
-    "glm53-flash",
-    "qwen3.8-27b",
-  ]),
+  "cor-local": new Set(["deepseek-v4-flash-0731", "glm53-flash", "qwen3.8-27b"]),
 }
 
 export const secEnvExempt = /\.env\.(example|sample|template)$/i
