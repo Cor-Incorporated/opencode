@@ -240,7 +240,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     const staleSuffix = stale(data, "edits_since_review")
       ? ` (stale: ${num(data.edits_since_review)} edit(s) since last review)`
       : ""
-    return `GLM: ${glm}, Codex: ${codex}${staleSuffix}`
+    return `legacy telemetry only (not a merge gate): GLM: ${glm}, Codex: ${codex}${staleSuffix}`
   }
 
   function compact(data: Record<string, unknown>) {
@@ -251,9 +251,10 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
       `- unique source reads: ${num(data.read_count)}`,
       `- edit/write count: ${num(data.edit_count)}`,
       `- fact-check: ${factLine(data)}`,
-      `- review state: ${reviewLine(data)}`,
+      `- review telemetry: ${reviewLine(data)}`,
       `- last block: ${block}${reason ? ` (${reason})` : ""}`,
-      "Treat missing or stale fact-check/review state as an explicit gate.",
+      "Treat missing or stale fact-check state as an explicit gate.",
+      "Legacy review telemetry is not merge admission; require the tier's actual reviews of the current PR head and GitHub checks.",
     ].join("\n")
   }
 
