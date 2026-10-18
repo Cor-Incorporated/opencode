@@ -1,5 +1,15 @@
 #!/usr/bin/env node
-
+// Guardrails launcher for the upstream 2.x CLI (@opencode/cli).
+//
+// 1.x resolved the CLI from the sibling `packages/opencode` package; upstream 2.x has no such package and the fork
+// no longer ships a build of its own. The 2.x binary is resolved, in order, from:
+//   1. OPENCODE_BIN_PATH                      (the local wrapper under ~/.local/bin pins it explicitly)
+//   2. <repo>/packages/cli/bin/opencode.cjs   (monorepo checkout with `bun install` done)
+//   3. an installed `opencode` on PATH that is not this launcher's own wrapper (e.g. ~/.opencode-2/pkg)
+// The packaged profile is applied through OPENCODE_CONFIG_DIR (2.x still honours it: packages/cli/src/index.ts).
+// Extra plugin directories (e.g. the AIDD H17 common control, ~/.config/opencode/plugins/aidd-cc-v2) are added with
+// OPENCODE_GUARDRAILS_EXTRA_PLUGINS (path list, ":" separated) through the OPENCODE_CONFIG_CONTENT layer, so the
+// profile file itself stays free of machine-specific paths.
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
@@ -13,13 +23,26 @@ function fail(msg) {
   process.exit(1)
 }
 
+const here = path.dirname(fileURLToPath(import.meta.url))
+const repo = path.resolve(here, "..", "..", "..")
+
 function bin() {
-  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "opencode", "package.json")
-  const root = path.dirname(file)
-  const json = JSON.parse(fs.readFileSync(file, "utf8"))
-  const rel = typeof json.bin === "string" ? json.bin : json.bin?.opencode
-  if (!rel) fail("Failed to resolve opencode bin from dependency")
-  return path.resolve(root, rel)
+  if (process.env.OPENCODE_BIN_PATH) return process.env.OPENCODE_BIN_PATH
+  const dev = path.join(repo, "packages", "cli", "bin", "opencode.cjs")
+  if (fs.existsSync(dev) && fs.existsSync(path.join(repo, "node_modules"))) return dev
+  const self = fs.realpathSync(process.argv[1])
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    const candidate = path.join(dir, "opencode")
+    if (!fs.existsSync(candidate)) continue
+    const real = fs.realpathSync(candidate)
+    if (real === self) continue
+    if (fs.readFileSync(real, "utf8").includes("opencode-guardrails")) continue // a wrapper that would recurse into us
+    return candidate
+  }
+  fail(
+    "opencode-guardrails: no 2.x CLI found. Set OPENCODE_BIN_PATH to an @opencode/cli binary " +
+      "(e.g. ~/.opencode-2/pkg/node_modules/.bin/opencode) or run `bun install` in the repo for packages/cli.",
+  )
 }
 
 function env(dir) {
@@ -42,14 +65,24 @@ function load(dir) {
   }
 }
 
-const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "profile")
+/** OPENCODE_CONFIG_CONTENT layer with the extra plugin directories; merged with the profile by the 2.x config loader. */
+function extraPlugins() {
+  const dirs = (process.env.OPENCODE_GUARDRAILS_EXTRA_PLUGINS || "")
+    .split(path.delimiter)
+    .map((p) => p.trim())
+    .filter((p) => p && fs.existsSync(p))
+  if (!dirs.length || process.env.OPENCODE_CONFIG_CONTENT) return
+  process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ plugins: dirs.map((p) => path.resolve(p)) })
+}
+
+const dir = path.resolve(here, "..", "profile")
 load(process.cwd())
 process.env.OPENCODE_CONFIG_DIR ||= dir
 applyCorLocalDefaults()
 applyZaiAuthDefaults()
-process.env.OPENCODE_EXPERIMENTAL_PLAN_MODE ||= "true"
+extraPlugins()
 
-const out = spawnSync(process.env.OPENCODE_BIN_PATH || bin(), process.argv.slice(2), {
+const out = spawnSync(bin(), process.argv.slice(2), {
   stdio: "inherit",
   env: process.env,
 })

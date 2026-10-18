@@ -336,6 +336,8 @@ export function free(data: {
     cache?: { read?: number; write?: number }
   }
 }) {
+  // 2.x port: the context hook only has a Model.Ref; when the catalog lookup finds no cost, unknown is not free.
+  if (!data.cost) return false
   const inCost = data.cost?.input ?? 0
   const outCost = data.cost?.output ?? 0
   const readCost = data.cost?.cache?.read ?? 0

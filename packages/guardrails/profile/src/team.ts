@@ -1,7 +1,9 @@
 import { cp, lstat, mkdir, readdir, readlink, realpath, rm, symlink } from "fs/promises"
 import path from "path"
-import { tool, type ToolContext } from "@opencode-ai/plugin"
-import { Background } from "../../../opencode/src/util/background"
+// 2.x port: the 1.x `tool()` helper and the core `Background` util are local (./v2). The declarations below are
+// unchanged; only these two imports moved off `@opencode-ai/plugin` / `packages/opencode` (gone upstream).
+import { tool, type ToolContext } from "./v2/tool"
+import { Background } from "./v2/background"
 
 const z = tool.schema
 

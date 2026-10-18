@@ -25,7 +25,7 @@
  *   F3 到達性      server(stubInput) が返す hooks に "chat.params" がある
  *   PAIR           複製した判定条件がソースに実在する
  *
- * Run: bun test packages/guardrails/profile/plugins/plugin-loads.test.ts
+ * Run: bun test packages/guardrails/profile/src/plugin-loads.test.ts
  */
 import { describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
@@ -152,24 +152,63 @@ describe("profile plugin は opencode の loader を通る", () => {
   })
 })
 
-describe("PAIR: 複製した loader 判定がソースに実在する（ずれたら落ちる）", () => {
-  const root = join(import.meta.dir, "..", "..", "..", "opencode", "src", "plugin")
-  const shared = join(root, "shared.ts")
-  const index = join(root, "index.ts")
+// ---- 2.x (upstream) loader ----
+//
+// 2026-10-19 re-platform: the 1.x loader (packages/opencode/src/plugin/{shared,index}.ts) no longer exists upstream.
+// The 2.x loader is packages/core/src/plugin/module.ts: a configured local plugin is a DIRECTORY (`plugins:
+// ["./plugins/guardrail"]`, relative paths resolved against the config file), its entrypoint is `<dir>/index.ts`
+// (packages/plugin/src/host.ts `entry(["server", ""])`), and the module must `export default { id, setup }` (or
+// `{ id, effect }`) — a 1.x `{ id, server }` object is rejected by the `Module` schema. The v1 factories above stay as
+// they are (moved to profile/src: 2.x auto-discovers every top-level *.ts under profile/plugins as a plugin);
+// profile/plugins/{guardrail,team}/index.ts wrap them through the adapter. The PAIR block below pins the
+// three loader facts the v2 entries rely on, so an upstream change to any of them turns this red.
+describe("F4 2.x entry: v2 の default は { id, setup } で、setup が 1.x factory を adapter 経由で登録する", () => {
+  test("guardrail v2 entry", async () => {
+    const mod = await import("../plugins/guardrail/index")
+    expect(typeof mod.default.id).toBe("string")
+    expect(typeof mod.default.setup).toBe("function")
+    expect(mod.default.id).toBe(guardrailMod.default.id)
+  })
+  test("team v2 entry", async () => {
+    const mod = await import("../plugins/team/index")
+    expect(typeof mod.default.setup).toBe("function")
+    expect(mod.default.id).toBe(teamMod.default.id)
+  })
+})
+
+describe("PAIR: v2 entry が前提にする 2.x loader の判定がソースに実在する（ずれたら落ちる）", () => {
+  const core = join(import.meta.dir, "..", "..", "..", "core", "src", "plugin", "module.ts")
+  const host = join(import.meta.dir, "..", "..", "..", "plugin", "src", "host.ts")
+  const source = join(import.meta.dir, "..", "..", "..", "core", "src", "config", "plugin", "source.ts")
 
   test("loader のソースが解決できる（無ければ pair は成立しない）", () => {
-    expect(existsSync(shared)).toBe(true)
-    expect(existsSync(index)).toBe(true)
+    expect(existsSync(core)).toBe(true)
+    expect(existsSync(host)).toBe(true)
+    expect(existsSync(source)).toBe(true)
   })
 
-  test("readV1Plugin: detect モードは id/server/tui の無い default を無視する", () => {
-    const src = readFileSync(shared, "utf-8")
-    expect(src).toContain(`if (mode === "detect" && !("id" in value) && !("server" in value) && !("tui" in value)) return`)
+  test("module.ts: default は { id, setup } (promise) か { id, effect }、絶対パスは local directory として解決する", () => {
+    const src = readFileSync(core, "utf-8")
+    expect(src).toContain("id: Schema.String,")
+    expect(src).toContain("setup: Schema.declare<")
+    expect(src).toContain("const local = path.isAbsolute(operation.target)")
+    expect(src).toContain("Host.resolve(installed ?? { directory: operation.target })")
   })
 
-  test("getLegacyPlugins: 全 export を走査し、非関数なら throw する", () => {
-    const src = readFileSync(index, "utf-8")
-    expect(src).toContain("for (const entry of Object.values(mod))")
-    expect(src).toContain(`throw new TypeError("Plugin export is not a function")`)
+  test("host.ts: directory の entrypoint は server か index", () => {
+    expect(readFileSync(host, "utf-8")).toContain(`server: entry(["server", ""])`)
+  })
+
+  test("config/plugin/source.ts: './' 相対パスは config file のディレクトリ基準で解決される", () => {
+    const src = readFileSync(source, "utf-8")
+    expect(src).toContain(`operation.target.startsWith("./") || operation.target.startsWith("../")`)
+    expect(src).toContain("path.resolve(directory, operation.target)")
+  })
+
+  test("profile/opencode.json は v2 directory entry を plugins に列挙する", () => {
+    const cfg = JSON.parse(readFileSync(join(import.meta.dir, "..", "opencode.json"), "utf-8"))
+    expect(cfg.plugin).toBeUndefined()
+    expect(cfg.plugins).toEqual(["./plugins/guardrail", "./plugins/team"])
+    for (const dir of cfg.plugins) expect(existsSync(join(import.meta.dir, "..", dir, "index.ts"))).toBe(true)
   })
 })

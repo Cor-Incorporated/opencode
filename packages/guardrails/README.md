@@ -34,9 +34,41 @@ Avoid wording that implies this package replaces OpenCode itself. The intended a
 
 ## Upstream strategy
 
-- Keep this package version aligned with `packages/opencode/package.json`
+- The fork `dev` is re-based on upstream `anomalyco/opencode` `dev` (2.x, `@opencode/cli`); this package is the only
+  fork-owned code and it carries no core patches (2026-10-19 re-platform, Cor-Incorporated/opencode#342)
 - Upgrade upstream first, then update this package only where the extension surface changed
 - Prefer `managed/` and `profile/` assets over core patches
+
+## 2.x plugin API (how the 1.x plugins run on upstream)
+
+Upstream 2.x replaced the 1.x plugin API (`server(input) → hooks object`, `@opencode-ai/plugin`) with
+`@opencode/plugin`'s `setup(ctx)` and per-domain registrations, and a configured local plugin is a **directory** whose
+`index.ts` default-exports `{ id, setup }`. 2.x also auto-discovers every top-level `*.ts` under `<config dir>/plugins/`
+as a plugin, so the 1.x sources moved to `profile/src/` and `profile/plugins/` holds only the two entry directories.
+`profile/src/guardrail.ts` and `profile/src/team.ts` are kept in their 1.x shape (every policy test runs against them
+unchanged); `profile/src/v2/` is the bridge:
+
+| file | role |
+|------|------|
+| `src/v2/adapter.ts` | 1.x hook object → 2.x registrations (`session.hook` prompt/context/compaction, `tool.hook`, `shell.hook("create.before")`, `tool.transform`, `event.subscribe`). Mapping table in the file header. |
+| `src/v2/client.ts` | 1.x SDK-shaped `client.session.*` over `ctx.session.*` (create / promptAsync / prompt / messages / status / abort) for team.ts |
+| `src/v2/events.ts` | session status derived from `session.status` / `session.execution.*` events (2.x has no status call in the plugin domain) |
+| `src/v2/tool.ts` | 1.x `tool({ args: tool.schema.* })` helper emitting JSON Schema (no zod), defaults filled before `execute` |
+| `src/v2/background.ts` | local copy of the 19-line `Background` registry team.ts used from core |
+| `plugins/guardrail/index.ts`, `plugins/team/index.ts` | the directory entries listed in `profile/opencode.json` `plugins` |
+
+Known gaps of the bridge (documented, not hidden): the 1.x `command.execute.before` hook has no 2.x wrap point
+(`CommandEditor` only adds commands), so `/implement` `/review` `/ship` `/handoff` prompt augmentation is best-effort on
+slash-command text in the prompt hook; `body.tools` per-prompt tool allow-lists for workers are dropped (agents and
+permissions restrict workers instead); `dropKeylessCatalogLanes` cannot mutate the live 2.x config and only shapes the
+whitelist. The provider gate reads model cost/status from `ctx.model.list()`; a model missing from the catalog has
+unknown cost, which is not treated as free-tier.
+
+Tests: `bun test profile/src profile/plugins` (from `packages/guardrails`). `src/v2/adapter.test.ts` drives the real v2
+entries with a recording 2.x ctx; `src/plugin-loads.test.ts` pins the three 2.x loader facts the entries rely on against
+upstream source. The 2.x config loader reports `provider.<id>.whitelist` as an "unsupported legacy setting" diagnostic:
+the whitelist is plugin-owned declaration data (read by `plugins/guardrail/index.ts` from the profile file), not CLI
+config, and the diagnostic is expected.
 
 ## Current scope
 
