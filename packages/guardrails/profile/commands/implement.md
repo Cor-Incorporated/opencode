@@ -14,3 +14,5 @@ Requirements:
 - for AI agent instrumentation or metric work, use source-level hooks only, add integration/smoke coverage, and include traceability from acceptance criteria to code paths
 
 $ARGUMENTS
+
+<!-- guardrails:command=implement -->

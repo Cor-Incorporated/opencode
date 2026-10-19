@@ -5,16 +5,20 @@
 // with flat inputs and no message listing or status call in the plugin domain, so this shim maps each 1.x call:
 //
 //   1.x client.session.*                     2.x ctx.session.*
-//   create({body:{parentID,title,permission}}) create({parentID,title,location,permissions})   (rule shape mapped)
-//   promptAsync({body:{agent,model,parts}})    switchAgent / switchModel, then prompt({text})  (inbox enqueue = async)
-//   prompt({body:{parts}})                     prompt({text}) then wait({sessionID})
-//   messages({path:{id}})                      context({sessionID}) → 1.x {info, parts} rows
-//   status({query})                            derived from session.status / session.execution.* events
+//   create({body:{parentID,title,permission}, create({parentID,title,permissions}) then move({directory}) — with a
+//          query:{directory}})                 parentID the host drops `location` and the child inherits the parent's,
+//                                              so an isolated worktree must be applied by moving the session
+//   promptAsync({body:{agent,model,tools,…}})  switchAgent / switchModel; `tools:{x:false}` → deny rules through
+//                                              update({permissions}); then prompt({text}) (inbox enqueue = async)
+//   prompt({body:{parts,noReply}})             prompt({text}) + wait({sessionID}); noReply → synthetic({resume:false})
+//   messages({path:{id}})                      context({sessionID}) → 1.x {info, parts} rows (+ an errored assistant
+//                                              row when the last execution failed before any assistant message)
+//   status({query})                            derived from session.execution.* events (events.ts)
 //   abort({path:{id}})                         interrupt({sessionID})
 //   event.subscribe()                          ctx.event.subscribe() with {type, data} → {type, properties}
 //
-// `body.tools` (per-prompt tool allow-list) and `body.variant` have no 2.x per-prompt equivalent: variant travels in
-// Model.Ref, the tool list is dropped (worker agents are already restricted by their agent definition / permissions).
+// Permission rules go through the 2.x tool vocabulary (`normalizeAction`: bash→shell, task→subagent, write/patch→edit),
+// the same mapping upstream applies to migrated v1 config (packages/core/src/v1/config/migrate.ts).
 import type { EventStore } from "./events"
 
 export type Rule1 = { permission: string; pattern: string; action: "allow" | "deny" | "ask" }
@@ -23,7 +27,10 @@ type Ctx = {
   session: {
     create(input: Record<string, unknown>): Promise<{ id: string; permissions?: unknown }>
     get(input: { sessionID: string }): Promise<{ id: string; permissions?: unknown }>
+    update(input: { sessionID: string; permissions?: unknown; title?: string }): Promise<unknown>
+    move(input: { sessionID: string; directory: string }): Promise<unknown>
     prompt(input: Record<string, unknown>): Promise<unknown>
+    synthetic(input: Record<string, unknown>): Promise<unknown>
     wait(input: { sessionID: string }): Promise<unknown>
     interrupt(input: { sessionID: string }): Promise<unknown>
     switchAgent(input: { sessionID: string; agent: string }): Promise<unknown>
@@ -31,6 +38,15 @@ type Ctx = {
     context(input: { sessionID: string }): Promise<ReadonlyArray<Record<string, any>>>
   }
   event: { subscribe(): AsyncIterable<unknown> }
+  location?: { directory?: string }
+}
+
+/** v1 permission / tool key → the renamed 2.x tool action (upstream `ConfigMigrateV1.normalizeAction`). */
+export function normalizeAction(action: string) {
+  if (action === "write" || action === "patch") return "edit"
+  if (action === "task") return "subagent"
+  if (action === "bash") return "shell"
+  return action
 }
 
 function millis(value: unknown): number | undefined {
@@ -75,11 +91,12 @@ export function toV1Message(msg: Record<string, any>) {
     )
     const last = content[content.length - 1]
     const completed = millis(msg.time?.completed)
+    const finish = typeof msg.finish === "string" ? msg.finish : last?.type === "tool" ? "tool-calls" : completed !== undefined ? "stop" : undefined
     return {
       info: {
         id: msg.id,
         role: "assistant",
-        finish: last?.type === "tool" ? "tool-calls" : completed !== undefined ? "stop" : undefined,
+        finish,
         time: { created, completed },
         error: msg.error ? { data: { message: String(msg.error.message ?? msg.error._tag ?? "error") } } : undefined,
       },
@@ -97,7 +114,15 @@ export function toV2Rules(rules: unknown) {
   if (!Array.isArray(rules)) return undefined
   return rules
     .filter((r): r is Rule1 => !!r && typeof r === "object" && "permission" in r)
-    .map((r) => ({ action: r.permission, resource: r.pattern, effect: r.action }))
+    .map((r) => ({ action: normalizeAction(r.permission), resource: r.pattern, effect: r.action }))
+}
+
+/** 1.x per-prompt `tools: { name: false }` → 2.x deny rules (there is no per-prompt tool list in 2.x). */
+export function toolDenyRules(tools: unknown) {
+  if (!tools || typeof tools !== "object") return []
+  return Object.entries(tools as Record<string, unknown>)
+    .filter(([, on]) => on === false)
+    .map(([name]) => ({ action: normalizeAction(name), resource: "*", effect: "deny" as const }))
 }
 
 function partsText(parts: unknown): string {
@@ -122,12 +147,22 @@ export function createClient(ctx: Ctx, events: EventStore) {
         location: { directory: input.query.directory },
         ...(permissions?.length ? { permissions } : {}),
       })
+      // a child created with parentID inherits the parent's location: an isolated worktree is applied by moving
+      if (input.query.directory && input.query.directory !== ctx.location?.directory) {
+        await ctx.session.move({ sessionID: info.id, directory: input.query.directory })
+      }
       events.busy(info.id) // the first status event may trail the prompt; never report a fresh worker as idle
       return { data: { id: info.id } }
     },
     async promptAsync(input: {
       path: { id: string }
-      body: { agent?: string; model?: { providerID: string; modelID: string }; variant?: string; parts: { type: string; text: string }[] }
+      body: {
+        agent?: string
+        model?: { providerID: string; modelID: string }
+        variant?: string
+        tools?: Record<string, boolean>
+        parts: { type: string; text: string }[]
+      }
     }) {
       const sessionID = input.path.id
       if (input.body.agent) await ctx.session.switchAgent({ sessionID, agent: input.body.agent })
@@ -136,13 +171,25 @@ export function createClient(ctx: Ctx, events: EventStore) {
           sessionID,
           model: { providerID: input.body.model.providerID, id: input.body.model.modelID, ...(input.body.variant ? { variant: input.body.variant } : {}) },
         })
+      const denies = toolDenyRules(input.body.tools)
+      if (denies.length) {
+        const current = await ctx.session.get({ sessionID })
+        const existing = Array.isArray(current.permissions) ? current.permissions : []
+        await ctx.session.update({ sessionID, permissions: [...existing, ...denies] })
+      }
       events.busy(sessionID)
       return ctx.session.prompt({ sessionID, text: partsText(input.body.parts) })
     },
-    async prompt(input: { path: { id: string }; body: { parts: { type: string; text: string }[] } }) {
+    async prompt(input: { path: { id: string }; body: { parts: { type: string; text: string }[]; noReply?: boolean } }) {
       const sessionID = input.path.id
+      const text = partsText(input.body.parts)
+      if (input.body.noReply) {
+        // a notification to the parent: recorded in the session, never a model run
+        await ctx.session.synthetic({ sessionID, text, description: "team notification", resume: false })
+        return {}
+      }
       events.busy(sessionID)
-      await ctx.session.prompt({ sessionID, text: partsText(input.body.parts) })
+      await ctx.session.prompt({ sessionID, text })
       await ctx.session.wait({ sessionID })
       events.idle(sessionID)
       return {}
@@ -151,8 +198,16 @@ export function createClient(ctx: Ctx, events: EventStore) {
       return { data: events.statuses() }
     },
     async messages(input: { path: { id: string } }) {
-      const list = await ctx.session.context({ sessionID: input.path.id })
-      return { data: list.map((m) => toV1Message(m)) }
+      const list = (await ctx.session.context({ sessionID: input.path.id })).map((m) => toV1Message(m))
+      const failure = events.failure(input.path.id)
+      const lastAssistant = [...list].reverse().find((m) => m.info.role === "assistant")
+      if (failure && (!lastAssistant || lastAssistant.info.time?.completed === undefined) && !lastAssistant?.info.error) {
+        list.push({
+          info: { id: `failure-${failure.at}`, role: "assistant", finish: "error", time: { created: failure.at, completed: failure.at }, error: { data: { message: failure.message } } },
+          parts: [],
+        })
+      }
+      return { data: list }
     },
     async abort(input: { path: { id: string } }) {
       return ctx.session.interrupt({ sessionID: input.path.id })

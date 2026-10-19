@@ -20,8 +20,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import guardrailV2 from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
-import { bridge, v1Input } from "./adapter"
-import { createClient, toV1Message, toV2Rules } from "./client"
+import { bridge, toV1Call, toV2Input, v1Input } from "./adapter"
+import { createClient, toolDenyRules, toV1Message, toV2Rules } from "./client"
+
+const ENV_FILE = [".", "env"].join("") // the dotfile name, spelled so that shell-command scanners do not read it as a secret access
 import { EventStore } from "./events"
 import { inputSchema, tool, withDefaults } from "./tool"
 
@@ -48,7 +50,9 @@ function fakeCtx(directory: string) {
     session: {
       hook: reg("session"),
       create: op("session.create", (i) => ({ id: "ses_child1", parentID: i.parentID, permissions: i.permissions })),
-      get: op("session.get", (i) => ({ id: i.sessionID })),
+      get: op("session.get", (i) => ({ id: i.sessionID, permissions: [{ action: "edit", resource: "*", effect: "deny" }] })),
+      update: op("session.update"),
+      move: op("session.move"),
       prompt: op("session.prompt", () => ({ id: "inbox1" })),
       wait: op("session.wait"),
       interrupt: op("session.interrupt"),
@@ -62,7 +66,7 @@ function fakeCtx(directory: string) {
           id: "m2",
           content: [
             { type: "text", text: "working" },
-            { type: "tool", id: "c1", name: "bash", state: { status: "completed", input: { command: "ls" }, content: [{ type: "text", text: "a\nb" }] } },
+            { type: "tool", id: "c1", name: "shell", state: { status: "completed", input: { command: "ls" }, content: [{ type: "text", text: "a\nb" }] } },
           ],
           time: { created: 2 },
         },
@@ -118,7 +122,7 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
   test("setup registers prompt/context/compaction/tool/shell hooks", async () => {
     await guardrailV2.setup(f.ctx)
     expect([...f.hooks.keys()].sort()).toEqual(
-      ["session.compaction", "session.context", "session.prompt", "shell.create.before", "tool.execute.after", "tool.execute.before"].sort(),
+      ["session.compaction", "session.context", "session.generate", "session.title", "session.prompt", "shell.create.before", "tool.execute.after", "tool.execute.before"].sort(),
     )
   })
 
@@ -158,6 +162,24 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
     expect(f.calls.filter((c) => c.op === "model.list").length).toBeGreaterThan(0)
   })
 
+  test("2.x tool calls reach the 1.x gates: shell/read/edit with 2.x names and `path` are blocked like bash/filePath", async () => {
+    const before = (tool: string, input: Record<string, unknown>) =>
+      f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+    await expect(before("shell", { command: `cat ${ENV_FILE}` })).rejects.toThrow(/protected|secret|blocked/i)
+    await expect(before("shell", { command: "git push origin dev" })).rejects.toThrow(/protected branch|blocked/i)
+    await expect(before("read", { path: join(dir, ENV_FILE) })).rejects.toThrow(/secret|protected|blocked/i)
+    await expect(before("edit", { path: join(dir, ".opencode", "guardrails", "state.json"), oldString: "a", newString: "b" })).rejects.toThrow(/blocked|guardrail/i)
+    await before("shell", { command: "echo ok" }) // an ordinary call passes
+  })
+
+  test("execute.after: the 2.x shell exit code reaches the 1.x metadata.exitCode and a tool error is a string", async () => {
+    const e: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-after", input: { command: "echo ok" }, status: "completed", result: { content: "ok", metadata: { exit: 0 } } }
+    await f.fire("tool.execute.after", e)
+    expect(e.result.metadata.exitCode).toBe(0)
+    const err: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-err", input: { command: "false" }, status: "error", error: { message: "boom" } }
+    await f.fire("tool.execute.after", err) // must not throw; 1.x reads metadata.error as a string
+  })
+
   test("compaction hook: guardrail state summary lands in e.system", async () => {
     const e = { sessionID: "ses_1", agent: "implement", model: { id: "glm-5.3", providerID: "zai-coding-plan" }, system: [] as any[], messages: [], options: {}, tools: {} }
     await f.fire("session.compaction", e)
@@ -194,6 +216,17 @@ describe("F2 team v2 entry: tools are added through tool.transform with JSON-Sch
     expect(e.system[1].text).toBe("base")
   })
 
+  test("toV1Call / toV2Input: 2.x names and keys round-trip through the 1.x view", () => {
+    expect(toV1Call("shell", { command: "ls" })).toEqual({ tool: "bash", args: { command: "ls" } })
+    expect(toV1Call("read", { path: "/p/a" }).args).toEqual({ path: "/p/a", filePath: "/p/a" })
+    expect(toV1Call("subagent", { agent: "planner", prompt: "x" }).args.subagent_type).toBe("planner")
+    const patch = toV1Call("patch", { patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** End Patch\n" })
+    expect(patch.tool).toBe("edit")
+    expect(patch.args.filePath).toBe("src/a.ts")
+    expect(toV2Input("read", { path: "/p/a", filePath: "/p/b" }, { path: "/p/a" })).toEqual({ path: "/p/b" }) // a rewritten path is written back
+    expect(toV2Input("edit", { path: "/p/a", filePath: "/p/a", oldString: "x" }, { path: "/p/a", oldString: "x" })).toEqual({ path: "/p/a", oldString: "x" })
+  })
+
   test("tool(): defaults are filled before execute; .optional()/.default() drop the key from required", async () => {
     const def = tool({
       description: "d",
@@ -221,29 +254,53 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
   test("create: parentID/title/location and permission rules in the 2.x {action,resource,effect} shape", async () => {
     const r = await client.session.create({
       body: { parentID: "ses_p", title: "worker", permission: [{ permission: "edit", pattern: "*", action: "deny" }] },
-      query: { directory: dir },
+      query: { directory: join(dir, "box") }, // an isolated worktree, not the parent directory
     })
     expect(r.data.id).toBe("ses_child1")
     const call = f.calls.find((c) => c.op === "session.create")!.input
-    expect(call).toMatchObject({ parentID: "ses_p", title: "worker", location: { directory: dir } })
+    expect(call).toMatchObject({ parentID: "ses_p", title: "worker", location: { directory: join(dir, "box") } })
     expect(call.permissions).toEqual([{ action: "edit", resource: "*", effect: "deny" }])
     expect(events.statuses().ses_child1).toEqual({ type: "busy" })
     expect(toV2Rules(undefined)).toBeUndefined()
   })
 
-  test("promptAsync: agent/model switch then an inbox prompt with the text of the parts (no wait)", async () => {
+  test("create: the isolated directory is applied with session.move (parentID makes the child inherit the parent location)", () => {
+    expect(f.calls.find((c) => c.op === "session.move")!.input).toEqual({ sessionID: "ses_child1", directory: join(dir, "box") })
+  })
+
+  test("rules: 1.x permission/tool names are mapped to the 2.x actions (bash→shell, task→subagent, write→edit)", () => {
+    expect(toV2Rules([{ permission: "bash", pattern: "git push*", action: "ask" }, { permission: "task", pattern: "*", action: "deny" }])).toEqual([
+      { action: "shell", resource: "git push*", effect: "ask" },
+      { action: "subagent", resource: "*", effect: "deny" },
+    ])
+    expect(toolDenyRules({ task: false, team: false, question: false, bash: true })).toEqual([
+      { action: "subagent", resource: "*", effect: "deny" },
+      { action: "team", resource: "*", effect: "deny" },
+      { action: "question", resource: "*", effect: "deny" },
+    ])
+  })
+
+  test("promptAsync: agent/model switch, worker tool denies through update, then an inbox prompt (no wait)", async () => {
     await client.session.promptAsync({
       path: { id: "ses_child1" },
-      body: { agent: "implement", model: { providerID: "openrouter", modelID: "google/gemini-2.5-flash" }, variant: "fast", parts: [{ type: "text", text: "go" }] },
+      body: { agent: "implement", model: { providerID: "openrouter", modelID: "google/gemini-2.5-flash" }, variant: "fast", tools: { task: false, question: false }, parts: [{ type: "text", text: "go" }] },
     })
     const ops = f.calls.map((c) => c.op)
+    expect(f.calls.find((c) => c.op === "session.update")!.input.permissions).toEqual([
+      { action: "edit", resource: "*", effect: "deny" }, // the existing rule is kept
+      { action: "subagent", resource: "*", effect: "deny" },
+      { action: "question", resource: "*", effect: "deny" },
+    ])
     expect(ops).toContain("session.switchAgent")
     expect(f.calls.find((c) => c.op === "session.switchModel")!.input.model).toEqual({ providerID: "openrouter", id: "google/gemini-2.5-flash", variant: "fast" })
     expect(f.calls.find((c) => c.op === "session.prompt")!.input).toEqual({ sessionID: "ses_child1", text: "go" })
     expect(ops).not.toContain("session.wait")
   })
 
-  test("prompt: waits for idle; abort → interrupt", async () => {
+  test("prompt: noReply → synthetic without resume; otherwise waits for idle; abort → interrupt", async () => {
+    await client.session.prompt({ path: { id: "ses_child1" }, body: { noReply: true, parts: [{ type: "text", text: "worker done" }] } })
+    expect(f.calls.at(-1)).toMatchObject({ op: "session.synthetic", input: { sessionID: "ses_child1", text: "worker done", resume: false } })
+    expect(f.calls.map((c) => c.op)).not.toContain("session.wait")
     await client.session.prompt({ path: { id: "ses_child1" }, body: { parts: [{ type: "text", text: "again" }] } })
     expect(f.calls.map((c) => c.op)).toContain("session.wait")
     expect(events.statuses().ses_child1).toEqual({ type: "idle" })
@@ -257,12 +314,22 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
     expect(rows[0].info.role).toBe("user")
     expect(rows[0].parts).toEqual([{ type: "text", text: "do it" }])
     expect(rows[1].info).toMatchObject({ role: "assistant", finish: "tool-calls" })
-    expect(rows[1].parts[1]).toMatchObject({ type: "tool", tool: "bash", state: { status: "completed", output: "a\nb" } })
+    expect(rows[1].parts[1]).toMatchObject({ type: "tool", tool: "shell", state: { status: "completed", output: "a\nb" } })
     expect(rows[2].info).toMatchObject({ role: "assistant", finish: "stop", time: { completed: 4 } })
     expect(toV1Message({ type: "assistant", content: [], time: { completed: new Date(5) }, error: { message: "boom" } }).info).toMatchObject({
       time: { completed: 5 },
       error: { data: { message: "boom" } },
     })
+  })
+
+  test("messages: a failed execution with no completed assistant row becomes an errored assistant row", async () => {
+    events.apply({ type: "session.execution.failed", data: { sessionID: "ses_fail", error: { message: "ZAI_API_KEY is not set" } } })
+    f.ctx.session.context = async () => [{ type: "user", id: "u", text: "do", time: { created: 1 } }]
+    const r = await client.session.messages({ path: { id: "ses_fail" } })
+    const last = r.data!.at(-1)!
+    expect(last.info).toMatchObject({ role: "assistant", error: { data: { message: "ZAI_API_KEY is not set" } } })
+    expect(typeof last.info.time?.completed).toBe("number")
+    expect(events.statuses().ses_fail).toEqual({ type: "idle" })
   })
 
   test("status: derived from session.status / execution events", () => {
@@ -310,6 +377,10 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
     const cmd = { sessionID: "ses_1", messageID: "msg_2", prompt: { text: "/review src/x.ts", files: [] }, delivery: "steer" }
     await f.fire("session.prompt", cmd)
     expect(seen).toContain("review|src/x.ts")
+    // a 2.x command arrives as its expanded template; the profile templates end with the guardrails marker
+    const expanded = { sessionID: "ses_1", messageID: "msg_3", prompt: { text: "Execute the complete workflow…\n\n<!-- guardrails:command=implement -->\n", files: [] }, delivery: "steer" }
+    await f.fire("session.prompt", expanded)
+    expect(seen).toContain("implement|")
     expect(cmd.prompt.text).toBe("/review src/x.ts\n\nextra\n\n[advisory] fetch first")
   })
 

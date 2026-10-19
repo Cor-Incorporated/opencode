@@ -57,12 +57,24 @@ unchanged); `profile/src/v2/` is the bridge:
 | `src/v2/background.ts` | local copy of the 19-line `Background` registry team.ts used from core |
 | `plugins/guardrail/index.ts`, `plugins/team/index.ts` | the directory entries listed in `profile/opencode.json` `plugins` |
 
-Known gaps of the bridge (documented, not hidden): the 1.x `command.execute.before` hook has no 2.x wrap point
-(`CommandEditor` only adds commands), so `/implement` `/review` `/ship` `/handoff` prompt augmentation is best-effort on
-slash-command text in the prompt hook; `body.tools` per-prompt tool allow-lists for workers are dropped (agents and
-permissions restrict workers instead); `dropKeylessCatalogLanes` cannot mutate the live 2.x config and only shapes the
-whitelist. The provider gate reads model cost/status from `ctx.model.list()`; a model missing from the catalog has
-unknown cost, which is not treated as free-tier.
+Tool vocabulary: 2.x renamed the built-in tools and their argument keys (`bash→shell`, `task→subagent`,
+`write/patch→edit`; file tools take `path`, the subagent tool `agent`, the shell result `metadata.exit` — the same table
+upstream applies to migrated v1 config in `packages/core/src/v1/config/migrate.ts`). The 1.x guards compare against the
+old names, so the adapter translates every tool call to the 1.x shape before the hook and back afterwards
+(`toV1Call` / `toV2Input`); a native `patch` is judged as an `edit` of its first file. Worker permission rules and the
+1.x per-prompt `tools: { x: false }` lists go through the same mapping as 2.x `permissions` (deny rules), and a worker
+created with `parentID` is moved to its isolated directory afterwards because the 2.x host lets a child inherit the
+parent's location.
+
+Known gaps of the bridge (documented, not hidden): 2.x expands a command into a plain prompt and offers no wrap point
+(`CommandEditor` only adds commands), so the five packaged command templates end with a marker
+`<!-- guardrails:command=NAME -->` that the prompt hook recognises to run the 1.x `command.execute.before`
+(`workflow_phase`, state summary); a command without the marker is only recognised as literal `/name` text.
+`dropKeylessCatalogLanes` cannot mutate the live 2.x config and only shapes the whitelist. The provider gate runs on
+the `context`, `compaction`, `generate` and `title` hooks and reads model cost/status from `ctx.model.list()`
+(cached, misses included); a model missing from the catalog has unknown cost, which is not treated as free-tier.
+`session.status` / `session.idle` have no publisher in 2.x core; worker status is derived from the
+`session.execution.*` events and a failed execution is surfaced to team.ts as an errored assistant row.
 
 Tests: `bun test profile/src profile/plugins` (from `packages/guardrails`). `src/v2/adapter.test.ts` drives the real v2
 entries with a recording 2.x ctx; `src/plugin-loads.test.ts` pins the three 2.x loader facts the entries rely on against

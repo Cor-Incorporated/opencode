@@ -34,3 +34,5 @@ Execute the ship workflow for the current work:
 Default scope is the current branch unless $ARGUMENTS specifies a PR number.
 
 $ARGUMENTS
+
+<!-- guardrails:command=ship -->

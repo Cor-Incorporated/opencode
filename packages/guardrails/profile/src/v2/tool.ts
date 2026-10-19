@@ -79,7 +79,8 @@ function objectSchema(shape: Record<string, Shape<unknown>>): JsonSchema {
     properties[key] = item.json
     if (item.required) required.push(key)
   }
-  return { type: "object", properties, required, additionalProperties: false }
+  // no additionalProperties:false — zod stripped unknown keys, a strict schema would reject a model's extra key
+  return { type: "object", properties, required }
 }
 
 export const schema = {
