@@ -6,7 +6,7 @@ It should be understood as the Cor-Incorporated-specific layer that sits on top 
 
 It keeps upstream OpenCode as the runtime and adds organization policy at the edges:
 
-- `bin/opencode-guardrails` sets `OPENCODE_CONFIG_DIR` to the packaged profile and then delegates to the pinned `opencode` dependency
+- `bin/opencode-guardrails` sets `OPENCODE_CONFIG_DIR` to the packaged profile and then runs the upstream 2.x CLI (`@opencode/cli`) on a private server — see Usage
 - `managed/opencode.json` is the admin-managed profile for system deployment
 - `profile/` contains the packaged custom config dir defaults, including `AGENTS.md`, `opencode.json`, and the guardrail plugin
 
@@ -107,7 +107,7 @@ Planned next slices are tracked in the fork:
 
 ## AI agent instrumentation quality gate
 
-Historical note: a Traceability Matrix that pointed at a deleted instrumentation plugin (removed in #277) was retired from this README. Live push protection is implemented by `profile/plugins/guardrail-git.ts`. Acceptance evidence for anti-pattern work lives in `specs/ai-guardrails-anti-patterns.md`.
+Historical note: a Traceability Matrix that pointed at a deleted instrumentation plugin (removed in #277) was retired from this README. Live push protection is implemented by `profile/src/guardrail-git.ts`. Acceptance evidence for anti-pattern work lives in `specs/ai-guardrails-anti-patterns.md`.
 
 ## Usage
 
@@ -117,19 +117,28 @@ Run the wrapper directly:
 opencode-guardrails
 ```
 
+What the wrapper does on the 2.x CLI (since the 2026-10-19 re-platform, #343):
+
+- **CLI binary**: `OPENCODE_BIN_PATH`, else the first `opencode` on `PATH` that is not a wrapper around this launcher. A monorepo checkout is not used (`bun install` does not fetch the `@opencode/cli-*` binaries).
+- **Private server**: every call gets `--standalone` (`bin/standalone-args.js`; after the subcommand, first for the TUI; not for `service` / `upgrade` / `uninstall` or an explicit `--server`). The 2.x background service is a long-lived process started earlier with its own environment, so the profile and the keys of the current call never reach it. `OPENCODE_GUARDRAILS_ALLOW_SERVICE=1` keeps the service on purpose.
+- **Config layering**: in 2.x `OPENCODE_CONFIG_DIR` *replaces* the global config directory, so the user's global `opencode.json(c)` is handed back through `OPENCODE_CONFIG`. Extra plugin directories (for example the AIDD H17 control) go in `OPENCODE_GUARDRAILS_EXTRA_PLUGINS` (`:`-separated) and are merged into `OPENCODE_CONFIG_CONTENT`.
+- On this Mac the entry point is `~/.local/bin/opencode` → `opencode2` (claude-code-skills `opencode/launcher/opencode2`), which calls this wrapper from the main checkout.
+
+Paths under `packages/opencode/src/…` cited further below describe the 1.x runtime the fork ran before the re-platform; that package no longer exists upstream.
+
 It respects an existing `OPENCODE_CONFIG_DIR` so project- or environment-specific overrides can still replace the packaged profile when needed.
 
 The packaged profile defaults to the `implement` agent. Review and release-readiness work should run through the packaged `/review`, `/ship`, and `/handoff` commands so the workflow stays read-only at the gate layer.
 
 Provider admission is also packaged here. Standard confidential-code work is admitted on the `zai-coding-plan`, `openai`, and `deepseek` lane. `zai-coding-plan` is kept as its own provider because Z.AI's official OpenCode guide tells Coding Plan subscribers to select `Z.AI Coding Plan` explicitly; Coding Plan subscriptions cover that endpoint (`api.z.ai/api/coding/paas/v4`) only. The `zai` platform lane (`api.z.ai/api/paas/v4`) was removed from the default admission on 2026-09-11: Coding Plan accounts have no platform balance, so every model on it failed — re-add it via `enabled_providers` + a `provider.zai` whitelist when a platform key and balance exist (see "ZHIPU_API_KEY (z.ai lane credential bridge)" below). OpenRouter-backed candidates remain available for evaluation and multi-vendor routing without replacing the default implementation path.
 
-The `zai` pay-as-you-go lane was retired on 2026-09-11 after the keyless-lane incident. opencode loads config-declared providers even without a credential (`packages/opencode/src/provider/provider.ts`'s config re-apply merge), so a whitelist-only `provider.zai` block put keyless `zai/*` models into the picker — every call then died with z.ai error 1001 `Authentication parameter not received in Header, unable to authenticate`, because the coding-plan key is scoped to `/api/coding` and no Authorization header is sent at all without a credential. The lane is now absent from both config copies and the catalog snapshot, `model-whitelist.test.ts` pins its retirement, and `profile/plugins/guardrail.ts`'s `config()` hook keeps `dropKeylessCatalogLanes` as defense-in-depth: if any config ever re-declares the lane, machines without `ZHIPU_API_KEY` or a `zai` auth-store entry still never see it (`profile/plugins/zai-keyless-lane.test.ts`, fail-open on an unreadable store).
+The `zai` pay-as-you-go lane was retired on 2026-09-11 after the keyless-lane incident. opencode loads config-declared providers even without a credential (`packages/opencode/src/provider/provider.ts`'s config re-apply merge), so a whitelist-only `provider.zai` block put keyless `zai/*` models into the picker — every call then died with z.ai error 1001 `Authentication parameter not received in Header, unable to authenticate`, because the coding-plan key is scoped to `/api/coding` and no Authorization header is sent at all without a credential. The lane is now absent from both config copies and the catalog snapshot, `model-whitelist.test.ts` pins its retirement, and `profile/src/guardrail.ts`'s `config()` hook keeps `dropKeylessCatalogLanes` as defense-in-depth: if any config ever re-declares the lane, machines without `ZHIPU_API_KEY` or a `zai` auth-store entry still never see it (`profile/src/zai-keyless-lane.test.ts`, fail-open on an unreadable store).
 
 ## ZHIPU_API_KEY (z.ai lane credential bridge)
 
 `zai` and `zai-coding-plan` declare the same models.dev env var (`ZHIPU_API_KEY`), but `opencode auth login` for the coding plan stores the key under the `zai-coding-plan` provider id only. A config-defined provider is listed even without a credential, so selecting a `zai` model then sends no `Authorization` header at all — `@ai-sdk/openai-compatible` omits it when `apiKey` is undefined — and the z.ai gateway answers with the misleading `Authentication parameter not received in Header, unable to authenticate` (code 1001).
 
-`packages/guardrails/bin/zai-auth-env.js` (imported by the same `bin/opencode-guardrails` entry point as the cor-local defaults) bridges that gap: when `ZHIPU_API_KEY` is unset or empty, it reads opencode's auth store (`OPENCODE_AUTH_CONTENT`, else `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` — the same precedence as upstream `Auth.all`) and exports the stored API key as `ZHIPU_API_KEY`. A direct `zai` auth entry wins over a shared `zai-coding-plan` one, and a caller-supplied `ZHIPU_API_KEY` (shell or project `.env`, loaded earlier) always wins. Covered by `packages/guardrails/profile/plugins/zai-auth-bin-defaults.test.ts`.
+`packages/guardrails/bin/zai-auth-env.js` (imported by the same `bin/opencode-guardrails` entry point as the cor-local defaults) bridges that gap: when `ZHIPU_API_KEY` is unset or empty, it reads opencode's auth store (`OPENCODE_AUTH_CONTENT`, else `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` — the same precedence as upstream `Auth.all`) and exports the stored API key as `ZHIPU_API_KEY`. A direct `zai` auth entry wins over a shared `zai-coding-plan` one, and a caller-supplied `ZHIPU_API_KEY` (shell or project `.env`, loaded earlier) always wins. Covered by `packages/guardrails/profile/src/zai-auth-bin-defaults.test.ts`.
 
 The bridge fixes authentication, not billing: a Coding Plan key authenticates on the platform endpoint but the account has no platform balance there, so a re-enabled `zai` lane still answers `Insufficient balance or no resource package` until platform credits exist. `zai-coding-plan/*` (including `glm-5.3-flash`) works on the subscription. The lane's removal from `enabled_providers` is pinned by `model-whitelist.test.ts` ("the zai platform lane is not admitted in either copy") so a sync or hand-edit cannot silently re-admit it, and `guardrail.ts`'s `dropKeylessCatalogLanes` keeps machines without any stored key from ever seeing a re-declared lane.
 
@@ -146,7 +155,7 @@ The bridge fixes authentication, not billing: a Coding Plan key authenticates on
 - `COR_LOCAL_BASE_URL` defaults to `http://127.0.0.1:18082/v1` when unset or empty. A project `.env` (loaded earlier in the entry point) or an exported shell value both win over this default.
 - `COR_LOCAL_API_KEY`, when unset or empty, is read from a key file: `COR_LOCAL_KEY_FILE` if set, else `~/cluster-ops/cor-local.key`. The file must be owner-only permissions (`chmod 600`) and contain exactly one line matching `[A-Za-z0-9._~+/=-]+` — because `{env:VAR}` splices raw, unescaped bytes into the JSON config text (unlike `{file:...}`, which is `JSON.stringify`-escaped), a key containing `"`, `\`, or a newline would corrupt the whole config and take down every provider, not just cor-local. A file that fails validation is ignored with `cor-local: key file ignored (invalid format)` on stderr — the warning never includes the file's contents.
 
-`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so a keyless router (today's state — see ai-cluster packet A3a for the `--api-key` rollout) keeps working with `apiKey` resolving to `""`. This defaulting is covered by `packages/guardrails/profile/plugins/cor-local-bin-defaults.test.ts`, which unit-tests `cor-local-env.js` directly and runs the real `bin/opencode-guardrails` entry point against a stub binary to prove the `.env`-vs-default ordering, offline.
+`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so a keyless router (today's state — see ai-cluster packet A3a for the `--api-key` rollout) keeps working with `apiKey` resolving to `""`. This defaulting is covered by `packages/guardrails/profile/src/cor-local-bin-defaults.test.ts`, which unit-tests `cor-local-env.js` directly and runs the real `bin/opencode-guardrails` entry point against a stub binary to prove the `.env`-vs-default ordering, offline.
 
 **`opencode debug config` prints the resolved config, including the substituted `apiKey` — never paste its output into a GitHub issue or share it outside a private channel.**
 
@@ -162,7 +171,7 @@ opencode run --model cor-local/qwen3.8-27b "..."
 
 On Mac Studio itself, no export is needed — `bin/opencode-guardrails`'s defaults already point at the local router and read the key from `~/cluster-ops/cor-local.key`, including under a managed deploy.
 
-Three model ids are whitelisted: `deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/plugins/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
+Three model ids are whitelisted: `deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
 
 Usage:
 
