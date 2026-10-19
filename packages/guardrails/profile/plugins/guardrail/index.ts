@@ -22,6 +22,6 @@ export default {
   setup: async (ctx: any) => {
     const input = v1Input(ctx)
     const hooks = await guardrail.server(input, ctx?.options)
-    await bridge(ctx, hooks, { input, config: profileConfig() })
+    return bridge(ctx, hooks, { input, config: profileConfig() })
   },
 }

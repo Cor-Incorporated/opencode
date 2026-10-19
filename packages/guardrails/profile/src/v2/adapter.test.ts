@@ -172,6 +172,14 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
     await before("shell", { command: "echo ok" }) // an ordinary call passes
   })
 
+  test("a multi-file patch is judged per path: a protected later file or move destination is blocked (Codex #343 r3)", async () => {
+    const before = (patchText: string) =>
+      f.fire("tool.execute.before", { tool: "patch", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-patch", input: { patchText } })
+    const state = join(dir, ".opencode", "guardrails", "state.json")
+    await expect(before(`*** Begin Patch\n*** Update File: ${join(dir, "src", "ok.ts")}\n@@\n-1\n+2\n*** Update File: ${state}\n@@\n-a\n+b\n*** End Patch\n`)).rejects.toThrow(/blocked|guardrail/i)
+    await expect(before(`*** Begin Patch\n*** Update File: ${join(dir, "src", "ok.ts")}\n*** Move to: ${state}\n@@\n-1\n+2\n*** End Patch\n`)).rejects.toThrow(/blocked|guardrail/i)
+  })
+
   test("execute.after: the 2.x shell exit code reaches the 1.x metadata.exitCode and a tool error is a string", async () => {
     const e: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-after", input: { command: "echo ok" }, status: "completed", result: { content: "ok", metadata: { exit: 0 } } }
     await f.fire("tool.execute.after", e)
@@ -332,6 +340,18 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
     expect(events.statuses().ses_fail).toEqual({ type: "idle" })
   })
 
+  test("messages: a failure after a completed tool step is not hidden by that step's completed time (Codex #343 r3)", async () => {
+    events.apply({ type: "session.execution.failed", data: { sessionID: "ses_fail2", error: { message: "context preparation failed" } } })
+    f.ctx.session.context = async () => [
+      { type: "assistant", id: "a1", content: [{ type: "tool", id: "t1", name: "shell", state: { status: "completed", input: {}, content: [{ type: "text", text: "x" }] } }], time: { created: 1, completed: 2 } },
+    ]
+    const r = await client.session.messages({ path: { id: "ses_fail2" } })
+    expect(r.data!.at(-1)!.info.error).toEqual({ data: { message: "context preparation failed" } })
+    events.apply({ type: "session.execution.started", data: { sessionID: "ses_fail2" } }) // a new run clears it
+    const again = await client.session.messages({ path: { id: "ses_fail2" } })
+    expect(again.data!.at(-1)!.info.error).toBeUndefined()
+  })
+
   test("status: derived from session.status / execution events", () => {
     events.apply({ type: "session.status", data: { sessionID: "ses_x", status: { type: "busy" } } })
     events.apply({ type: "session.execution.succeeded", data: { sessionID: "ses_y" } })
@@ -382,6 +402,26 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
     await f.fire("session.prompt", expanded)
     expect(seen).toContain("implement|")
     expect(cmd.prompt.text).toBe("/review src/x.ts\n\nextra\n\n[advisory] fetch first")
+  })
+
+  test("chat.params receives message.model.variant, the shape team.ts recordModel reads (Codex #343 r3)", async () => {
+    const g = fakeCtx(dir)
+    const got: any[] = []
+    await bridge(g.ctx, { "chat.params": async (item: any) => void got.push(item) }, { input: v1Input(g.ctx) })
+    await g.fire("session.context", { sessionID: "ses_v", agent: "implement", model: { id: "glm-5.3", providerID: "zai-coding-plan", variant: "high" }, system: [], messages: [], options: {}, tools: {} })
+    expect(got[0].message.model.variant).toBe("high")
+  })
+
+  test("cleanup: the returned function stops the event loop (no handling after dispose, no resubscribe)", async () => {
+    const g = fakeCtx(dir)
+    const got: string[] = []
+    const stop = await bridge(g.ctx, { event: async ({ event }: any) => void got.push(event.type) }, { input: v1Input(g.ctx) })
+    g.emit({ type: "session.created", data: { sessionID: "ses_c1" } })
+    await new Promise((r) => setTimeout(r, 20))
+    await stop()
+    g.emit({ type: "session.created", data: { sessionID: "ses_c2" } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(got).toEqual(["session.created"])
   })
 
   test("event loop: 2.x {type,data} events reach the 1.x event hook as {type,properties}", async () => {

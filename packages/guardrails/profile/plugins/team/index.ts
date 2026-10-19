@@ -9,6 +9,6 @@ export default {
   setup: async (ctx: any) => {
     const input = v1Input(ctx)
     const hooks = await team.server(input)
-    await bridge(ctx, hooks, { input })
+    return bridge(ctx, hooks, { input })
   },
 }

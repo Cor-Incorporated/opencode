@@ -201,7 +201,9 @@ export function createClient(ctx: Ctx, events: EventStore) {
       const list = (await ctx.session.context({ sessionID: input.path.id })).map((m) => toV1Message(m))
       const failure = events.failure(input.path.id)
       const lastAssistant = [...list].reverse().find((m) => m.info.role === "assistant")
-      if (failure && (!lastAssistant || lastAssistant.info.time?.completed === undefined) && !lastAssistant?.info.error) {
+      // the failure is the latest execution outcome (a newer execution.started clears it); a completed assistant row
+      // from an earlier step must not hide it (Codex #343 r3 P1: tool step done, next step's preparation failed)
+      if (failure && !lastAssistant?.info.error) {
         list.push({
           info: { id: `failure-${failure.at}`, role: "assistant", finish: "error", time: { created: failure.at, completed: failure.at }, error: { data: { message: failure.message } } },
           parts: [],

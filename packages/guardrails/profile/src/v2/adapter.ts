@@ -49,13 +49,31 @@ const TOOL_V2: Record<string, string> = { bash: "shell", task: "subagent" }
 export function toV1Call(tool: string, input: unknown): { tool: string; args: Record<string, unknown> } {
   const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>
   if (tool === "patch" && typeof raw.patchText === "string") {
-    const files = [...raw.patchText.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((m) => m[1].trim())
+    const files = patchTargets(raw.patchText)
     return { tool: "edit", args: { ...raw, filePath: files[0] ?? "", content: raw.patchText, patchFiles: files } }
   }
   const args: Record<string, unknown> = { ...raw }
   if (typeof raw.path === "string" && raw.filePath === undefined) args.filePath = raw.path
   if (tool === "subagent" && typeof raw.agent === "string" && raw.subagent_type === undefined) args.subagent_type = raw.agent
   return { tool: TOOL_V1[tool] ?? tool, args }
+}
+
+/** Every path a patch touches: Update/Add/Delete headers and `*** Move to:` destinations, in order, de-duplicated. */
+export function patchTargets(patchText: string): string[] {
+  const found = [...patchText.matchAll(/^\*\*\* (?:(?:Update|Add|Delete) File|Move to): (.+)$/gm)].map((m) => m[1].trim())
+  return [...new Set(found)].filter(Boolean)
+}
+
+/**
+ * The 1.x calls a 2.x call stands for. A multi-file patch is one 1.x `edit` per touched path (move destinations
+ * included), so every path goes through the access guards — judging only the first file let a later protected path
+ * through (Codex #343 r3 P1).
+ */
+export function toV1Calls(tool: string, input: unknown): { tool: string; args: Record<string, unknown> }[] {
+  const call = toV1Call(tool, input)
+  const files = Array.isArray(call.args.patchFiles) ? (call.args.patchFiles as string[]) : []
+  if (tool !== "patch" || files.length <= 1) return [call]
+  return files.map((file) => ({ tool: call.tool, args: { ...call.args, filePath: file } }))
 }
 
 /** Write a (possibly mutated) 1.x args object back into the 2.x input shape. */
@@ -115,7 +133,8 @@ function commandOf(e: any): { command: string; args: string } | undefined {
 
 const CATALOG_TTL_MS = 60_000
 
-export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & { events: EventStore }; config?: unknown }) {
+/** Returns the 2.x `Cleanup`: stops the event loop so a plugin reload does not leave an old-generation subscriber. */
+export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & { events: EventStore }; config?: unknown }): Promise<() => Promise<void>> {
   const { events, directory, worktree } = opts.input
 
   if (typeof hooks.config === "function" && opts.config && typeof opts.config === "object") {
@@ -147,17 +166,22 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
   if (typeof hooks["tool.execute.before"] === "function") {
     await ctx.tool.hook("execute.before", async (e: any) => {
       const tool = String(e?.tool ?? "")
-      const call = toV1Call(tool, e?.input)
-      const out = { args: call.args }
-      await hooks["tool.execute.before"]({ tool: call.tool, sessionID: e?.sessionID, callID: e?.id }, out)
-      e.input = toV2Input(tool, out.args, e?.input)
+      const calls = toV1Calls(tool, e?.input)
+      let first: Record<string, unknown> | undefined
+      for (const call of calls) {
+        const out = { args: call.args }
+        await hooks["tool.execute.before"]({ tool: call.tool, sessionID: e?.sessionID, callID: e?.id }, out)
+        first ??= out.args
+      }
+      e.input = toV2Input(tool, first ?? {}, e?.input)
     })
   }
 
   if (typeof hooks["tool.execute.after"] === "function" || typeof hooks["tool.execute.error"] === "function") {
     await ctx.tool.hook("execute.after", async (e: any) => {
       const tool = String(e?.tool ?? "")
-      const call = toV1Call(tool, e?.input)
+      const calls = toV1Calls(tool, e?.input)
+      const call = calls[0]
       const ok = e?.status === "completed"
       if (!ok && typeof hooks["tool.execute.error"] === "function") {
         // fork-specific 1.x hook: a failed call reports through status:"error" in 2.x
@@ -170,6 +194,9 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
       if (!ok) meta.error = String(e?.error?.message ?? "error") // 1.x: a non-empty string marks a tool error
       const out = { title: ok ? "" : "Error", output: text, metadata: meta }
       await hooks["tool.execute.after"]({ tool: call.tool, sessionID: e?.sessionID, callID: e?.id, args: call.args }, out)
+      // the remaining files of a multi-file patch are tracked too (edit counts, SSOT / hygiene advisories)
+      for (const more of calls.slice(1))
+        await hooks["tool.execute.after"]({ tool: more.tool, sessionID: e?.sessionID, callID: e?.id, args: more.args }, { title: out.title, output: out.output, metadata: { ...out.metadata } })
       if (!ok) return
       const next = { ...(e.result ?? {}) }
       if (out.output !== text) next.content = out.output // e.g. secret redaction of shell output
@@ -222,7 +249,8 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
           cost: cost ? { input: cost.input, output: cost.output, cache: { read: cost.cache?.read, write: cost.cache?.write } } : undefined,
         },
         provider: { id: ref.providerID },
-        message: { variant: ref.variant },
+        // team.ts recordModel reads item.message.model.variant (Codex #343 r3 P2)
+        message: { model: { providerID: ref.providerID, modelID: id, variant: ref.variant }, variant: ref.variant },
       },
       e.options ?? (e.options = {}),
     )
@@ -296,10 +324,18 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
 
   // Event loop: feeds the status store (client.session.status) and the 1.x `event` hook. One failing handler must
   // not end the subscription (each event is isolated) and a dropped stream is re-subscribed with backoff.
-  void (async () => {
-    for (let attempt = 0; ; attempt++) {
+  let stopped = false
+  let iterator: AsyncIterator<unknown> | undefined
+  let wake: (() => void) | undefined
+  const loop = (async () => {
+    for (let attempt = 0; !stopped; attempt++) {
       try {
-        for await (const ev of ctx.event.subscribe()) {
+        const source = ctx.event.subscribe()
+        iterator = source[Symbol.asyncIterator]()
+        for (;;) {
+          const next = await iterator.next()
+          if (next.done || stopped) break
+          const ev = next.value
           attempt = 0
           events.apply(ev)
           if (typeof hooks.event !== "function") continue
@@ -313,11 +349,26 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
             warn(`event ${e?.type}`, error)
           }
         }
+        if (stopped) return
         warn("event stream", "ended; resubscribing")
       } catch (error) {
+        if (stopped) return
         warn("event stream", error)
       }
-      await new Promise((r) => setTimeout(r, Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5))))
+      await new Promise<void>((r) => {
+        wake = r
+        setTimeout(r, Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5)))
+      })
     }
   })()
+  void loop
+  return async () => {
+    stopped = true
+    wake?.()
+    // not awaited: return() on an async generator parked in a pending next() settles only at its next yield; the
+    // `stopped` flag makes the loop drop whatever arrives and never resubscribe
+    void Promise.resolve()
+      .then(() => iterator?.return?.())
+      .catch(() => undefined)
+  }
 }
