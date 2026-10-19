@@ -17,3 +17,5 @@ Required sections:
 - Next steps
 
 Include any pending approvals, denied operations, provider restrictions, or release gates that still block completion.
+
+<!-- guardrails:command=handoff -->

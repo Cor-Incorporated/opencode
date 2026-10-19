@@ -1,0 +1,117 @@
+# Repository gitleaks config, read by the org workflow Cor-Incorporated/.github/.github/workflows/gitleaks.yml
+# (`gitleaks git ... --config .gitleaks.toml` when this file exists).
+#
+# The default ruleset stays in force (useDefault). The allowlists below exist only because the fork's `dev` was
+# re-based onto upstream anomalyco/opencode `dev` (Cor-Incorporated/opencode#342 / #343): the PR scan range then
+# contains ~4800 upstream commits, and 30 default-rule hits in them are not real secrets: keybind strings, i18n
+# message keys, a generated SDK, and test fixtures (redaction tests use fake keys on purpose). Scan of 2026-10-19
+# (gitleaks 8.30.1, `origin/dev..b7e7730ed3`): 30 findings, 0 in fork-authored commits.
+#
+# Each entry is scoped to ONE upstream commit AND the exact files it touched (condition = "AND"), so the same files
+# changed by any other commit (later upstream syncs, every fork commit) are still scanned.
+# Do not widen an entry to a path-only or rule-only allowlist; add a new commit-scoped entry per upstream sync instead.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "upstream cc8886c8bb73: jwt in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["cc8886c8bb738a0c7e7075a57af6dedd6c4f6508"]
+paths = [
+  '''^packages/ai/test/fixtures/recordings/runway\-video/generates\-a\-video\.json$''',
+]
+
+[[allowlists]]
+description = "upstream 9e0d3976e1b4: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["9e0d3976e1b45a92e51dc9a8870ab28d9de11f81"]
+paths = [
+  '''^packages/app/e2e/performance/timeline\-stability/context\-matrix\.spec\.ts$''',
+]
+
+[[allowlists]]
+description = "upstream 655b3c4c2209: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["655b3c4c2209d7b92108d93a44e13c2512da3a7b"]
+paths = [
+  '''^packages/app/src/context/language\.tsx$''',
+]
+
+[[allowlists]]
+description = "upstream 5fa0a4238647: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["5fa0a4238647dc25df137cb3df7e0d7eb8454d67"]
+paths = [
+  '''^packages/app/src/shell/titlebar/tab\-strip\.tsx$''',
+]
+
+[[allowlists]]
+description = "upstream 0dcedc199c83: generic-api-key in 14 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["0dcedc199c83c88ef206b4d89351f4a0e4a9a61d"]
+paths = [
+  '''^packages/console/app/src/i18n/ar\.ts$''',
+  '''^packages/console/app/src/i18n/br\.ts$''',
+  '''^packages/console/app/src/i18n/da\.ts$''',
+  '''^packages/console/app/src/i18n/de\.ts$''',
+  '''^packages/console/app/src/i18n/en\.ts$''',
+  '''^packages/console/app/src/i18n/es\.ts$''',
+  '''^packages/console/app/src/i18n/fr\.ts$''',
+  '''^packages/console/app/src/i18n/it\.ts$''',
+  '''^packages/console/app/src/i18n/no\.ts$''',
+  '''^packages/console/app/src/i18n/pl\.ts$''',
+  '''^packages/console/app/src/i18n/ru\.ts$''',
+  '''^packages/console/app/src/i18n/th\.ts$''',
+  '''^packages/console/app/src/i18n/uk\.ts$''',
+  '''^packages/session\-ui/src/components/tool\-count\-summary\.tsx$''',
+]
+
+[[allowlists]]
+description = "upstream 3dd29094f4bc: gcp-api-key, generic-api-key in 2 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["3dd29094f4bce7396e16b764ac2a0242e14fd1cd"]
+paths = [
+  '''^packages/http\-recorder/test/http\.test\.ts$''',
+  '''^packages/http\-recorder/test/redaction\.test\.ts$''',
+]
+
+[[allowlists]]
+description = "upstream ef2140d1219d: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["ef2140d1219d98578663b9d7b13831a89c48810b"]
+paths = [
+  '''^packages/sdk/js/src/v2/gen/sdk\.gen\.ts$''',
+]
+
+[[allowlists]]
+description = "upstream 653b7d79cd33: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["653b7d79cd333a0f391cc14175feeb7075d11254"]
+paths = [
+  '''^packages/tui/test/config\-v2\.test\.tsx$''',
+]
+
+[[allowlists]]
+description = "upstream ab20a7b4a38d: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["ab20a7b4a38de6df3f4745272d13f892874417cb"]
+paths = [
+  '''^packages/tui/test/config\.test\.tsx$''',
+]
+
+[[allowlists]]
+description = "upstream 5ee4c1082a54: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["5ee4c1082a544bb870161092c4dd6b8845e82ca7"]
+paths = [
+  '''^packages/tui/test/config\.test\.tsx$''',
+]
+
+[[allowlists]]
+description = "upstream 4f60bde50272: generic-api-key in 1 file(s), not real secrets (#343)"
+condition = "AND"
+commits = ["4f60bde50272da49822ac4fbac65a50cac74c4b3"]
+paths = [
+  '''^packages/tui/test/config\.test\.tsx$''',
+]

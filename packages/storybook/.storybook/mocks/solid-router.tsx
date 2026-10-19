@@ -11,16 +11,20 @@ export function useNavigate() {
   return () => undefined
 }
 
+export function useSearchParams<T extends Record<string, string>>() {
+  return [{} as Partial<T>, () => undefined] as const
+}
+
+export function useIsRouting() {
+  return () => false
+}
+
 export function useLocation() {
   return {
     pathname: "/story/session/story-session",
     search: "",
     hash: "",
   }
-}
-
-export function useSearchParams<T extends Record<string, string | undefined> = Record<string, string | undefined>>() {
-  return [{} as Partial<T>, () => undefined] as const
 }
 
 export function MemoryRouter(props: ParentProps) {

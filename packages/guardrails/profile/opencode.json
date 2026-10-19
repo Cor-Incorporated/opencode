@@ -5,9 +5,9 @@
     "AGENTS.md"
   ],
   "default_agent": "implement",
-  "plugin": [
-    "./plugins/guardrail.ts",
-    "./plugins/team.ts"
+  "plugins": [
+    "./plugins/guardrail",
+    "./plugins/team"
   ],
   "enabled_providers": [
     "zai-coding-plan",
@@ -17,10 +17,6 @@
     "cor-local"
   ],
   "share": "disabled",
-  "server": {
-    "hostname": "127.0.0.1",
-    "mdns": false
-  },
   "formatter": {
     "prettier": {
       "command": [

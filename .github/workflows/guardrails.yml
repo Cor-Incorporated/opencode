@@ -1,0 +1,38 @@
+# Fork-only CI for the one fork-owned package. Upstream's workflows keep running for everything else;
+# this job is what gates packages/guardrails on the fork `dev` (2.x re-platform, Cor-Incorporated/opencode#342).
+name: guardrails
+
+on:
+  pull_request:
+    paths:
+      - "packages/guardrails/**"
+      - "scripts/sync-model-whitelist.py"
+      - ".github/workflows/guardrails.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "packages/guardrails/**"
+      - "scripts/sync-model-whitelist.py"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The profile plugins import only node/bun builtins and local files, so no `bun install` is needed:
+      # the adapter test drives the real v2 entries against a recording 2.x ctx (profile/src/v2/adapter.test.ts)
+      - name: bun test profile/src profile/plugins
+        working-directory: packages/guardrails
+        run: bun test profile/src profile/plugins
+      - name: model whitelist ↔ catalog snapshot
+        run: python3 scripts/sync-model-whitelist.py

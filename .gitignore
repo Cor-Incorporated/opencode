@@ -7,15 +7,14 @@ node_modules
 .idea
 .vscode
 .codex
-.claude/state/
-.opencode/guardrails/
 *~
 playground
 tmp
 dist
+dist-node
 ts-dist
 .turbo
-**/.artifacts/
+.typecheck-profiles
 **/.serena
 .serena/
 **/.omo
@@ -27,14 +26,14 @@ Session.vim
 a.out
 target
 .scripts
+.cache
 .direnv/
 
 # Local dev files
 opencode-dev
 UPCOMING_CHANGELOG.md
+RELEASE_REVIEW.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
-packages/opencode/.opencode/
-packages/opencode/config.json
-packages/opencode/src/provider/models-snapshot.*
+/artifacts/

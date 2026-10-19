@@ -59,7 +59,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANAGED = ROOT / "packages/guardrails/managed/opencode.json"
 PROFILE = ROOT / "packages/guardrails/profile/opencode.json"
-PATTERNS = ROOT / "packages/guardrails/profile/plugins/guardrail-patterns.ts"
+PATTERNS = ROOT / "packages/guardrails/profile/src/guardrail-patterns.ts"
 SNAPSHOT = ROOT / "packages/guardrails/model-catalog-snapshot.json"
 DEFAULT_CATALOG = Path.home() / ".cache/opencode/models.json"
 

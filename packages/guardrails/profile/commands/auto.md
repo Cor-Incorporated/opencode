@@ -17,3 +17,5 @@ Do NOT stop until all steps are complete or a hard blocker is encountered.
 Report blockers explicitly with evidence.
 
 $ARGUMENTS
+
+<!-- guardrails:command=auto -->

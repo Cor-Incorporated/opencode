@@ -16,3 +16,5 @@ Required sections:
 - Recommended next step
 
 Default scope is the current uncommitted work unless `$ARGUMENTS` narrows it.
+
+<!-- guardrails:command=review -->

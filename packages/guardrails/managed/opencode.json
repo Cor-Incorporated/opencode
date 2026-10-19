@@ -9,10 +9,6 @@
     "cor-local"
   ],
   "share": "disabled",
-  "server": {
-    "hostname": "127.0.0.1",
-    "mdns": false
-  },
   "provider": {
     "zai-coding-plan": {
       "whitelist": [
