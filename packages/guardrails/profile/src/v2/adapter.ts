@@ -26,8 +26,16 @@
 // `agent`, the shell result carries `metadata.exit`). The 1.x guards compare against the old names, so every tool call
 // is translated to the 1.x shape before the hook and back to the 2.x shape after it (`toV1Call` / `toV2Input`).
 //
+// Paths: a 2.x tool resolves a relative `path`, patch path or shell `workdir` against ctx.location.directory, while
+// the 1.x guards (guardrail-patterns norm()/rel()) resolve against process.cwd(). The two differ whenever the server
+// was started elsewhere — a team worker moved into its own worktree (team.ts session.create → session.move) keeps
+// the server's startup cwd — so the 1.x view carries absolute paths resolved at the location (opencode#345), and a
+// path the guard did not rewrite goes back to the 2.x tool exactly as the model wrote it.
+//
 // Throwing from a 1.x hook keeps its meaning: a thrown Error in execute.before denies the tool call (Tool.Error), in
 // the context hook it aborts the model request (the provider gate).
+import os from "node:os"
+import path from "node:path"
 import { createClient, type V1Client } from "./client"
 import { EventStore } from "./events"
 import { inputSchema, withDefaults, type ToolContext, type ToolDefinition } from "./tool"
@@ -45,15 +53,30 @@ type Ctx = any
 const TOOL_V1: Record<string, string> = { shell: "bash", subagent: "task" }
 const TOOL_V2: Record<string, string> = { bash: "shell", task: "subagent" }
 
-/** The 1.x view of a 2.x tool call: renamed tool, `filePath` / `subagent_type` keys, a patch as an edit of its first file. */
-export function toV1Call(tool: string, input: unknown): { tool: string; args: Record<string, unknown> } {
+/**
+ * Where a 2.x tool puts a path argument (core file-access.ts `resolvePath`): `~` / `~/…` under the home directory,
+ * anything else resolved against `base` (ctx.location.directory). Without a base the path is kept as given.
+ */
+export function resolveIn(base: string | undefined, file: string): string {
+  if (base === undefined || file === "") return file
+  if (file === "~") return os.homedir()
+  if (file.startsWith("~/")) return path.join(os.homedir(), file.slice(2))
+  return path.resolve(base, file)
+}
+
+/**
+ * The 1.x view of a 2.x tool call: renamed tool, `filePath` / `subagent_type` keys, a patch as an edit of its first
+ * file. With `base` every path (file, patch headers and move destinations, shell workdir) is absolute at that base.
+ */
+export function toV1Call(tool: string, input: unknown, base?: string): { tool: string; args: Record<string, unknown> } {
   const raw = (input && typeof input === "object" ? input : {}) as Record<string, unknown>
   if (tool === "patch" && typeof raw.patchText === "string") {
-    const files = patchTargets(raw.patchText)
+    const files = [...new Set(patchTargets(raw.patchText).map((file) => resolveIn(base, file)))]
     return { tool: "edit", args: { ...raw, filePath: files[0] ?? "", content: raw.patchText, patchFiles: files } }
   }
   const args: Record<string, unknown> = { ...raw }
-  if (typeof raw.path === "string" && raw.filePath === undefined) args.filePath = raw.path
+  if (typeof raw.path === "string" && raw.filePath === undefined) args.filePath = resolveIn(base, raw.path)
+  if (tool === "shell" && typeof raw.workdir === "string") args.workdir = resolveIn(base, raw.workdir)
   if (tool === "subagent" && typeof raw.agent === "string" && raw.subagent_type === undefined) args.subagent_type = raw.agent
   return { tool: TOOL_V1[tool] ?? tool, args }
 }
@@ -69,22 +92,26 @@ export function patchTargets(patchText: string): string[] {
  * included), so every path goes through the access guards — judging only the first file let a later protected path
  * through (Codex #343 r3 P1).
  */
-export function toV1Calls(tool: string, input: unknown): { tool: string; args: Record<string, unknown> }[] {
-  const call = toV1Call(tool, input)
+export function toV1Calls(tool: string, input: unknown, base?: string): { tool: string; args: Record<string, unknown> }[] {
+  const call = toV1Call(tool, input, base)
   const files = Array.isArray(call.args.patchFiles) ? (call.args.patchFiles as string[]) : []
   if (tool !== "patch" || files.length <= 1) return [call]
   return files.map((file) => ({ tool: call.tool, args: { ...call.args, filePath: file } }))
 }
 
-/** Write a (possibly mutated) 1.x args object back into the 2.x input shape. */
-export function toV2Input(tool: string, args: Record<string, unknown>, original: unknown): unknown {
+/**
+ * Write a (possibly mutated) 1.x args object back into the 2.x input shape. A path still equal to its `base`
+ * resolution (see `toV1Call`) was not rewritten by a guard and goes back as the model wrote it.
+ */
+export function toV2Input(tool: string, args: Record<string, unknown>, original: unknown, base?: string): unknown {
   const raw = (original && typeof original === "object" ? original : {}) as Record<string, unknown>
   if (tool === "patch") return raw // the guards only read a patch; its text is never rewritten
   const out: Record<string, unknown> = { ...args }
   if ("filePath" in out && typeof raw.path === "string") {
-    if (out.filePath !== raw.path) out.path = out.filePath
+    if (out.filePath !== raw.path && out.filePath !== resolveIn(base, raw.path)) out.path = out.filePath
     delete out.filePath
   }
+  if (tool === "shell" && typeof raw.workdir === "string" && out.workdir === resolveIn(base, raw.workdir)) out.workdir = raw.workdir
   if (tool === "subagent" && "subagent_type" in out) {
     if (out.subagent_type !== raw.agent) out.agent = out.subagent_type
     delete out.subagent_type
@@ -166,21 +193,21 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
   if (typeof hooks["tool.execute.before"] === "function") {
     await ctx.tool.hook("execute.before", async (e: any) => {
       const tool = String(e?.tool ?? "")
-      const calls = toV1Calls(tool, e?.input)
+      const calls = toV1Calls(tool, e?.input, directory)
       let first: Record<string, unknown> | undefined
       for (const call of calls) {
         const out = { args: call.args }
         await hooks["tool.execute.before"]({ tool: call.tool, sessionID: e?.sessionID, callID: e?.id }, out)
         first ??= out.args
       }
-      e.input = toV2Input(tool, first ?? {}, e?.input)
+      e.input = toV2Input(tool, first ?? {}, e?.input, directory)
     })
   }
 
   if (typeof hooks["tool.execute.after"] === "function" || typeof hooks["tool.execute.error"] === "function") {
     await ctx.tool.hook("execute.after", async (e: any) => {
       const tool = String(e?.tool ?? "")
-      const calls = toV1Calls(tool, e?.input)
+      const calls = toV1Calls(tool, e?.input, directory)
       const call = calls[0]
       const ok = e?.status === "completed"
       if (!ok && typeof hooks["tool.execute.error"] === "function") {
