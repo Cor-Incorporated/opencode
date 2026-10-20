@@ -56,15 +56,14 @@ export function createAccessHandlers(ctx: GuardrailContext) {
    * A shell `workdir` moves where the command's relative paths land (opencode#345): `> state.json` run in
    * .opencode/guardrails, or `cd ./guardrails` run in .opencode, reach the runtime without the literal
    * `.opencode/guardrails/` the text check looks for. For a workdir other than the session directory, true when the
-   * shell runs inside the runtime dir or a path token resolved at the workdir lands in it. Quoted text with spaces
-   * (commit messages, PR bodies) is prose, not a path. Without such a workdir the text check alone decides, as before;
-   * `cd` inside the command and shell expansion other than $PWD are not followed.
+   * shell runs inside a runtime dir (ctx.runtimes) or a path token resolved at the workdir lands in one. Quoted text
+   * with spaces (commit messages, PR bodies) is prose, not a path. Without such a workdir the text check alone decides,
+   * as before; `cd` inside the command and shell expansion other than $PWD are not followed.
    */
   function workdirReachesRuntime(cmd: string, workdir: string) {
     const base = norm(workdir)
     if (base === norm(ctx.input.directory)) return false
-    const runtime = norm(path.join(ctx.input.worktree, ".opencode", "guardrails"))
-    const inside = (file: string) => file === runtime || file.startsWith(runtime + "/")
+    const inside = (file: string) => ctx.runtimes.some((runtime) => file === runtime || file.startsWith(runtime + "/"))
     if (inside(base)) return true
     return cmd
       .replace(/"[^"]*"|'[^']*'/g, (quoted) => (/\s/.test(quoted) ? " " : quoted)) // pairs left to right
