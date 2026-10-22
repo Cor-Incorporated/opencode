@@ -15,6 +15,8 @@
  *                    (ctx.location.directory), not against the server's process.cwd() (opencode#345)
  *   F6 subdirectory  a session opened below the repo root keeps its state under location.directory, and that runtime
  *                    is plugin-owned just like the one under the repo root
+ *   F7 ordinary      cwd == location: `cd` inside a shell command moves the base like a workdir, a dir-target writer
+ *                    naming the bare runtime dir counts, and case variants are the runtime where the FS folds case (#349)
  *
  * Run: bun test packages/guardrails/profile/src/v2/adapter.test.ts
  */
@@ -694,5 +696,83 @@ describe("F6 a session in a repo subdirectory: the runtime under location.direct
   test("cleanup", () => {
     rmSync(repo, { recursive: true, force: true })
     rmSync(elsewhere, { recursive: true, force: true })
+  })
+})
+
+describe("F7 an ordinary session (cwd == location): in-command `cd`, the bare runtime dir and case variants (opencode#349)", () => {
+  // The normal 1-project start: no workdir, or workdir = the session directory. `cd` inside the command moves where
+  // the later relative paths land, exactly like a workdir does (OC-N1). APFS (the macOS default) is case-insensitive,
+  // so `.OPENCODE/guardrails/state.json` names the real state file there (OC-N2).
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cd-")))
+  const f = fakeCtx(dir)
+  const before = (tool: string, input: Record<string, unknown>) =>
+    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+
+  test("setup", async () => {
+    await guardrailV2.setup(f.ctx)
+  })
+
+  test("shell: `cd` into the runtime, or a mutation that targets the runtime dir itself, is a runtime mutation", async () => {
+    const rows = await at(dir, async () => ({
+      "explicit path (control)": await verdict(before("shell", { command: `printf '{}' > ${REL}` })),
+      "cd runtime &&": await verdict(before("shell", { command: `cd .opencode/guardrails && printf '{"reviewed":true}' > state.json` })),
+      "cd runtime; rm": await verdict(before("shell", { command: "cd .opencode/guardrails; rm state.json" })),
+      "cd .opencode && route": await verdict(before("shell", { command: "cd .opencode && printf '{}' > guardrails/state.json" })),
+      "cd twice": await verdict(before("shell", { command: "cd .opencode && cd guardrails && printf x > state.json" })),
+      "cp into the bare runtime dir": await verdict(before("shell", { command: "cp /tmp/x.json .opencode/guardrails" })),
+      "rm -rf the bare runtime dir": await verdict(before("shell", { command: "rm -rf .opencode/guardrails" })),
+      "workdir = session dir, cd .opencode": await verdict(before("shell", { command: "cd .opencode && printf x > guardrails/state.json", workdir: dir })),
+      "cd case variant": await verdict(before("shell", { command: "cd .OPENCODE/Guardrails && printf x > state.json" })),
+      "cd ordinary dir (pass)": await verdict(before("shell", { command: "cd src && printf ok > out.txt" })),
+      "cd runtime, read-only (pass)": await verdict(before("shell", { command: "cd .opencode/guardrails && cat state.json" })),
+      "cd .opencode, list (pass)": await verdict(before("shell", { command: "cd .opencode && ls guardrails" })),
+      "cd out of runtime before writing (pass)": await verdict(before("shell", { command: "cd .opencode/guardrails && cd ../.. && printf ok > out.txt" })),
+      "mkdir -p the runtime dir (pass)": await verdict(before("shell", { command: "mkdir -p .opencode/guardrails" })),
+      "runtime dir in .gitignore (pass)": await verdict(before("shell", { command: "echo .opencode/guardrails >> .gitignore" })),
+      "sibling name (pass)": await verdict(before("shell", { command: "cd .opencode/guardrailsX && printf x > a.json" })),
+    }))
+    expect(rows).toEqual({
+      "explicit path (control)": "runtime-mutation",
+      "cd runtime &&": "runtime-mutation",
+      "cd runtime; rm": "runtime-mutation",
+      "cd .opencode && route": "runtime-mutation",
+      "cd twice": "runtime-mutation",
+      "cp into the bare runtime dir": "runtime-mutation",
+      "rm -rf the bare runtime dir": "runtime-mutation",
+      "workdir = session dir, cd .opencode": "runtime-mutation",
+      "cd case variant": caseInsensitive() ? "runtime-mutation" : "PASS",
+      "cd ordinary dir (pass)": "PASS",
+      "cd runtime, read-only (pass)": "PASS", // same allowance as `cat .opencode/guardrails/state.json`
+      "cd .opencode, list (pass)": "PASS",
+      "cd out of runtime before writing (pass)": "PASS",
+      "mkdir -p the runtime dir (pass)": "PASS",
+      "runtime dir in .gitignore (pass)": "PASS",
+      "sibling name (pass)": "PASS",
+    })
+  })
+
+  test("edit/write/read of a case variant of the state path is denied where the filesystem folds case", async () => {
+    const expected = caseInsensitive() ? "plugin-owned" : "PASS"
+    const rows = await at(dir, async () => ({
+      "edit .OPENCODE REL": await verdict(before("edit", { path: ".OPENCODE/guardrails/state.json", oldString: "a", newString: "b" })),
+      "write Guardrails ABS": await verdict(before("write", { path: join(dir, ".opencode", "Guardrails", "state.json"), content: "{}" })),
+      "read STATE.JSON REL": await verdict(before("read", { path: ".opencode/GUARDRAILS/state.json" })),
+      "edit lowercase REL (control)": await verdict(before("edit", { path: REL, oldString: "a", newString: "b" })),
+    }))
+    expect(rows).toEqual({
+      "edit .OPENCODE REL": expected,
+      "write Guardrails ABS": expected,
+      "read STATE.JSON REL": expected,
+      "edit lowercase REL (control)": "plugin-owned",
+    })
+  })
+
+  /** The answer the guard must agree with: does the swapped-case name reach the real runtime dir on this machine? */
+  function caseInsensitive() {
+    return existsSync(join(dir, ".OPENCODE", "GUARDRAILS"))
+  }
+
+  test("cleanup", () => {
+    rmSync(dir, { recursive: true, force: true })
   })
 })

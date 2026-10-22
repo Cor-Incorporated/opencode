@@ -64,14 +64,16 @@ old names, so the adapter translates every tool call to the 1.x shape before the
 (`toV1Call` / `toV2Input`); a native `patch` is judged as one `edit` per touched path (move destinations included).
 A 2.x tool resolves a relative `path`, patch path or shell `workdir` against `ctx.location.directory`, while the 1.x
 guards resolve against `process.cwd()`; the two differ for a team worker moved into its own worktree on a server
-started elsewhere, so the 1.x view carries those paths already absolute at the location, and for a shell `workdir`
-other than the session directory the runtime guard resolves the command's path tokens at that workdir instead of
-matching `.opencode/guardrails/` text only (Cor-Incorporated/opencode#345). A path no guard rewrote goes back to the
-tool as written.
+started elsewhere, so the 1.x view carries those paths already absolute at the location. The shell runtime guard
+resolves the command's path tokens at the shell `workdir` (or the session directory without one) and follows each
+`cd`/`pushd` inside the command, instead of matching `.opencode/guardrails/` text only (Cor-Incorporated/opencode#345,
+#349). A dir-target writer (`cp`, `mv`, `rm`, `tar`, …) naming the runtime dir itself counts too; globs, `eval` and
+`sh -c` are not followed. A path no guard rewrote goes back to the tool as written.
 The plugin keeps its state in `<session directory>/.opencode/guardrails` and team runs in
 `<project root>/.opencode/guardrails/team-runs`. A session opened below the repo root has the two roots apart (core walks
-up to `.git` for the project), so both are plugin-owned for file tools and for the shell workdir check
-(Cor-Incorporated/opencode#347).
+up to `.git` for the project), so both are plugin-owned for file tools and for the shell check
+(Cor-Incorporated/opencode#347). On a filesystem that folds case (APFS, NTFS) a case variant such as
+`.OPENCODE/Guardrails/state.json` is the same file and is plugin-owned as well (#349).
 Worker permission rules and the 1.x per-prompt `tools: { x: false }` lists go through the same mapping as 2.x
 `permissions` (deny rules), and a worker
 created with `parentID` is moved to its isolated directory afterwards because the 2.x host lets a child inherit the
