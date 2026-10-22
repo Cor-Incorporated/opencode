@@ -1,4 +1,3 @@
-import { homedir } from "os"
 import path from "path"
 import {
   MUTATING_TOOLS,
@@ -16,6 +15,7 @@ import {
   text,
 } from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
+import { shellReachesRuntime, shellReadOnly } from "./guardrail-shell"
 
 export function createAccessHandlers(ctx: GuardrailContext) {
   function resetReviewEvidence() {
@@ -45,8 +45,8 @@ export function createAccessHandlers(ctx: GuardrailContext) {
   }
 
   function guardrailRuntimeReadOnlyCommand(cmd: string) {
-    const trimmed = cmd.trim().replace(/^(?:cd\s+[^;&|\n]*(?:&&|;)\s*)+/i, "") // `cd <dir> && cat x` reads at <dir>
-    if (bash(cmd)) return false
+    const trimmed = cmd.trim()
+    if (bash(trimmed)) return false
     if (/\bfind\b[\s\S]*(?:\s-delete\b|\s-exec\b|\s-ok\b)/i.test(trimmed)) return false
     return /^(?:ls|cat|grep|egrep|fgrep|rg|find|pwd|stat|wc|head|tail|sed\s+-n|test|\[|readlink|file|du)\b/i.test(
       trimmed,
@@ -54,43 +54,23 @@ export function createAccessHandlers(ctx: GuardrailContext) {
   }
 
   /**
-   * Where a shell command's relative paths land moves with its `workdir` (opencode#345) and with each `cd` inside the
-   * command (opencode#349): `cd .opencode/guardrails && printf x > state.json` reaches the runtime without the literal
-   * `.opencode/guardrails/` the text check looks for, in an ordinary session too. The command is split into segments
-   * at `&&`, `||`, `;`, `|` and newlines; a `cd`/`pushd` segment moves the base the later segments run at, starting
-   * from the workdir or the session directory. True when a segment runs inside a runtime dir, a path token resolved at
-   * its base lands inside one, or a dir-target writer (cp, mv, rm, tar, …) names a runtime dir itself. A bare runtime
-   * dir named by any other command (`mkdir -p`, `git check-ignore`, `echo … >> .gitignore`) is not a mutation of it.
-   * Quoted text with spaces (commit messages, PR bodies) is prose, not a path. Globs, `eval`, `sh -c` and shell
-   * expansion other than $PWD are not followed.
+   * A shell `workdir` moves where the command's relative paths land (opencode#345): `> state.json` run in
+   * .opencode/guardrails, or `cd ./guardrails` run in .opencode, reach the runtime without the literal
+   * `.opencode/guardrails/` the text check looks for. For a workdir other than the session directory, true when the
+   * shell runs inside a runtime dir (ctx.runtimes) or a path token resolved at the workdir lands in one. Quoted text
+   * with spaces (commit messages, PR bodies) is prose, not a path. Without such a workdir the text check alone decides,
+   * as before; `cd` inside the command and shell expansion other than $PWD are not followed.
    */
-  function shellReachesRuntime(cmd: string, workdir: string) {
-    const segments = cmd
+  function workdirReachesRuntime(cmd: string, workdir: string) {
+    const base = norm(workdir)
+    if (base === norm(ctx.input.directory)) return false
+    const inside = (file: string) => ctx.runtimes.some((runtime) => file === runtime || file.startsWith(runtime + "/"))
+    if (inside(base)) return true
+    return cmd
       .replace(/"[^"]*"|'[^']*'/g, (quoted) => (/\s/.test(quoted) ? " " : quoted)) // pairs left to right
-      .split(/&&|\|\||[;|&\n]/)
-    let base = norm(path.resolve(ctx.input.directory, workdir))
-    for (const segment of segments) {
-      const words = segment
-        .split(/[\s()<>]+/)
-        .map((token) => token.replace(/['"`]/g, "").replace(/^[^=]*=/, "").replace(/^\$\{?PWD\}?(?=\/|$)/, () => base))
-        .filter((token) => token !== "")
-      const name = segment.trim().split(/\s+/).find((word) => !/^(?:[A-Za-z_]\w*=\S*|sudo|command)$/.test(word)) ?? ""
-      const args = words.filter((token) => !token.startsWith("-"))
-      if (/^(?:cd|pushd)$/.test(name)) {
-        const target = args.find((token) => !/^(?:cd|pushd)$/.test(token))
-        base = target === undefined ? norm(homedir()) : norm(path.resolve(base, target))
-        continue
-      }
-      if (words.length === 0) continue
-      if (ctx.runtime(base)) return true
-      const writesDir = /^(?:cp|mv|rm|rmdir|rsync|install|ln|ditto|tar|unzip|chmod|chown)$/.test(name)
-      const reaches = (token: string) => {
-        const file = path.resolve(base, token)
-        return ctx.hidden(file) || (writesDir && ctx.runtime(file))
-      }
-      if (args.some(reaches)) return true
-    }
-    return false
+      .split(/[\s;&|()<>]+/)
+      .map((token) => token.replace(/['"`]/g, "").replace(/^[^=]*=/, "").replace(/^\$\{?PWD\}?(?=\/|$)/, () => base))
+      .some((token) => token !== "" && !token.startsWith("-") && inside(norm(path.resolve(base, token))))
   }
 
   function inlineInterpreterShell(cmd: string) {
@@ -130,14 +110,16 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         throw new Error(text("shell access to protected files"))
       }
       const workdir = typeof out.args?.workdir === "string" ? out.args.workdir : ""
-      const touchesGuardrailRuntime = /\.opencode\/guardrails\//i.test(file) || shellReachesRuntime(cmd, workdir)
-      if (touchesGuardrailRuntime && !guardrailRuntimeReadOnlyCommand(cmd)) {
+      const pathHit = file.includes(".opencode/guardrails/") || (workdir !== "" && workdirReachesRuntime(cmd, workdir))
+      // opencode#349: in-command cd, the bare runtime dir and case variants. ORed on top, so it only adds blocks.
+      const shellHit = shellReachesRuntime(ctx, cmd, workdir)
+      const touchesGuardrailRuntime = pathHit || shellHit
+      if ((pathHit && !guardrailRuntimeReadOnlyCommand(cmd)) || (shellHit && !shellReadOnly(cmd))) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
       }
-      // OC-D2: interpreter block only when the command also reaches or mentions the guardrail runtime path. The code an
-      // interpreter runs is quoted prose to shellReachesRuntime, so the text check here also takes the bare dir name.
-      if (inlineInterpreterShell(cmd) && (touchesGuardrailRuntime || /\.opencode\/guardrails/i.test(file))) {
+      // OC-D2: interpreter block only when the command also mentions guardrail runtime path
+      if (inlineInterpreterShell(cmd) && (cmd.includes(".opencode/guardrails") || shellHit)) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "interpreter shell can mutate guardrail runtime" })
         throw new Error(text("interpreter shell can mutate guardrail runtime"))
       }

@@ -64,11 +64,14 @@ old names, so the adapter translates every tool call to the 1.x shape before the
 (`toV1Call` / `toV2Input`); a native `patch` is judged as one `edit` per touched path (move destinations included).
 A 2.x tool resolves a relative `path`, patch path or shell `workdir` against `ctx.location.directory`, while the 1.x
 guards resolve against `process.cwd()`; the two differ for a team worker moved into its own worktree on a server
-started elsewhere, so the 1.x view carries those paths already absolute at the location. The shell runtime guard
-resolves the command's path tokens at the shell `workdir` (or the session directory without one) and follows each
-`cd`/`pushd` inside the command, instead of matching `.opencode/guardrails/` text only (Cor-Incorporated/opencode#345,
-#349). A dir-target writer (`cp`, `mv`, `rm`, `tar`, …) naming the runtime dir itself counts too; globs, `eval` and
-`sh -c` are not followed. A path no guard rewrote goes back to the tool as written.
+started elsewhere, so the 1.x view carries those paths already absolute at the location. For a shell `workdir` other
+than the session directory the runtime guard resolves the command's path tokens at that workdir instead of matching
+`.opencode/guardrails/` text only (Cor-Incorporated/opencode#345). `guardrail-shell.ts` adds blocks on top of that and
+never removes one (#349). When a command could change its directory (`cd` in any spelling, `pushd`/`popd`, CDPATH,
+`-C`, `$(…)`), every path token counts as a possible base. The guard does not try to work out which `cd` ran. It also
+blocks a dir-target writer (`cp`, `mv`, `rm`, `tar`, `find -delete`, …) that names the runtime or `.opencode`, a glob
+that can match the runtime, and quoted code under `eval`, `sh -c` and inline interpreters. Such a command passes only
+when every segment is read-only. A path no guard rewrote goes back to the tool as written.
 The plugin keeps its state in `<session directory>/.opencode/guardrails` and team runs in
 `<project root>/.opencode/guardrails/team-runs`. A session opened below the repo root has the two roots apart (core walks
 up to `.git` for the project), so both are plugin-owned for file tools and for the shell check
