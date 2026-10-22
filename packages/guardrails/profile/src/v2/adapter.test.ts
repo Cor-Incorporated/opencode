@@ -13,15 +13,18 @@
  *   F4 prompt        chat.message parts appended by a hook become prompt.text; "/review …" reaches command.execute.before
  *   F5 location      a relative path / patch path / shell workdir is judged where the 2.x tool resolves it
  *                    (ctx.location.directory), not against the server's process.cwd() (opencode#345)
+ *   F6 subdirectory  a session opened below the repo root keeps its state under location.directory, and that runtime
+ *                    is plugin-owned just like the one under the repo root
  *
  * Run: bun test packages/guardrails/profile/src/v2/adapter.test.ts
  */
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import guardrailV2 from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
+import { createContext } from "../guardrail-context"
 import { bridge, toV1Call, toV1Calls, toV2Input, v1Input } from "./adapter"
 import { createClient, toolDenyRules, toV1Message, toV2Rules } from "./client"
 
@@ -230,9 +233,9 @@ describe("F2 team v2 entry: tools are added through tool.transform with JSON-Sch
     expect(toV1Call("shell", { command: "ls" })).toEqual({ tool: "bash", args: { command: "ls" } })
     expect(toV1Call("read", { path: "/p/a" }).args).toEqual({ path: "/p/a", filePath: "/p/a" })
     expect(toV1Call("subagent", { agent: "planner", prompt: "x" }).args.subagent_type).toBe("planner")
-    const patch = toV1Call("patch", { patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** End Patch\n" })
-    expect(patch.tool).toBe("edit")
-    expect(patch.args.filePath).toBe("src/a.ts")
+    const v1Patch = toV1Call("patch", { patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** End Patch\n" })
+    expect(v1Patch.tool).toBe("edit")
+    expect(v1Patch.args.filePath).toBe("src/a.ts")
     expect(toV2Input("read", { path: "/p/a", filePath: "/p/b" }, { path: "/p/a" })).toEqual({ path: "/p/b" }) // a rewritten path is written back
     expect(toV2Input("edit", { path: "/p/a", filePath: "/p/a", oldString: "x" }, { path: "/p/a", oldString: "x" })).toEqual({ path: "/p/a", oldString: "x" })
   })
@@ -437,6 +440,27 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
   })
 })
 
+const REL = ".opencode/guardrails/state.json"
+/** "PASS", or the guard's reason when the before hook throws. */
+const verdict = (p: Promise<unknown>) =>
+  p.then(
+    () => "PASS",
+    (error) => {
+      const msg = error instanceof Error ? error.message : String(error)
+      return /plugin-owned/.test(msg) ? "plugin-owned" : /protected runtime or config mutation/.test(msg) ? "runtime-mutation" : msg
+    },
+  )
+const at = async <T>(cwd: string, run: () => Promise<T>) => {
+  const prev = process.cwd()
+  process.chdir(cwd)
+  try {
+    return await run()
+  } finally {
+    process.chdir(prev)
+  }
+}
+const patch = (...lines: string[]) => ["*** Begin Patch", ...lines, "@@", "-a", "+b", "*** End Patch", ""].join("\n")
+
 describe("F5 relative paths are judged at ctx.location.directory, not at the server cwd (opencode#345)", () => {
   // A team worker is moved into its own worktree (team.ts session.create → session.move) on a server whose cwd stays
   // the startup directory. The 2.x file tools resolve a relative `path` / patch path / shell `workdir` against
@@ -445,29 +469,9 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-rel-")))
   const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cwd-")))
   const f = fakeCtx(dir)
-  const REL = ".opencode/guardrails/state.json"
   const RUNTIME = join(dir, ".opencode", "guardrails")
   const before = (tool: string, input: Record<string, unknown>) =>
     f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
-  /** "PASS", or the guard's reason when the before hook throws. */
-  const verdict = (p: Promise<unknown>) =>
-    p.then(
-      () => "PASS",
-      (error) => {
-        const msg = error instanceof Error ? error.message : String(error)
-        return /plugin-owned/.test(msg) ? "plugin-owned" : /protected runtime or config mutation/.test(msg) ? "runtime-mutation" : msg
-      },
-    )
-  const at = async <T>(cwd: string, run: () => Promise<T>) => {
-    const prev = process.cwd()
-    process.chdir(cwd)
-    try {
-      return await run()
-    } finally {
-      process.chdir(prev)
-    }
-  }
-  const patch = (...lines: string[]) => ["*** Begin Patch", ...lines, "@@", "-a", "+b", "*** End Patch", ""].join("\n")
 
   test("setup", async () => {
     await guardrailV2.setup(f.ctx)
@@ -601,6 +605,94 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
 
   test("cleanup", () => {
     rmSync(dir, { recursive: true, force: true })
+    rmSync(elsewhere, { recursive: true, force: true })
+  })
+})
+
+describe("F6 a session in a repo subdirectory: the runtime under location.directory is plugin-owned too", () => {
+  // Core project.ts walks up from location.directory to .git, so a session opened in <repo>/packages/x gets
+  // location.directory = <repo>/packages/x and project.directory = <repo>; v1Input maps them to directory and worktree.
+  // The plugin keeps its state under directory (guardrail-context.ts `root`), while team runs live under worktree.
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-repo-")))
+  const sub = join(repo, "packages", "x")
+  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-subcwd-")))
+  const f = fakeCtx(sub)
+  f.ctx.location = { directory: sub, project: { id: "p", directory: repo, canonical: repo } }
+  const before = (tool: string, input: Record<string, unknown>) =>
+    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+
+  test("setup: the plugin writes its state under the session directory, not the repo root", async () => {
+    await guardrailV2.setup(f.ctx)
+    expect(existsSync(join(sub, ".opencode", "guardrails"))).toBe(true)
+    expect(existsSync(join(repo, ".opencode", "guardrails"))).toBe(false)
+  })
+
+  test("edit/write/read/patch of the state under the session directory is denied, absolute and relative", async () => {
+    const rows = await at(elsewhere, async () => ({
+      "edit repo-root state ABS (control)": await verdict(before("edit", { path: join(repo, REL), oldString: "a", newString: "b" })),
+      "edit sub state ABS": await verdict(before("edit", { path: join(sub, REL), oldString: "a", newString: "b" })),
+      "edit sub state REL": await verdict(before("edit", { path: REL, oldString: "a", newString: "b" })),
+      "write sub state REL": await verdict(before("write", { path: REL, content: '{"reviewed":true,"factchecked":true}' })),
+      "read sub events REL": await verdict(before("read", { path: ".opencode/guardrails/events.jsonl" })),
+      "patch Update sub state REL": await verdict(before("patch", { patchText: patch(`*** Update File: ${REL}`) })),
+      "edit sub src/a.ts (pass)": await verdict(before("edit", { path: "src/a.ts", oldString: "x", newString: "y" })),
+      "edit sub .opencode/guardrailsX (pass)": await verdict(before("edit", { path: join(sub, ".opencode", "guardrailsX", "a.json"), oldString: "a", newString: "b" })),
+      "read repo team run (pass)": await verdict(before("read", { path: join(repo, ".opencode", "guardrails", "team-runs", "r.json") })),
+      "edit repo team run": await verdict(before("edit", { path: join(repo, ".opencode", "guardrails", "team-runs", "r.json"), oldString: "a", newString: "b" })),
+    }))
+    expect(rows).toEqual({
+      "edit repo-root state ABS (control)": "plugin-owned",
+      "edit sub state ABS": "plugin-owned",
+      "edit sub state REL": "plugin-owned",
+      "write sub state REL": "plugin-owned",
+      "read sub events REL": "plugin-owned",
+      "patch Update sub state REL": "plugin-owned",
+      "edit sub src/a.ts (pass)": "PASS",
+      "edit sub .opencode/guardrailsX (pass)": "PASS", // a sibling name is not the runtime dir
+      "read repo team run (pass)": "PASS", // team runs stay readable, only their edit is denied
+      "edit repo team run": "plugin-owned",
+    })
+  })
+
+  test("1.x without a repo (worktree '/'): the state is plugin-owned and team runs stay readable", async () => {
+    // 1.x passes worktree "/" outside git; rel("/", file) never matched, so the old hidden() protected nothing there.
+    // team.ts then falls back to directory for its runs (projectRoot), so the read exemption must hold there too.
+    const ctx = await createContext({ ...v1Input(fakeCtx(sub).ctx), worktree: "/" })
+    expect(ctx.deny(join(sub, REL), "edit")).toBe("guardrail runtime state is plugin-owned")
+    expect(ctx.deny(join(sub, ".opencode", "guardrails", "team-runs", "r.json"), "read")).toBeUndefined()
+    expect(ctx.deny(join(sub, ".opencode", "guardrails", "team-runs", "r.json"), "edit")).toBe("guardrail runtime state is plugin-owned")
+  })
+
+  // PAIR: team.ts keeps its runs under projectRoot(directory, worktree); the context's runtime roots must cover both.
+  test("PAIR: team.ts writes runs at <directory or worktree>/.opencode/guardrails/team-runs", () => {
+    const team = readFileSync(join(import.meta.dir, "..", "team.ts"), "utf-8")
+    expect(team).toContain('return worktree && worktree !== "/" ? worktree : directory')
+    expect(team).toContain('return path.join(dir, ".opencode", "guardrails", "team-runs")')
+  })
+
+  test("shell: a workdir in, or a path from the workdir into, the runtime under the session directory is a runtime mutation", async () => {
+    const rows = await at(elsewhere, async () => ({
+      "explicit path, no workdir (control)": await verdict(before("shell", { command: `printf '{}' > ${REL}` })),
+      "redirect, repo-root runtime workdir (control)": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: join(repo, ".opencode", "guardrails") })),
+      "redirect, relative workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: ".opencode/guardrails" })),
+      "redirect, absolute sub runtime workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: join(sub, ".opencode", "guardrails") })),
+      "redirect, workdir .opencode": await verdict(before("shell", { command: "printf '{}' > guardrails/state.json", workdir: ".opencode" })),
+      "read-only in sub runtime (pass)": await verdict(before("shell", { command: "cat state.json", workdir: ".opencode/guardrails" })),
+      "ordinary workdir (pass)": await verdict(before("shell", { command: "printf ok > out.txt", workdir: "src" })),
+    }))
+    expect(rows).toEqual({
+      "explicit path, no workdir (control)": "runtime-mutation",
+      "redirect, repo-root runtime workdir (control)": "runtime-mutation",
+      "redirect, relative workdir": "runtime-mutation",
+      "redirect, absolute sub runtime workdir": "runtime-mutation",
+      "redirect, workdir .opencode": "runtime-mutation",
+      "read-only in sub runtime (pass)": "PASS",
+      "ordinary workdir (pass)": "PASS",
+    })
+  })
+
+  test("cleanup", () => {
+    rmSync(repo, { recursive: true, force: true })
     rmSync(elsewhere, { recursive: true, force: true })
   })
 })

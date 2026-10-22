@@ -7,6 +7,7 @@ import {
   free,
   has,
   line,
+  norm,
   num,
   pick,
   preview,
@@ -58,6 +59,7 @@ export type GuardrailContext = {
   input: GuardrailInput
   mode: string
   root: string
+  runtimes: readonly string[]
   log: string
   state: string
   allow: Record<string, Set<string>>
@@ -108,6 +110,9 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   const denyFree = true
   const denyPreview = true
   const root = path.join(input.directory, ".opencode", "guardrails")
+  // Plugin-owned runtime dirs. This plugin's state lives under directory (root); team runs live under worktree. A
+  // session opened below the repo root has the two apart (2.x core project.ts walks up to .git), so both are owned.
+  const runtimes = [...new Set([root, path.join(input.worktree, ".opencode", "guardrails")].map(norm))]
   const log = path.join(root, "events.jsonl")
   const state = path.join(root, "state.json")
   const allow: Record<string, Set<string>> = {}
@@ -191,8 +196,15 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     }
   }
 
+  /** file's path inside the runtime dir that holds it, or undefined outside every runtime dir. */
+  function owned(file: string) {
+    const abs = norm(file)
+    const dir = runtimes.find((dir) => abs.startsWith(dir + "/"))
+    return dir === undefined ? undefined : abs.slice(dir.length + 1)
+  }
+
   function hidden(file: string) {
-    return rel(input.worktree, file).startsWith(".opencode/guardrails/")
+    return owned(file) !== undefined
   }
 
   function code(file: string) {
@@ -260,7 +272,8 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   function deny(file: string, kind: "read" | "edit") {
     const item = rel(input.worktree, file)
     if (kind === "read" && has(item, sec)) return "secret material is outside the allowed read surface"
-    if (kind === "read" && /^\.opencode\/guardrails\/team-runs\/[^/]+\.json$/i.test(item)) return
+    // team.ts writes runs under projectRoot(directory, worktree), which is one of the runtime roots
+    if (kind === "read" && /^team-runs\/[^/]+\.json$/i.test(owned(file) ?? "")) return
     if (hidden(file)) return "guardrail runtime state is plugin-owned"
     if (kind === "edit" && has(item, cfg)) return "linter or formatter configuration is policy-protected"
   }
@@ -334,6 +347,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     input,
     mode,
     root,
+    runtimes,
     log,
     state,
     allow,

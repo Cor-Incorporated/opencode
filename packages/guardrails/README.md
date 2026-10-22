@@ -68,6 +68,10 @@ started elsewhere, so the 1.x view carries those paths already absolute at the l
 other than the session directory the runtime guard resolves the command's path tokens at that workdir instead of
 matching `.opencode/guardrails/` text only (Cor-Incorporated/opencode#345). A path no guard rewrote goes back to the
 tool as written.
+The plugin keeps its state in `<session directory>/.opencode/guardrails` and team runs in
+`<project root>/.opencode/guardrails/team-runs`. A session opened below the repo root has the two roots apart (core walks
+up to `.git` for the project), so both are plugin-owned for file tools and for the shell workdir check
+(Cor-Incorporated/opencode#347).
 Worker permission rules and the 1.x per-prompt `tools: { x: false }` lists go through the same mapping as 2.x
 `permissions` (deny rules), and a worker
 created with `parentID` is moved to its isolated directory afterwards because the 2.x host lets a child inherit the
