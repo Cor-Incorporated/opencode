@@ -11,16 +11,18 @@
  *   F3 client shim   1.x client calls map to 2.x session ops (create → permissions, promptAsync → switchModel+prompt,
  *                    messages → context rows, abort → interrupt, status from events)
  *   F4 prompt        chat.message parts appended by a hook become prompt.text; "/review …" reaches command.execute.before
+ *   F5 location      a relative path / patch path / shell workdir is judged where the 2.x tool resolves it
+ *                    (ctx.location.directory), not against the server's process.cwd() (opencode#345)
  *
  * Run: bun test packages/guardrails/profile/src/v2/adapter.test.ts
  */
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import guardrailV2 from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
-import { bridge, toV1Call, toV2Input, v1Input } from "./adapter"
+import { bridge, toV1Call, toV1Calls, toV2Input, v1Input } from "./adapter"
 import { createClient, toolDenyRules, toV1Message, toV2Rules } from "./client"
 
 const ENV_FILE = [".", "env"].join("") // the dotfile name, spelled so that shell-command scanners do not read it as a secret access
@@ -432,5 +434,173 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
 
   test("cleanup", () => {
     rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe("F5 relative paths are judged at ctx.location.directory, not at the server cwd (opencode#345)", () => {
+  // A team worker is moved into its own worktree (team.ts session.create → session.move) on a server whose cwd stays
+  // the startup directory. The 2.x file tools resolve a relative `path` / patch path / shell `workdir` against
+  // location.directory (core file-access.ts resolvePath), so the guard must judge the same absolute path.
+  // realpath: process.cwd() after chdir is symlink-free (/private/var on macOS), the location must compare equal to it.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-rel-")))
+  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cwd-")))
+  const f = fakeCtx(dir)
+  const REL = ".opencode/guardrails/state.json"
+  const RUNTIME = join(dir, ".opencode", "guardrails")
+  const before = (tool: string, input: Record<string, unknown>) =>
+    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+  /** "PASS", or the guard's reason when the before hook throws. */
+  const verdict = (p: Promise<unknown>) =>
+    p.then(
+      () => "PASS",
+      (error) => {
+        const msg = error instanceof Error ? error.message : String(error)
+        return /plugin-owned/.test(msg) ? "plugin-owned" : /protected runtime or config mutation/.test(msg) ? "runtime-mutation" : msg
+      },
+    )
+  const at = async <T>(cwd: string, run: () => Promise<T>) => {
+    const prev = process.cwd()
+    process.chdir(cwd)
+    try {
+      return await run()
+    } finally {
+      process.chdir(prev)
+    }
+  }
+  const patch = (...lines: string[]) => ["*** Begin Patch", ...lines, "@@", "-a", "+b", "*** End Patch", ""].join("\n")
+
+  test("setup", async () => {
+    await guardrailV2.setup(f.ctx)
+  })
+
+  test("edit/write/patch/read of the plugin state: absolute (control) and relative (attack) paths are both denied when cwd ≠ location", async () => {
+    const abs = join(dir, REL)
+    const rows = await at(elsewhere, async () => ({
+      "edit ABS (control)": await verdict(before("edit", { path: abs, oldString: "a", newString: "b" })),
+      "write ABS (control)": await verdict(before("write", { path: abs, content: "{}" })),
+      "patch ABS (control)": await verdict(before("patch", { patchText: patch(`*** Update File: ${abs}`) })),
+      "edit REL": await verdict(before("edit", { path: REL, oldString: "a", newString: "b" })),
+      "edit ./REL": await verdict(before("edit", { path: `./${REL}`, oldString: "a", newString: "b" })),
+      "edit src/../REL": await verdict(before("edit", { path: `src/../${REL}`, oldString: "a", newString: "b" })),
+      "write REL": await verdict(before("write", { path: REL, content: '{"reviewed":true,"factchecked":true}' })),
+      "read REL": await verdict(before("read", { path: REL })),
+      "patch Update REL": await verdict(before("patch", { patchText: patch(`*** Update File: ${REL}`) })),
+      "patch Add REL": await verdict(before("patch", { patchText: patch(`*** Add File: ${REL}`) })),
+      "patch Move to REL": await verdict(before("patch", { patchText: patch("*** Update File: src/ok.ts", `*** Move to: ${REL}`) })),
+    }))
+    expect(rows).toEqual({
+      "edit ABS (control)": "plugin-owned",
+      "write ABS (control)": "plugin-owned",
+      "patch ABS (control)": "plugin-owned",
+      "edit REL": "plugin-owned",
+      "edit ./REL": "plugin-owned",
+      "edit src/../REL": "plugin-owned",
+      "write REL": "plugin-owned",
+      "read REL": "plugin-owned",
+      "patch Update REL": "plugin-owned",
+      "patch Add REL": "plugin-owned",
+      "patch Move to REL": "plugin-owned",
+    })
+  })
+
+  test("cwd == location (control): the relative state path is denied", async () => {
+    expect(await at(dir, () => verdict(before("edit", { path: REL, oldString: "a", newString: "b" })))).toBe("plugin-owned")
+  })
+
+  test("an ordinary relative edit passes and reaches the 2.x tool unchanged (the guard judges the absolute path only)", async () => {
+    const e: any = { tool: "edit", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-ok", input: { path: "src/a.ts", oldString: "x", newString: "y" } }
+    await at(elsewhere, () => f.fire("tool.execute.before", e))
+    expect(e.input).toEqual({ path: "src/a.ts", oldString: "x", newString: "y" })
+  })
+
+  test("shell workdir: a command run in, or naming a path into, the runtime dir from its workdir is a runtime mutation; prose is not", async () => {
+    const rows = await at(elsewhere, async () => ({
+      "explicit path (control)": await verdict(before("shell", { command: "printf '{}' > .opencode/guardrails/state.json" })),
+      "redirect, absolute workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: RUNTIME })),
+      "tee, absolute workdir": await verdict(before("shell", { command: "echo x | tee state.json", workdir: RUNTIME })),
+      "redirect, relative workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: ".opencode/guardrails" })),
+      "rm, workdir below runtime": await verdict(before("shell", { command: "rm ../state.json", workdir: ".opencode/guardrails/team-runs" })),
+      "redirect, workdir .opencode": await verdict(before("shell", { command: "printf '{}' >guardrails/state.json", workdir: ".opencode" })),
+      "./ redirect, workdir .opencode": await verdict(before("shell", { command: "printf '{}' > ./guardrails/state.json", workdir: ".opencode" })),
+      "cd;, workdir .opencode": await verdict(before("shell", { command: "cd guardrails; printf '{}' > state.json", workdir: ".opencode" })),
+      "cd ./ &&, workdir .opencode": await verdict(before("shell", { command: "cd ./guardrails && printf '{}' > state.json", workdir: ".opencode" })),
+      "$PWD redirect, workdir .opencode": await verdict(before("shell", { command: `printf '{}' > "$PWD"/guardrails/state.json`, workdir: ".opencode" })),
+      "--opt=route, workdir .opencode": await verdict(before("shell", { command: "sort --output=guardrails/state.json x", workdir: ".opencode" })),
+      "quoted route, workdir .opencode": await verdict(before("shell", { command: `printf '{}' > "guardrails/state.json"`, workdir: ".opencode" })),
+      // quotes pair left to right: the text between two quoted args is not prose
+      "between quotes, workdir .opencode": await verdict(before("shell", { command: "printf '{}' > guardrails/state.json && echo 'written ok'", workdir: ".opencode" })),
+      "between double quotes, workdir .opencode": await verdict(before("shell", { command: 'printf "{}" > guardrails/state.json && echo "all done"', workdir: ".opencode" })),
+      "between quotes, workdir .opencode/team": await verdict(before("shell", { command: "printf '{}' > ../guardrails/state.json && echo 'ok then'", workdir: ".opencode/team" })),
+      "read-only in runtime (pass)": await verdict(before("shell", { command: "cat state.json", workdir: RUNTIME })),
+      "read-only route (pass)": await verdict(before("shell", { command: "ls guardrails", workdir: ".opencode" })),
+      "ordinary workdir (pass)": await verdict(before("shell", { command: "printf ok > out.txt", workdir: "src" })),
+      // the runtime path in prose or a non-runtime write is not a runtime mutation (no false positive from this fix)
+      "prose in a quoted message, workdir src (pass)": await verdict(before("shell", { command: 'git commit -m "guard ../.opencode/guardrails from edits"', workdir: "src" })),
+      "workdir = session dir (pass)": await verdict(before("shell", { command: "git check-ignore -v .opencode/guardrails && mkdir -p .opencode/guardrails", workdir: dir })),
+      "no workdir, prose and .gitignore (pass)": await verdict(before("shell", { command: 'git commit -m "fix: protect .opencode/guardrails" && echo .opencode/guardrails >> .gitignore' })),
+    }))
+    expect(rows).toEqual({
+      "explicit path (control)": "runtime-mutation",
+      "redirect, absolute workdir": "runtime-mutation",
+      "tee, absolute workdir": "runtime-mutation",
+      "redirect, relative workdir": "runtime-mutation",
+      "rm, workdir below runtime": "runtime-mutation",
+      "redirect, workdir .opencode": "runtime-mutation",
+      "./ redirect, workdir .opencode": "runtime-mutation",
+      "cd;, workdir .opencode": "runtime-mutation",
+      "cd ./ &&, workdir .opencode": "runtime-mutation",
+      "$PWD redirect, workdir .opencode": "runtime-mutation",
+      "--opt=route, workdir .opencode": "runtime-mutation",
+      "quoted route, workdir .opencode": "runtime-mutation",
+      "between quotes, workdir .opencode": "runtime-mutation",
+      "between double quotes, workdir .opencode": "runtime-mutation",
+      "between quotes, workdir .opencode/team": "runtime-mutation",
+      "read-only in runtime (pass)": "PASS", // same allowance as `cat .opencode/guardrails/state.json`
+      "read-only route (pass)": "PASS",
+      "ordinary workdir (pass)": "PASS",
+      "prose in a quoted message, workdir src (pass)": "PASS",
+      "workdir = session dir (pass)": "PASS",
+      "no workdir, prose and .gitignore (pass)": "PASS",
+    })
+  })
+
+  test("a shell workdir the guard does not rewrite reaches the 2.x tool unchanged", async () => {
+    const e: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-wd", input: { command: "ls", workdir: "src" } }
+    await at(elsewhere, () => f.fire("tool.execute.before", e))
+    expect(e.input).toEqual({ command: "ls", workdir: "src" })
+  })
+
+  test("toV1Call / toV1Calls / toV2Input with a base: paths are resolved like core FileAccess.resolvePath and written back as given", () => {
+    expect(toV1Call("edit", { path: "src/a.ts" }, "/w").args.filePath).toBe("/w/src/a.ts")
+    expect(toV1Call("read", { path: "/p/a" }, "/w").args.filePath).toBe("/p/a")
+    expect(toV1Call("read", { path: "~/notes.md" }, "/w").args.filePath).toBe(join(homedir(), "notes.md"))
+    expect(toV1Call("shell", { command: "ls", workdir: "sub" }, "/w").args.workdir).toBe("/w/sub")
+    expect(toV1Calls("patch", { patchText: patch("*** Update File: src/a.ts", "*** Move to: b.ts", "*** Add File: ./src/a.ts") }, "/w").map((c) => c.args.filePath)).toEqual(["/w/src/a.ts", "/w/b.ts"])
+    expect(toV2Input("edit", { path: "src/a.ts", filePath: "/w/src/a.ts" }, { path: "src/a.ts" }, "/w")).toEqual({ path: "src/a.ts" })
+    expect(toV2Input("edit", { path: "src/a.ts", filePath: "/w/src/b.ts" }, { path: "src/a.ts" }, "/w")).toEqual({ path: "/w/src/b.ts" }) // a rewrite is written back
+    expect(toV2Input("shell", { command: "ls", workdir: "/w/sub" }, { command: "ls", workdir: "sub" }, "/w")).toEqual({ command: "ls", workdir: "sub" })
+  })
+
+  // PAIR: adapter.ts resolveIn restates where core puts a tool path. Pinned by string (core is not importable without
+  // `bun install`, see .github/workflows/guardrails.yml); a core change to any of these turns this red.
+  test("PAIR: core resolves file, patch and shell workdir paths at location.directory (resolvePath, ~ and ~/ expanded)", () => {
+    const core = join(import.meta.dir, "..", "..", "..", "..", "core", "src")
+    const src = (file: string) => readFileSync(join(core, file), "utf-8")
+    expect(src("file-access.ts")).toContain("export const resolvePath = (directory: string, input: string, home = Global.Path.home) => {")
+    expect(src("file-access.ts")).toContain('normalized === "~"')
+    expect(src("file-access.ts")).toContain('normalized.startsWith("~/")')
+    expect(src("file-access.ts")).toContain("AbsolutePath.make(resolvePath(location.directory, input.path))")
+    expect(src("tool/plugin/read.ts")).toContain("access.authorizeRead(input.path, context)")
+    expect(src("tool/plugin/edit.ts")).toContain('access.resolve({ path: input.path, kind: "file" })')
+    expect(src("tool/plugin/write.ts")).toContain('access.resolve({ path: input.path, kind: "file" })')
+    expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.path)")
+    expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.movePath)")
+    expect(src("tool/plugin/shell.ts")).toContain("cwd: input.workdir,")
+    expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: invocation.cwd, kind: "directory" })')
+  })
+
+  test("cleanup", () => {
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(elsewhere, { recursive: true, force: true })
   })
 })

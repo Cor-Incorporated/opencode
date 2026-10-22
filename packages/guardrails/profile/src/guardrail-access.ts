@@ -6,6 +6,7 @@ import {
   cfg,
   json,
   list,
+  norm,
   num,
   pick,
   rel,
@@ -51,6 +52,27 @@ export function createAccessHandlers(ctx: GuardrailContext) {
     )
   }
 
+  /**
+   * A shell `workdir` moves where the command's relative paths land (opencode#345): `> state.json` run in
+   * .opencode/guardrails, or `cd ./guardrails` run in .opencode, reach the runtime without the literal
+   * `.opencode/guardrails/` the text check looks for. For a workdir other than the session directory, true when the
+   * shell runs inside the runtime dir or a path token resolved at the workdir lands in it. Quoted text with spaces
+   * (commit messages, PR bodies) is prose, not a path. Without such a workdir the text check alone decides, as before;
+   * `cd` inside the command and shell expansion other than $PWD are not followed.
+   */
+  function workdirReachesRuntime(cmd: string, workdir: string) {
+    const base = norm(workdir)
+    if (base === norm(ctx.input.directory)) return false
+    const runtime = norm(path.join(ctx.input.worktree, ".opencode", "guardrails"))
+    const inside = (file: string) => file === runtime || file.startsWith(runtime + "/")
+    if (inside(base)) return true
+    return cmd
+      .replace(/"[^"]*"|'[^']*'/g, (quoted) => (/\s/.test(quoted) ? " " : quoted)) // pairs left to right
+      .split(/[\s;&|()<>]+/)
+      .map((token) => token.replace(/['"`]/g, "").replace(/^[^=]*=/, "").replace(/^\$\{?PWD\}?(?=\/|$)/, () => base))
+      .some((token) => token !== "" && !token.startsWith("-") && inside(norm(path.resolve(base, token))))
+  }
+
   function inlineInterpreterShell(cmd: string) {
     return /(?:^|[;&|]\s*|\s)(?:(?:python|python3|ruby|perl)\s+-[A-Za-z]*[ce]|node\s+(?:-[A-Za-z]*e|--eval\b)|bun\s+(?:-[A-Za-z]*e|--eval\b)|deno\s+eval\b|(?:sh|bash|zsh)\s+-c\b)/i.test(
       cmd,
@@ -87,7 +109,8 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "shell access to protected files" })
         throw new Error(text("shell access to protected files"))
       }
-      const touchesGuardrailRuntime = file.includes(".opencode/guardrails/")
+      const workdir = typeof out.args?.workdir === "string" ? out.args.workdir : ""
+      const touchesGuardrailRuntime = file.includes(".opencode/guardrails/") || (workdir !== "" && workdirReachesRuntime(cmd, workdir))
       if (touchesGuardrailRuntime && !guardrailRuntimeReadOnlyCommand(cmd)) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))

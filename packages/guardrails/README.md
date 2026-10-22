@@ -61,8 +61,15 @@ Tool vocabulary: 2.x renamed the built-in tools and their argument keys (`bash�
 `write/patch→edit`; file tools take `path`, the subagent tool `agent`, the shell result `metadata.exit` — the same table
 upstream applies to migrated v1 config in `packages/core/src/v1/config/migrate.ts`). The 1.x guards compare against the
 old names, so the adapter translates every tool call to the 1.x shape before the hook and back afterwards
-(`toV1Call` / `toV2Input`); a native `patch` is judged as an `edit` of its first file. Worker permission rules and the
-1.x per-prompt `tools: { x: false }` lists go through the same mapping as 2.x `permissions` (deny rules), and a worker
+(`toV1Call` / `toV2Input`); a native `patch` is judged as one `edit` per touched path (move destinations included).
+A 2.x tool resolves a relative `path`, patch path or shell `workdir` against `ctx.location.directory`, while the 1.x
+guards resolve against `process.cwd()`; the two differ for a team worker moved into its own worktree on a server
+started elsewhere, so the 1.x view carries those paths already absolute at the location, and for a shell `workdir`
+other than the session directory the runtime guard resolves the command's path tokens at that workdir instead of
+matching `.opencode/guardrails/` text only (Cor-Incorporated/opencode#345). A path no guard rewrote goes back to the
+tool as written.
+Worker permission rules and the 1.x per-prompt `tools: { x: false }` lists go through the same mapping as 2.x
+`permissions` (deny rules), and a worker
 created with `parentID` is moved to its isolated directory afterwards because the 2.x host lets a child inherit the
 parent's location.
 
