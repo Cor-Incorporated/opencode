@@ -261,7 +261,19 @@ export function pick(args: unknown) {
 }
 
 export function bash(cmd: string) {
-  return mut.some((item) => item.test(cmd))
+  return mut.some((item) => item.test(cmd)) || sedInPlace(cmd)
+}
+
+/**
+ * `sed` with an in-place flag anywhere among its options: `-n -i ''`, `-E -n -i`, `-ni`, `-i.bak`, BSD `-I`,
+ * `--in-place` (opencode#351). The `sed\s+-i` pattern above only sees `-i` right after `sed`. Quote characters count
+ * as spaces, so code under `sh -c "…"` is read too, while `-i` inside a sed script (`'s/x/-i/p'`) is not a flag.
+ */
+function sedInPlace(cmd: string) {
+  return cmd
+    .replace(/["'`]/g, " ")
+    .split(/[;&|\n()]/)
+    .some((segment) => /(?:^|[\s/])g?sed\s(?:.*\s)?(?:-[a-z]*i|--in-place\b)/i.test(segment))
 }
 
 export function list(data: unknown) {

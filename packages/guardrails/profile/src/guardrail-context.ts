@@ -61,6 +61,8 @@ export type GuardrailContext = {
   mode: string
   root: string
   runtimes: readonly string[]
+  /** The filesystem holding the runtime folds case (APFS, NTFS), probed once at setup. */
+  foldsCase: boolean
   log: string
   state: string
   allow: Record<string, Set<string>>
@@ -360,6 +362,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     mode,
     root,
     runtimes,
+    foldsCase,
     log,
     state,
     allow,

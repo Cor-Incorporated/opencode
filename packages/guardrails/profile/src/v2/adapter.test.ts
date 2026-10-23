@@ -27,6 +27,7 @@ import { join } from "node:path"
 import guardrailV2 from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
 import { createContext } from "../guardrail-context"
+import { shellReachesRuntime } from "../guardrail-shell"
 import { bridge, toV1Call, toV1Calls, toV2Input, v1Input } from "./adapter"
 import { createClient, toolDenyRules, toV1Message, toV2Rules } from "./client"
 
@@ -901,5 +902,86 @@ describe("F8 directory tracking only adds blocks: every way a shell can change o
 
   test("cleanup", () => {
     for (const d of [dir, wt, elsewhere]) rmSync(d, { recursive: true, force: true })
+  })
+})
+
+describe("F9 sed in place, quoted separators and glob case (opencode#351, Codex review of #350 round 2)", () => {
+  // OC-N4: `sed -n` counted as a reader even with an in-place flag after it; real BSD sed rewrote state.json.
+  // Codex P2: a `|`, `;` or `{` inside quotes split a read-only grep/sed into a fake second command, and a glob was
+  // compared case-folded even where the filesystem keeps case, so `rm -rf .opencode/GUARD*` was refused on Linux.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-sed-")))
+  const f = fakeCtx(dir)
+  const RT = ".opencode/guardrails"
+  const M = "runtime-mutation"
+  const judge = async (rows: [string, string, string?][]) => {
+    const key = (command: string, workdir?: string) => `${workdir ?? "-"} | ${command}`
+    const got = await at(dir, async () => {
+      const out: Record<string, string> = {}
+      for (const [command, , workdir] of rows) {
+        const input = workdir === undefined ? { command } : { command, workdir }
+        out[key(command, workdir)] = await verdict(
+          f.fire("tool.execute.before", { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-sh", input }),
+        )
+      }
+      return out
+    })
+    expect(got).toEqual(Object.fromEntries(rows.map(([command, want, workdir]) => [key(command, workdir), want])))
+  }
+
+  test("setup", async () => {
+    await guardrailV2.setup(f.ctx)
+  })
+
+  test("sed with an in-place flag anywhere among its options is a runtime mutation (OC-N4)", async () => {
+    await judge([
+      [`sed -n -i '' 's/"reviewed":false/"reviewed":true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n -i '' 's/false/true/p' state.json`, M],
+      [`sed -n -i.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -E -n -i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -ni 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-place 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -I '' 's/false/true/p' ${RT}/state.json`, M],
+      [`/usr/bin/sed -n -i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -i '' 's/false/true/p' state.json`, M, join(dir, RT)],
+    ])
+  })
+
+  test("readers with a quoted |, ; or { stay allowed; a real second command does not", async () => {
+    await judge([
+      [`grep -E 'reviewed|factchecked' ${RT}/state.json`, "PASS"],
+      [`sed -n '/review/{p;}' ${RT}/state.json`, "PASS"],
+      [`cd ${RT} && grep -E 'a|b' state.json`, "PASS"],
+      [`sed -n 's/x/-i/p' ${RT}/state.json`, "PASS"],
+      [`sed -n p ${RT}/state.json`, "PASS"],
+      [`grep -E 'a|b' ${RT}/state.json; rm ${RT}/state.json`, M],
+      [`grep 'a|b' ${RT}/state.json | tee ${RT}/state.json`, M],
+    ])
+  })
+
+  test("a glob in another case reaches the runtime only where the filesystem folds case or the shell ignores it", async () => {
+    await judge([
+      ["rm -rf .opencode/guard*", M],
+      ["rm -rf .opencode/GUARD*", existsSync(join(dir, ".OPENCODE", "GUARDRAILS")) ? M : "PASS"],
+      ["shopt -s nocaseglob; rm -rf .opencode/GUARD*", M],
+    ])
+    const ctx = await createContext(v1Input(f.ctx))
+    const keeps = { ...ctx, foldsCase: false }
+    expect({
+      "GUARD* on a case-keeping fs": shellReachesRuntime(keeps, "rm -rf .opencode/GUARD*", ""),
+      "guard* on a case-keeping fs": shellReachesRuntime(keeps, "rm -rf .opencode/guard*", ""),
+      "nocaseglob on a case-keeping fs": shellReachesRuntime(keeps, "shopt -s nocaseglob; rm -rf .opencode/GUARD*", ""),
+      "zsh unsetopt CASE_GLOB on a case-keeping fs": shellReachesRuntime(keeps, "unsetopt CASE_GLOB; rm -rf .opencode/GUARD*", ""),
+      "GUARD* on a case-folding fs": shellReachesRuntime({ ...ctx, foldsCase: true }, "rm -rf .opencode/GUARD*", ""),
+    }).toEqual({
+      "GUARD* on a case-keeping fs": false,
+      "guard* on a case-keeping fs": true,
+      "nocaseglob on a case-keeping fs": true,
+      "zsh unsetopt CASE_GLOB on a case-keeping fs": true,
+      "GUARD* on a case-folding fs": true,
+    })
+  })
+
+  test("cleanup", () => {
+    rmSync(dir, { recursive: true, force: true })
   })
 })

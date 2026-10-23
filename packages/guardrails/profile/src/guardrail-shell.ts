@@ -25,11 +25,14 @@ export function shellReachesRuntime(rt: Runtime, cmd: string, workdir: string) {
     .map((token) => token.replace(/\\/g, ""))
     .filter((token) => token !== "" && !token.startsWith("-"))
   const start = path.resolve(rt.input.directory, workdir)
+  // globs are compared case-folded only where the filesystem folds case or the shell is told to ignore it
+  // (nocaseglob, zsh NO_CASE_GLOB); on a case-keeping filesystem `GUARD*` cannot reach `guardrails` (#350 review)
+  const fold = rt.foldsCase || /\bno_?case_?glob\b|\bunsetopt\b[^;&|\n]*\bcase_?glob\b/i.test(cmd)
   if (writes(rt, text, start)) return true
-  if (tokens.some((token) => rt.hidden(path.resolve(start, token)) || glob(rt, path.resolve(start, token)))) return true
+  if (tokens.some((token) => rt.hidden(path.resolve(start, token)) || glob(rt, path.resolve(start, token), fold))) return true
   if (!moves(text)) return false
   const bases = candidates(start, tokens)
-  return bases.some((base) => rt.runtime(base) || tokens.some((token) => rt.runtime(path.resolve(base, token)) || glob(rt, path.resolve(base, token))))
+  return bases.some((base) => rt.runtime(base) || tokens.some((token) => rt.runtime(path.resolve(base, token)) || glob(rt, path.resolve(base, token), fold)))
 }
 
 /** Read-only only when no segment writes: every segment is a cd or a listed reader, and nothing is redirected. */
@@ -38,7 +41,8 @@ export function shellReadOnly(cmd: string) {
   if (/\bsed\b.*['"\s;{}/][wW]\s+\S/.test(cmd)) return false // sed's `w file` command writes
   const text = prose(cmd)
   if (/>(?!\s*(?:&\d|\/dev\/null\b))/.test(text.replace(/\d>&\d/g, ""))) return false
-  return segments(text).every((segment) => {
+  // a `|`, `;` or `{` inside quotes is an argument (`grep -E 'a|b'`, `sed -n '/x/{p;}'`), not a separator (#350 review)
+  return segments(text.replace(/"[^"]*"|'[^']*'/g, (quoted) => (/[|;&\n(){}]/.test(quoted) ? "q" : quoted))).every((segment) => {
     const name = command(segment)
     if (name === "find") return !/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(segment)
     if (name === "sed") return /\s-n\b/.test(segment)
@@ -46,7 +50,7 @@ export function shellReadOnly(cmd: string) {
   })
 }
 
-type Runtime = Pick<GuardrailContext, "input" | "runtime" | "hidden" | "runtimes">
+type Runtime = Pick<GuardrailContext, "input" | "runtime" | "hidden" | "runtimes" | "foldsCase">
 
 /** A dir-target writer naming the runtime, something inside it, or the dir that holds it. */
 function writes(rt: Runtime, text: string, base: string) {
@@ -62,12 +66,13 @@ function writes(rt: Runtime, text: string, base: string) {
 }
 
 /** `.opencode/guard*` style globs: true when a leading part of the pattern can match a runtime dir. */
-function glob(rt: Runtime, file: string) {
+function glob(rt: Runtime, file: string, fold: boolean) {
   if (!/[*?[]/.test(file)) return false
   const parts = file.split("/")
   return parts.some((_, i) => {
     const prefix = parts.slice(0, i + 1).join("/")
-    return /[*?[]/.test(prefix) && rt.runtimes.some((dir) => new Bun.Glob(prefix.toLowerCase()).match(dir.toLowerCase()))
+    const cased = (text: string) => (fold ? text.toLowerCase() : text)
+    return /[*?[]/.test(prefix) && rt.runtimes.some((dir) => new Bun.Glob(cased(prefix)).match(cased(dir)))
   })
 }
 
