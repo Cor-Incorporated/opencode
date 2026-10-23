@@ -15,6 +15,7 @@ import {
   text,
 } from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
+import { shellReachesRuntime, shellReadOnly } from "./guardrail-shell"
 
 export function createAccessHandlers(ctx: GuardrailContext) {
   function resetReviewEvidence() {
@@ -109,13 +110,16 @@ export function createAccessHandlers(ctx: GuardrailContext) {
         throw new Error(text("shell access to protected files"))
       }
       const workdir = typeof out.args?.workdir === "string" ? out.args.workdir : ""
-      const touchesGuardrailRuntime = file.includes(".opencode/guardrails/") || (workdir !== "" && workdirReachesRuntime(cmd, workdir))
-      if (touchesGuardrailRuntime && !guardrailRuntimeReadOnlyCommand(cmd)) {
+      const pathHit = file.includes(".opencode/guardrails/") || (workdir !== "" && workdirReachesRuntime(cmd, workdir))
+      // opencode#349: in-command cd, the bare runtime dir and case variants. ORed on top, so it only adds blocks.
+      const shellHit = shellReachesRuntime(ctx, cmd, workdir)
+      const touchesGuardrailRuntime = pathHit || shellHit
+      if ((pathHit && !guardrailRuntimeReadOnlyCommand(cmd)) || (shellHit && !shellReadOnly(cmd))) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "protected runtime or config mutation" })
         throw new Error(text("protected runtime or config mutation"))
       }
       // OC-D2: interpreter block only when the command also mentions guardrail runtime path
-      if (inlineInterpreterShell(cmd) && cmd.includes(".opencode/guardrails")) {
+      if (inlineInterpreterShell(cmd) && (cmd.includes(".opencode/guardrails") || shellHit)) {
         await ctx.mark({ last_block: "bash", last_command: cmd, last_reason: "interpreter shell can mutate guardrail runtime" })
         throw new Error(text("interpreter shell can mutate guardrail runtime"))
       }

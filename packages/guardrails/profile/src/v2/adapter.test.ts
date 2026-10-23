@@ -15,6 +15,8 @@
  *                    (ctx.location.directory), not against the server's process.cwd() (opencode#345)
  *   F6 subdirectory  a session opened below the repo root keeps its state under location.directory, and that runtime
  *                    is plugin-owned just like the one under the repo root
+ *   F7 ordinary      cwd == location: `cd` inside a shell command moves the base like a workdir, a dir-target writer
+ *                    naming the bare runtime dir counts, and case variants are the runtime where the FS folds case (#349)
  *
  * Run: bun test packages/guardrails/profile/src/v2/adapter.test.ts
  */
@@ -694,5 +696,210 @@ describe("F6 a session in a repo subdirectory: the runtime under location.direct
   test("cleanup", () => {
     rmSync(repo, { recursive: true, force: true })
     rmSync(elsewhere, { recursive: true, force: true })
+  })
+})
+
+describe("F7 an ordinary session (cwd == location): in-command `cd`, the bare runtime dir and case variants (opencode#349)", () => {
+  // The normal 1-project start: no workdir, or workdir = the session directory. `cd` inside the command moves where
+  // the later relative paths land, exactly like a workdir does (OC-N1). APFS (the macOS default) is case-insensitive,
+  // so `.OPENCODE/guardrails/state.json` names the real state file there (OC-N2).
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cd-")))
+  const f = fakeCtx(dir)
+  const before = (tool: string, input: Record<string, unknown>) =>
+    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+
+  test("setup", async () => {
+    await guardrailV2.setup(f.ctx)
+  })
+
+  test("shell: `cd` into the runtime, or a mutation that targets the runtime dir itself, is a runtime mutation", async () => {
+    const rows = await at(dir, async () => ({
+      "explicit path (control)": await verdict(before("shell", { command: `printf '{}' > ${REL}` })),
+      "cd runtime &&": await verdict(before("shell", { command: `cd .opencode/guardrails && printf '{"reviewed":true}' > state.json` })),
+      "cd runtime; rm": await verdict(before("shell", { command: "cd .opencode/guardrails; rm state.json" })),
+      "cd .opencode && route": await verdict(before("shell", { command: "cd .opencode && printf '{}' > guardrails/state.json" })),
+      "cd twice": await verdict(before("shell", { command: "cd .opencode && cd guardrails && printf x > state.json" })),
+      "cp into the bare runtime dir": await verdict(before("shell", { command: "cp /tmp/x.json .opencode/guardrails" })),
+      "rm -rf the bare runtime dir": await verdict(before("shell", { command: "rm -rf .opencode/guardrails" })),
+      "workdir = session dir, cd .opencode": await verdict(before("shell", { command: "cd .opencode && printf x > guardrails/state.json", workdir: dir })),
+      "cd case variant": await verdict(before("shell", { command: "cd .OPENCODE/Guardrails && printf x > state.json" })),
+      "cd ordinary dir (pass)": await verdict(before("shell", { command: "cd src && printf ok > out.txt" })),
+      "cd runtime, read-only (pass)": await verdict(before("shell", { command: "cd .opencode/guardrails && cat state.json" })),
+      "cd .opencode, list (pass)": await verdict(before("shell", { command: "cd .opencode && ls guardrails" })),
+      "cd out of runtime before writing (still blocked)": await verdict(before("shell", { command: "cd .opencode/guardrails && cd ../.. && printf ok > out.txt" })),
+      "mkdir -p the runtime dir (pass)": await verdict(before("shell", { command: "mkdir -p .opencode/guardrails" })),
+      "runtime dir in .gitignore (pass)": await verdict(before("shell", { command: "echo .opencode/guardrails >> .gitignore" })),
+      "sibling name (pass)": await verdict(before("shell", { command: "cd .opencode/guardrailsX && printf x > a.json" })),
+    }))
+    expect(rows).toEqual({
+      "explicit path (control)": "runtime-mutation",
+      "cd runtime &&": "runtime-mutation",
+      "cd runtime; rm": "runtime-mutation",
+      "cd .opencode && route": "runtime-mutation",
+      "cd twice": "runtime-mutation",
+      "cp into the bare runtime dir": "runtime-mutation",
+      "rm -rf the bare runtime dir": "runtime-mutation",
+      "workdir = session dir, cd .opencode": "runtime-mutation",
+      "cd case variant": caseInsensitive() ? "runtime-mutation" : "PASS",
+      "cd ordinary dir (pass)": "PASS",
+      "cd runtime, read-only (pass)": "PASS", // same allowance as `cat .opencode/guardrails/state.json`
+      "cd .opencode, list (pass)": "PASS",
+      // every candidate base is judged (the guard does not know which cd ran), so leaving again does not unblock (#350)
+      "cd out of runtime before writing (still blocked)": "runtime-mutation",
+      "mkdir -p the runtime dir (pass)": "PASS",
+      "runtime dir in .gitignore (pass)": "PASS",
+      "sibling name (pass)": "PASS",
+    })
+  })
+
+  test("edit/write/read of a case variant of the state path is denied where the filesystem folds case", async () => {
+    const expected = caseInsensitive() ? "plugin-owned" : "PASS"
+    const rows = await at(dir, async () => ({
+      "edit .OPENCODE REL": await verdict(before("edit", { path: ".OPENCODE/guardrails/state.json", oldString: "a", newString: "b" })),
+      "write Guardrails ABS": await verdict(before("write", { path: join(dir, ".opencode", "Guardrails", "state.json"), content: "{}" })),
+      "read STATE.JSON REL": await verdict(before("read", { path: ".opencode/GUARDRAILS/state.json" })),
+      "edit lowercase REL (control)": await verdict(before("edit", { path: REL, oldString: "a", newString: "b" })),
+    }))
+    expect(rows).toEqual({
+      "edit .OPENCODE REL": expected,
+      "write Guardrails ABS": expected,
+      "read STATE.JSON REL": expected,
+      "edit lowercase REL (control)": "plugin-owned",
+    })
+  })
+
+  /** The answer the guard must agree with: does the swapped-case name reach the real runtime dir on this machine? */
+  function caseInsensitive() {
+    return existsSync(join(dir, ".OPENCODE", "GUARDRAILS"))
+  }
+
+  test("cleanup", () => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe("F8 directory tracking only adds blocks: every way a shell can change or name its directory (opencode#349, #350 review)", () => {
+  // Each row is a shape that wrote state.json under real bash/zsh/sh, or a pre-fix block that must stay a block.
+  // `cd` may be spelled builtin / command / \cd / "cd" / X=1 cd, sit in ( ), { }, if …; then, be undone by `cd -` or
+  // `popd`, go through CDPATH, fail (`||`) or run in a pipeline; a dir-target writer may name the runtime's parent.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cdadd-")))
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cdadd-wt-")))
+  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cdadd-cwd-")))
+  const ordinary = fakeCtx(dir)
+  const worker = fakeCtx(wt)
+  const RT = ".opencode/guardrails"
+  const W = "printf '{\"reviewed\":true}' > state.json"
+  const M = "runtime-mutation"
+  const shell = (f: ReturnType<typeof fakeCtx>, command: string, workdir?: string) =>
+    verdict(
+      f.fire("tool.execute.before", {
+        tool: "shell",
+        sessionID: "ses_1",
+        agent: "implement",
+        messageID: "m1",
+        id: "c-sh",
+        input: workdir === undefined ? { command } : { command, workdir },
+      }),
+    )
+  const judge = async (f: ReturnType<typeof fakeCtx>, cwd: string, rows: [string, string, string?][]) => {
+    const key = (command: string, workdir?: string) => `${workdir ?? "-"} | ${command}`
+    const got = await at(cwd, async () => {
+      const out: Record<string, string> = {}
+      for (const [command, , workdir] of rows) out[key(command, workdir)] = await shell(f, command, workdir)
+      return out
+    })
+    expect(got).toEqual(Object.fromEntries(rows.map(([command, want, workdir]) => [key(command, workdir), want])))
+  }
+
+  test("setup", async () => {
+    await guardrailV2.setup(ordinary.ctx)
+    await guardrailV2.setup(worker.ctx)
+  })
+
+  test("ordinary session (cwd == location, no workdir): cd spellings, compound commands, CDPATH, cd - / popd", async () => {
+    await judge(ordinary, dir, [
+      [`cd ${RT}/ && cat state.json && printf x >> state.json`, M],
+      [`( cd ${RT} && ${W} )`, M],
+      [`{ cd ${RT}; ${W}; }`, M],
+      [`if cd ${RT}; then ${W}; fi`, M],
+      [`builtin cd ${RT} && ${W}`, M],
+      [`\\cd ${RT} && ${W}`, M],
+      [`"cd" ${RT} && ${W}`, M],
+      [`command cd ${RT} && ${W}`, M],
+      [`FOO=1 cd ${RT} && ${W}`, M],
+      [`CDPATH=.opencode cd guardrails && ${W}`, M],
+      [`export CDPATH=.opencode; cd guardrails && ${W}`, M],
+      [`cd ${RT} && cd /tmp && cd - && ${W}`, M],
+      [`pushd ${RT} && pushd /tmp && popd && ${W}`, M],
+      [`cd ${RT} && ls && printf '{"reviewed":true}'>state.json`, M],
+      [`cd ${RT} && printf x >| state.json`, M],
+      [`cd ${RT} && sed -n 'w state.json' /tmp/x`, M],
+    ])
+  })
+
+  test("ordinary session: a dir-target writer naming the runtime, its parent or a case variant; git -C; OC-N3 shapes", async () => {
+    await judge(ordinary, dir, [
+      ["cp -R /tmp/evil/guardrails .opencode", M],
+      ["rsync -a /tmp/evil/ .opencode", M],
+      ["tar -xf x.tar -C .opencode", M],
+      ["unzip -o x.zip -d .opencode", M],
+      ["rm -rf .opencode", M],
+      ["find .opencode -name state.json -delete", M],
+      [`CP /tmp/x.json ${RT}`, M],
+      [`git -C ${RT} checkout -- state.json`, M],
+      ["printf x > .opencode/guard*/state.json", M],
+      [`D=${RT}; printf x > $D/state.json`, M],
+      [`printf x > $(echo ${RT})/state.json`, M],
+      // source-argument false positives: kept blocked so the rule stays one-directional (see the PR)
+      [`cp -r ${RT} /tmp/backup`, M],
+      [`tar -czf /tmp/g.tgz ${RT}`, M],
+    ])
+  })
+
+  test("team worker (cwd elsewhere): failed cd, pipelines, a cd's own redirect, prefixed cd, cd in compounds, OC-N3", async () => {
+    const runtime = join(wt, ".opencode", "guardrails")
+    await judge(worker, elsewhere, [
+      ["cd /does-not-exist || printf x > state.json", M, runtime],
+      ["cd ../.. | printf x > state.json", M, runtime],
+      ["X=/tmp cd . && printf x > state.json", M, runtime],
+      ["cd ../.. > state.json", M, ".opencode/guardrails"],
+      [`( cd ../${RT} && ${W} )`, M, "src"],
+      [`builtin cd ../${RT} && ${W}`, M, "src"],
+      [`\\cd ../${RT} && ${W}`, M, "src"],
+      [`"cd" ../${RT} && ${W}`, M, "src"],
+      [`FOO=1 cd ../${RT} && ${W}`, M, "src"],
+      [`if cd ../${RT}; then ${W}; fi`, M, "src"],
+      [`{ cd ../${RT}; ${W}; }`, M, "src"],
+      [`cd ../${RT} && ls && ${W}`, M, "src"],
+      [`( cd guardrails && ${W} )`, M, ".opencode"],
+      [`builtin cd guardrails && ${W}`, M, ".opencode"],
+      [`FOO=1 cd guardrails && ${W}`, M, ".opencode"],
+      ["cd guardrails && ls && printf x>state.json", M, ".opencode"],
+      ["printf '{}' > guard*/state.json", M, ".opencode"],
+      ['eval "printf x > guardrails/state.json"', M, ".opencode"],
+      ["sh -c 'printf x > guardrails/state.json'", M, ".opencode"],
+      [`python3 -c "open('guardrails/state.json','w').write('{}')"`, M, ".opencode"],
+      ["D=guardrails; printf x > $D/state.json", M, ".opencode"],
+      ["printf x > $(echo guardrails)/state.json", M, ".opencode"],
+    ])
+  })
+
+  test("benign rows stay allowed (no false positive from the added checks)", async () => {
+    await judge(ordinary, dir, [
+      [`mkdir -p ${RT}`, "PASS"],
+      [`git check-ignore -v ${RT}`, "PASS"],
+      [`echo ${RT} >> .gitignore`, "PASS"],
+      [`cat ${RT}/state.json`, "PASS"],
+      [`cd ${RT} && cat state.json`, "PASS"],
+      [`cd ${RT} && ls -la 2>/dev/null`, "PASS"],
+      ["cd src && printf ok > out.txt", "PASS"],
+      ["cd .opencode && ls guardrails", "PASS"],
+      ["cp a.txt b.txt && rm -rf dist", "PASS"],
+      ['git commit -m "cd .opencode/guardrails is protected"', "PASS"],
+    ])
+  })
+
+  test("cleanup", () => {
+    for (const d of [dir, wt, elsewhere]) rmSync(d, { recursive: true, force: true })
   })
 })

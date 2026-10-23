@@ -1,3 +1,4 @@
+import { existsSync } from "fs"
 import { mkdir } from "fs/promises"
 import path from "path"
 import {
@@ -77,6 +78,7 @@ export type GuardrailContext = {
     patterns: unknown[] | undefined
   }
   hidden(file: string): boolean
+  runtime(file: string): boolean
   code(file: string): boolean
   fact(file: string): boolean
   stale(data: Record<string, unknown>, key: "edit_count_since_check" | "edits_since_review"): boolean
@@ -154,6 +156,10 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   }
 
   await mkdir(root, { recursive: true })
+  // APFS (the macOS default) and NTFS fold case, so `.OPENCODE/Guardrails/state.json` is the real state file there
+  // (opencode#349). Probe the filesystem that holds the runtime instead of guessing from the platform.
+  const foldsCase = existsSync(path.join(input.directory, ".OPENCODE", "GUARDRAILS"))
+  const fold = (file: string) => (foldsCase ? file.toLowerCase() : file)
 
   async function mark(data: Record<string, unknown>) {
     const prev = await stash(state)
@@ -199,8 +205,14 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
   /** file's path inside the runtime dir that holds it, or undefined outside every runtime dir. */
   function owned(file: string) {
     const abs = norm(file)
-    const dir = runtimes.find((dir) => abs.startsWith(dir + "/"))
+    const dir = runtimes.find((dir) => fold(abs).startsWith(fold(dir) + "/"))
     return dir === undefined ? undefined : abs.slice(dir.length + 1)
+  }
+
+  /** true when file is a runtime dir itself or lies inside one. */
+  function runtime(file: string) {
+    const abs = fold(norm(file))
+    return runtimes.some((dir) => abs === fold(dir) || abs.startsWith(fold(dir) + "/"))
   }
 
   function hidden(file: string) {
@@ -361,6 +373,7 @@ export async function createContext(input: GuardrailInput, opts?: Record<string,
     seen,
     note,
     hidden,
+    runtime,
     code,
     fact,
     stale,
