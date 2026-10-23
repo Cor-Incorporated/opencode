@@ -903,3 +903,59 @@ describe("F8 directory tracking only adds blocks: every way a shell can change o
     for (const d of [dir, wt, elsewhere]) rmSync(d, { recursive: true, force: true })
   })
 })
+
+describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4, opencode#351)", () => {
+  // The read-only allowlists took any `sed -n` as a reader, and the write pattern only saw `-i` right after `sed`,
+  // so `sed -n -i '' …` rewrote plugin-owned state (real BSD sed did, in the #350 round-2 acceptance).
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-sed-")))
+  const f = fakeCtx(dir)
+  const RT = ".opencode/guardrails"
+  const M = "runtime-mutation"
+  const judge = async (rows: [string, string, string?][]) => {
+    const key = (command: string, workdir?: string) => `${workdir ?? "-"} | ${command}`
+    const got = await at(dir, async () => {
+      const out: Record<string, string> = {}
+      for (const [command, , workdir] of rows) {
+        const input = workdir === undefined ? { command } : { command, workdir }
+        out[key(command, workdir)] = await verdict(
+          f.fire("tool.execute.before", { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-sh", input }),
+        )
+      }
+      return out
+    })
+    expect(got).toEqual(Object.fromEntries(rows.map(([command, want, workdir]) => [key(command, workdir), want])))
+  }
+
+  test("setup", async () => {
+    await guardrailV2.setup(f.ctx)
+  })
+
+  test("an in-place flag anywhere among sed's options is a runtime mutation", async () => {
+    await judge([
+      [`sed -n -i '' 's/"reviewed":false/"reviewed":true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n -i '' 's/false/true/p' state.json`, M],
+      [`sed -n -i.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -E -n -i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -ni 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-place 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -I '' 's/false/true/p' ${RT}/state.json`, M],
+      [`/usr/bin/sed -n -i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -i '' 's/false/true/p' state.json`, M, join(dir, RT)],
+      [`sed -n '1p;2p' -i ${RT}/state.json`, M],
+      [`sed -n p '-i' ${RT}/state.json`, M],
+      [`sh -c "sed -n -i '' s/x/y/ ${RT}/state.json"`, M],
+    ])
+  })
+
+  test("`-i` inside a sed script is not a flag, so these reads stay allowed", async () => {
+    await judge([
+      [`sed -n p ${RT}/state.json`, "PASS"],
+      [`sed -n 's/x/-i/p' ${RT}/state.json`, "PASS"],
+      [`sed -n 's/false/ -i /p' ${RT}/state.json`, "PASS"],
+    ])
+  })
+
+  test("cleanup", () => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

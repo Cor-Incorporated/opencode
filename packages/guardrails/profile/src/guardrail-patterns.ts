@@ -261,7 +261,23 @@ export function pick(args: unknown) {
 }
 
 export function bash(cmd: string) {
-  return mut.some((item) => item.test(cmd))
+  return mut.some((item) => item.test(cmd)) || sedInPlace(cmd)
+}
+
+/**
+ * `sed` with an in-place flag anywhere among its options: `-n -i ''`, `-E -n -i`, `-ni`, `-i.bak`, BSD `-I`,
+ * `--in-place` (opencode#351). The `sed\s+-i` pattern above only sees `-i` right after `sed`. A quoted word stays one
+ * word (`'s/x/ -i /p'` is a script, `'-i'` is a flag); under `sh -c`, `eval` and the like the quoted text is code, so
+ * there the quotes count as spaces.
+ */
+function sedInPlace(cmd: string) {
+  const code = /(?:^|[\s;&|(])(?:eval|(?:sh|bash|zsh)\s+-c)\b/i.test(cmd)
+  const text = code
+    ? cmd.replace(/["'`]/g, " ")
+    : cmd.replace(/"([^"]*)"|'([^']*)'/g, (_, double, single) => String(double ?? single).replace(/[\s;&|()]/g, "_"))
+  return text
+    .split(/[;&|\n()]/)
+    .some((segment) => /(?:^|[\s/])g?sed\s(?:.*\s)?(?:-[a-z]*i|--in-place\b)/i.test(segment))
 }
 
 export function list(data: unknown) {
