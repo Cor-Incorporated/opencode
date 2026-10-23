@@ -943,6 +943,9 @@ describe("F9 sed in place, quoted separators and glob case (opencode#351, Codex 
       [`sed -n -I '' 's/false/true/p' ${RT}/state.json`, M],
       [`/usr/bin/sed -n -i '' 's/false/true/p' ${RT}/state.json`, M],
       [`sed -n -i '' 's/false/true/p' state.json`, M, join(dir, RT)],
+      [`sed -n '1p;2p' -i ${RT}/state.json`, M],
+      [`sed -n p '-i' ${RT}/state.json`, M],
+      [`sh -c "sed -n -i '' s/x/y/ ${RT}/state.json"`, M],
     ])
   })
 
@@ -953,6 +956,10 @@ describe("F9 sed in place, quoted separators and glob case (opencode#351, Codex 
       [`cd ${RT} && grep -E 'a|b' state.json`, "PASS"],
       [`sed -n 's/x/-i/p' ${RT}/state.json`, "PASS"],
       [`sed -n p ${RT}/state.json`, "PASS"],
+      [`sed -n 's/false/ -i /p' ${RT}/state.json`, "PASS"],
+      // double quotes still expand: `${1:--delete}` becomes -delete when $1 is unset (Codex r1 on this fix)
+      ['find .opencode/guardrails/state.json "${1:--delete}"', M],
+      [`grep "$(rm ${RT}/state.json)|x" ${RT}/state.json`, M],
       [`grep -E 'a|b' ${RT}/state.json; rm ${RT}/state.json`, M],
       [`grep 'a|b' ${RT}/state.json | tee ${RT}/state.json`, M],
     ])
@@ -971,12 +978,16 @@ describe("F9 sed in place, quoted separators and glob case (opencode#351, Codex 
       "guard* on a case-keeping fs": shellReachesRuntime(keeps, "rm -rf .opencode/guard*", ""),
       "nocaseglob on a case-keeping fs": shellReachesRuntime(keeps, "shopt -s nocaseglob; rm -rf .opencode/GUARD*", ""),
       "zsh unsetopt CASE_GLOB on a case-keeping fs": shellReachesRuntime(keeps, "unsetopt CASE_GLOB; rm -rf .opencode/GUARD*", ""),
+      "quote-split nocaseglob": shellReachesRuntime(keeps, 'shopt -s no"caseglob"; find .opencode/GUARD* -delete', ""),
+      "nocaseglob built from a variable": shellReachesRuntime(keeps, "o=nocase; shopt -s ${o}glob; rm -rf .opencode/GUARD*", ""),
       "GUARD* on a case-folding fs": shellReachesRuntime({ ...ctx, foldsCase: true }, "rm -rf .opencode/GUARD*", ""),
     }).toEqual({
       "GUARD* on a case-keeping fs": false,
       "guard* on a case-keeping fs": true,
       "nocaseglob on a case-keeping fs": true,
       "zsh unsetopt CASE_GLOB on a case-keeping fs": true,
+      "quote-split nocaseglob": true,
+      "nocaseglob built from a variable": true,
       "GUARD* on a case-folding fs": true,
     })
   })
