@@ -992,6 +992,20 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       [`sed -n 'w /tmp/x' ${RT}/state.json`, M],
       [`sed -n 's/a/b/e' ${RT}/state.json`, M],
       [`sed p ${RT}/state.json`, M],
+      // Codex review of d978389483: write commands behind an address or another delimiter, and a quoted option in the
+      // script's place, slipped through the first positive shape; a quoted script with spaces must still read
+      [`sed -E -n '1w ${RT}/state.json' seed.txt`, M],
+      [`sed -n 's:false:true:w ${RT}/state.json' seed.txt`, M],
+      [`sed -E -n '-f' program.sed ${RT}/state.json`, M],
+      [`sed -n '/a/,/b/w out' ${RT}/state.json`, M],
+      [`sed -n '/review state/p' ${RT}/state.json`, "PASS"],
+      [`sed -n '/a/!d' ${RT}/state.json`, "PASS"],
+      // Codex review of 085fd01125: an expansion inside double quotes still runs; `*` as the s delimiter; `do` in a script
+      [`cat /dev/null"$(find ${RT}/state.json -delete)"`, M],
+      [`cat /dev/null"\`rm ${RT}/state.json\`"`, M],
+      [`sed -n 's*a*b*p' ${RT}/state.json`, "PASS"],
+      [`sed -n 's+a+b+p' ${RT}/state.json`, "PASS"],
+      [`sed -n '/do work/p' ${RT}/state.json`, "PASS"],
     ])
   })
 

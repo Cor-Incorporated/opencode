@@ -93,7 +93,7 @@ function sedScriptReads(script: string) {
     else if (c === "s" || c === "y") {
       const d = rest[1]
       if (d === undefined || /[\s\\\n\w]/.test(d)) return false
-      const lit = d.replace(/[-\]^\\/]/g, "\\$&")
+      const lit = d.replace(/[.*+?^${}()|[\]\\\/-]/g, "\\$&")
       const part = String.raw`(?:[^\\${lit}]|\\.)*`
       const m = new RegExp(String.raw`^${c}${lit}${part}${lit}${part}${lit}([gpIimM0-9]*)`).exec(rest)
       if (!m) return false
@@ -159,28 +159,44 @@ function prose(cmd: string) {
   return cmd.replace(/"[^"]*"|'[^']*'/g, (quoted) => (/\s/.test(quoted) ? " " : quoted))
 }
 
-/** The command's segments cut at unquoted `;`, `|`, `&`, `(`, `)`, `{`, `}`, newline and then/else/elif/do. */
+/**
+ * The command's segments, cut at unquoted `;`, `|`, `&`, `(`, `)`, `{`, `}`, newline and the then / else / elif / do
+ * words. Inside double quotes `$(…)` and backticks still run (Codex review: `cat x"$(find … -delete)"` hid a find),
+ * so they cut a segment too; a keyword inside quotes does not (`sed -n '/do work/p'` is one segment).
+ */
 function rawSegments(cmd: string) {
   const out: string[] = []
   let cur = ""
   let quote = ""
+  const cut = () => {
+    out.push(cur)
+    cur = ""
+  }
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i]
-    if (quote) {
-      if (ch === quote) quote = ""
-      else if (quote === '"' && ch === "\\") cur += cmd[i++] ?? ""
+    if (quote === "'") {
+      if (ch === "'") quote = ""
       cur += ch
+    } else if (quote === '"') {
+      if (ch === "\\") cur += ch + (cmd[++i] ?? "")
+      else if (ch === "$" && cmd[i + 1] === "(") (cut(), i++)
+      else if (ch === ")" || ch === "`") cut()
+      else {
+        if (ch === '"') quote = ""
+        cur += ch
+      }
     } else if (ch === "\\") cur += ch + (cmd[++i] ?? "")
-    else if (/[;|&(){}\n]/.test(ch)) {
-      out.push(cur)
-      cur = ""
+    else if (/[;|&(){}\n`]/.test(ch)) cut()
+    else if (/\W/.test(cmd[i - 1] ?? " ") && /^(?:then|else|elif|do)\b/.test(cmd.slice(i))) {
+      cut()
+      i += /^(?:then|else|elif|do)/.exec(cmd.slice(i))![0].length - 1
     } else {
       if (ch === "'" || ch === '"') quote = ch
       cur += ch
     }
   }
-  out.push(cur)
-  return out.flatMap((seg) => seg.split(/\b(?:then|else|elif|do)\b/))
+  cut()
+  return out
 }
 
 function segments(text: string) {
