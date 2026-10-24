@@ -41,9 +41,33 @@ export function shellReadOnly(cmd: string) {
   return segments(text).every((segment) => {
     const name = command(segment)
     if (name === "find") return !/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(segment)
-    if (name === "sed") return /\s-n\b/.test(segment)
+    if (name === "sed") return sedReadOnly(segment)
     return /^(?:|cd|pushd|popd|ls|cat|grep|egrep|fgrep|rg|pwd|stat|wc|head|tail|test|\[|readlink|file|du|true|:|fi|done|esac)$/.test(name)
   })
+}
+
+/**
+ * The ONE shape of sed accepted as a read of the runtime (opencode#353 round 3, owner decision (A) 2026-10-24): the
+ * segment is exactly `sed -n [-E|-r] <script> <path>…` where the script is single-quoted or a bare word, every path
+ * is a bare word, and nothing in the segment can hide an option: no `\`, `$`, `"`, backtick, `#`, `--`, `;`, `&`,
+ * `|`, `<`, `>` or parentheses. Rounds 1 and 2 enumerated the shapes that spell `-i` (escapes, ANSI-C quotes, GNU
+ * prefixes) and the acceptance (aidd-governance#218, #219) found five more each time, so the allowance is now
+ * positive and narrow; every other sed is a write. Scripts that run or write (`e`, `w`, `W`, `r`, `R`, the `e` / `w`
+ * flags of `s`) are not reads either. Workaround for an honest read that this refuses: single-quote the script.
+ */
+export function sedReadOnly(segment: string) {
+  if (/[\\$"`#;&|<>()]|--/.test(segment)) return false
+  const words = segment.trim().match(/'[^']*'|\S+/g) ?? []
+  if (!/^(?:\/[\w./-]*\/)?g?sed$/.test(words[0] ?? "")) return false
+  let i = 1
+  const opts = new Set<string>()
+  while (i < words.length && /^-[nEr]$/.test(words[i])) opts.add(words[i++])
+  if (!opts.has("-n")) return false
+  const script = words[i++]
+  if (script === undefined) return false
+  const body = /^'[^']*'$/.test(script) ? script.slice(1, -1) : /^[\w,;/^.*+?=!{}\[\]]+$/.test(script) ? script : null
+  if (body === null || /(?:^|[;{}\s])[eWwRr](?:\s|$)|\/[gpIimM0-9]*[ew][gpIimM0-9]*(?:$|[;}\s])/.test(body)) return false
+  return words.slice(i).every((w) => /^[\w./~+][\w./~+-]*$/.test(w))
 }
 
 type Runtime = Pick<GuardrailContext, "input" | "runtime" | "hidden" | "runtimes">

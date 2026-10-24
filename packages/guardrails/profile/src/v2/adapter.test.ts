@@ -963,8 +963,35 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       [`sed -n --in-place=.bak 's/false/true/p' ${RT}/state.json`, M],
       [`sed -n 's/false/true/p' -i ${RT}/state.json`, M],
       [`sed -n 's/false/true/p' '-i' ${RT}/state.json`, M],
-      // double-quoted text reaches sed as written: `"\-i"` is a literal word, not a flag
-      [`sed -n "\\-i" ${RT}/state.json`, "PASS"],
+      // round 3: a double-quoted word is outside the one accepted read shape (single-quote the script instead)
+      [`sed -n "\\-i" ${RT}/state.json`, M],
+    ])
+  })
+
+  test("round 3: only `sed -n [-E|-r] <script> <path>…` with no \\ $ \" ` # -- is a read; every other sed is a write", async () => {
+    // aidd-governance#219 (round-2 acceptance, REJECT): `$"-i"`, another `$'-i'` reading, GNU `--i` / `--i=.bak`, a
+    // postfix `-i` behind an escaped quote, and `I=-i; … $I` still reached sed as in-place. Each wrote state.json with
+    // real BSD or GNU sed. Owner (A): stop enumerating write shapes; accept one narrow read shape and block the rest.
+    await judge([
+      [`sed -n p ${RT}/state.json`, "PASS"],
+      [`sed -n 's/false/true/p' ${RT}/state.json`, "PASS"],
+      [`sed -n -E '/rev/p' ${RT}/state.json`, "PASS"],
+      [`cd ${RT} && sed -n -r 1p state.json`, "PASS"],
+      [`sed -n $"-i" '' 's/false/true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n $"-i" '' 's/false/true/p' state.json`, M],
+      [`sed -n $'-i' '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --i 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --i=.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n --i 's/false/true/p' state.json`, M],
+      [`sed -n 's/false/true/p' \\" -i ${RT}/state.json \\"`, M],
+      [`sed -n 's/false/true/p' \\' -i ${RT}/state.json \\'`, M],
+      [`cd ${RT} && I=-i; sed -n $I '' 's/false/true/p' state.json`, M],
+      [`sed -n "p" ${RT}/state.json`, M],
+      [`sed -n -- p ${RT}/state.json`, M],
+      [`sed -n p ${RT}/state.json # -i`, M],
+      [`sed -n 'w /tmp/x' ${RT}/state.json`, M],
+      [`sed -n 's/a/b/e' ${RT}/state.json`, M],
+      [`sed p ${RT}/state.json`, M],
     ])
   })
 
