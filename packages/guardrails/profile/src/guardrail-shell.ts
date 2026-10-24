@@ -38,10 +38,13 @@ export function shellReadOnly(cmd: string) {
   if (/\bsed\b.*['"\s;{}/][wW]\s+\S/.test(cmd)) return false // sed's `w file` command writes
   const text = prose(cmd)
   if (/>(?!\s*(?:&\d|\/dev\/null\b))/.test(text.replace(/\d>&\d/g, ""))) return false
-  return segments(text).every((segment) => {
+  // sed is judged on the raw segment (its quoted script intact): prose() would drop `'/review state/p'` and leave the
+  // path in the script's place (Codex review of #353 round 3, P2). Segments are cut outside quotes only.
+  return rawSegments(cmd).every((raw) => {
+    const segment = prose(raw)
     const name = command(segment)
     if (name === "find") return !/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(segment)
-    if (name === "sed") return sedReadOnly(segment)
+    if (name === "sed") return sedReadOnly(raw)
     return /^(?:|cd|pushd|popd|ls|cat|grep|egrep|fgrep|rg|pwd|stat|wc|head|tail|test|\[|readlink|file|du|true|:|fi|done|esac)$/.test(name)
   })
 }
@@ -66,8 +69,39 @@ export function sedReadOnly(segment: string) {
   const script = words[i++]
   if (script === undefined) return false
   const body = /^'[^']*'$/.test(script) ? script.slice(1, -1) : /^[\w,;/^.*+?=!{}\[\]]+$/.test(script) ? script : null
-  if (body === null || /(?:^|[;{}\s])[eWwRr](?:\s|$)|\/[gpIimM0-9]*[ew][gpIimM0-9]*(?:$|[;}\s])/.test(body)) return false
+  // after quote removal sed sees the word itself: a leading `-` is another option (`'-f' program.sed` ran a file)
+  if (body === null || body.startsWith("-") || !sedScriptReads(body)) return false
   return words.slice(i).every((w) => /^[\w./~+][\w./~+-]*$/.test(w))
+}
+
+/**
+ * A sed script that only reads: every command, after its optional address(es) and `!`, is one of the print / hold /
+ * branch / control commands, `y`, or an `s` whose flags carry no `w` or `e`, with any delimiter. Anything else (the
+ * `w` / `W` / `r` / `R` / `e` commands, `s///w file`, `s///e`, an address or delimiter this does not parse) is not a
+ * read (Codex review of round 3: `'1w file'` and `s:a:b:w file` had slipped past a `/`-only flag check).
+ */
+function sedScriptReads(script: string) {
+  const addr = String.raw`(?:\d+|\$|/(?:[^/\\]|\\.)*/)[IM]*`
+  const prefix = new RegExp(String.raw`^\s*(?:${addr}(?:\s*[,~+]\s*(?:${addr}|\d+))?\s*)?!?\s*`)
+  let rest = script
+  for (let guard = 0; guard < 256 && rest.trim() !== ""; guard++) {
+    rest = rest.slice((prefix.exec(rest) ?? [""])[0].length)
+    const c = rest[0]
+    if (c === undefined) return true
+    if ("pPlnNdDhHgGxqQ={}".includes(c)) rest = rest.slice(1)
+    else if ("btT:".includes(c)) rest = rest.replace(/^.[^;\n]*/, "")
+    else if (c === "s" || c === "y") {
+      const d = rest[1]
+      if (d === undefined || /[\s\\\n\w]/.test(d)) return false
+      const lit = d.replace(/[-\]^\\/]/g, "\\$&")
+      const part = String.raw`(?:[^\\${lit}]|\\.)*`
+      const m = new RegExp(String.raw`^${c}${lit}${part}${lit}${part}${lit}([gpIimM0-9]*)`).exec(rest)
+      if (!m) return false
+      rest = rest.slice(m[0].length)
+    } else return false
+    rest = rest.replace(/^\s*(?:;\s*|\n\s*)*/, "")
+  }
+  return rest.trim() === ""
 }
 
 type Runtime = Pick<GuardrailContext, "input" | "runtime" | "hidden" | "runtimes">
@@ -123,6 +157,30 @@ function expand(cmd: string) {
 /** Quoted text with spaces (commit messages, PR bodies) is prose; quotes pair left to right. */
 function prose(cmd: string) {
   return cmd.replace(/"[^"]*"|'[^']*'/g, (quoted) => (/\s/.test(quoted) ? " " : quoted))
+}
+
+/** The command's segments cut at unquoted `;`, `|`, `&`, `(`, `)`, `{`, `}`, newline and then/else/elif/do. */
+function rawSegments(cmd: string) {
+  const out: string[] = []
+  let cur = ""
+  let quote = ""
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]
+    if (quote) {
+      if (ch === quote) quote = ""
+      else if (quote === '"' && ch === "\\") cur += cmd[i++] ?? ""
+      cur += ch
+    } else if (ch === "\\") cur += ch + (cmd[++i] ?? "")
+    else if (/[;|&(){}\n]/.test(ch)) {
+      out.push(cur)
+      cur = ""
+    } else {
+      if (ch === "'" || ch === '"') quote = ch
+      cur += ch
+    }
+  }
+  out.push(cur)
+  return out.flatMap((seg) => seg.split(/\b(?:then|else|elif|do)\b/))
 }
 
 function segments(text: string) {
