@@ -947,6 +947,27 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
     ])
   })
 
+  test("escaped or ANSI-C-quoted flags and names, and GNU long-option prefixes, are still writes (#353 round 2)", async () => {
+    // opencode#353 acceptance: a backslash outside quotes vanishes before sed sees the word, `$'…'` is decoded by bash,
+    // and GNU getopt_long accepts any unambiguous prefix of --in-place. Real BSD sed rewrote state.json through the
+    // first six; real GNU sed 4.10 through all of them (gsed, 2026-10-24).
+    await judge([
+      [`sed -n \\-i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -\\i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n $'-i' '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n $'\\x2di' '' 's/false/true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && \\sed -n -i '' 's/false/true/p' state.json`, M],
+      [`cd ${RT} && s\\ed -n -i '' 's/false/true/p' state.json`, M],
+      [`sed -n --in 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-pl 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-place=.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n 's/false/true/p' -i ${RT}/state.json`, M],
+      [`sed -n 's/false/true/p' '-i' ${RT}/state.json`, M],
+      // double-quoted text reaches sed as written: `"\-i"` is a literal word, not a flag
+      [`sed -n "\\-i" ${RT}/state.json`, "PASS"],
+    ])
+  })
+
   test("`-i` inside a sed script is not a flag, so these reads stay allowed", async () => {
     await judge([
       [`sed -n p ${RT}/state.json`, "PASS"],

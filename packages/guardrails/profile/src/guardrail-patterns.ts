@@ -272,12 +272,52 @@ export function bash(cmd: string) {
  */
 function sedInPlace(cmd: string) {
   const code = /(?:^|[\s;&|(])(?:eval|(?:sh|bash|zsh)\s+-c)\b/i.test(cmd)
+  const plain = unescapeShell(cmd)
   const text = code
-    ? cmd.replace(/["'`]/g, " ")
-    : cmd.replace(/"([^"]*)"|'([^']*)'/g, (_, double, single) => String(double ?? single).replace(/[\s;&|()]/g, "_"))
+    ? plain.replace(/["'`]/g, " ")
+    : plain.replace(/"([^"]*)"|'([^']*)'/g, (_, double, single) => String(double ?? single).replace(/[\s;&|()]/g, "_"))
+  // GNU getopt_long takes any unambiguous prefix, and `--in` already names only --in-place (opencode#353 acceptance P2-1)
   return text
     .split(/[;&|\n()]/)
-    .some((segment) => /(?:^|[\s/])g?sed\s(?:.*\s)?(?:-[a-z]*i|--in-place\b)/i.test(segment))
+    .some((segment) => /(?:^|[\s/])g?sed\s(?:.*\s)?(?:-[a-z]*i|--in[-a-z]*(?:=\S*)?(?=\s|$))/i.test(segment))
+}
+
+/**
+ * The words the shell hands to the command, for the parts quoting can hide: `\-i`, `-\i`, `\sed`, `s\ed` (a backslash
+ * outside quotes escapes the next character and vanishes) and `$'-i'` / `$'\x2di'` (ANSI-C quoting, decoded by bash
+ * before the command runs). Single-quoted text is kept as written. opencode#353 acceptance P1-1 / P1-2: real BSD sed
+ * rewrote state.json through each of these while the check saw no `-i` or no `sed`.
+ */
+function unescapeShell(cmd: string) {
+  const ansi = cmd.replace(/\$'((?:[^'\\]|\\.)*)'/g, (_, body: string) => {
+    const decoded = body.replace(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|.)/g, (m: string, esc: string) => {
+      if (esc[0] === "x") return String.fromCharCode(parseInt(esc.slice(1), 16))
+      if (/^[0-7]+$/.test(esc)) return String.fromCharCode(parseInt(esc, 8))
+      return ({ n: "\n", t: "\t", r: "\r", a: "\x07", b: "\b", f: "\f", v: "\v", e: "\x1b", E: "\x1b" } as Record<string, string>)[esc] ?? esc
+    })
+    return `'${decoded.replace(/'/g, "")}'`
+  })
+  let out = ""
+  let quote = ""
+  for (let i = 0; i < ansi.length; i++) {
+    const ch = ansi[i]
+    if (quote === "'") {
+      if (ch === "'") quote = ""
+      out += ch
+    } else if (quote === '"') {
+      // double-quoted text is kept as written (`"\-i"` reaches sed as a literal `\-i`); `\"` does not close the quote
+      if (ch === "\\" && i + 1 < ansi.length) out += ch + ansi[++i]
+      else {
+        if (ch === '"') quote = ""
+        out += ch
+      }
+    } else if (ch === "\\" && i + 1 < ansi.length) out += ansi[++i]
+    else {
+      if (ch === "'" || ch === '"') quote = ch
+      out += ch
+    }
+  }
+  return out
 }
 
 export function list(data: unknown) {
