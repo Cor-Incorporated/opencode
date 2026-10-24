@@ -15,7 +15,7 @@ import {
   text,
 } from "./guardrail-patterns"
 import type { GuardrailContext } from "./guardrail-context"
-import { sedReadOnly, shellReachesRuntime, shellReadOnly } from "./guardrail-shell"
+import { shellReachesRuntime, shellReadOnly } from "./guardrail-shell"
 
 export function createAccessHandlers(ctx: GuardrailContext) {
   function resetReviewEvidence() {
@@ -48,8 +48,9 @@ export function createAccessHandlers(ctx: GuardrailContext) {
     const trimmed = cmd.trim()
     if (bash(trimmed)) return false
     if (/\bfind\b[\s\S]*(?:\s-delete\b|\s-exec\b|\s-ok\b)/i.test(trimmed)) return false
-    // sed is a read only in its one positive shape (guardrail-shell.ts sedReadOnly, opencode#353 round 3)
-    if (/^(?:\/\S*\/)?g?sed\b/.test(trimmed)) return sedReadOnly(trimmed)
+    // sed is a read only in its one positive shape, judged per segment so `sed -n '1,20p' f | head -n 5` stays a read
+    // (guardrail-shell.ts sedReadOnly via shellReadOnly, opencode#353 round 3)
+    if (/^(?:\/\S*\/)?g?sed\b/.test(trimmed)) return shellReadOnly(trimmed)
     return /^(?:ls|cat|grep|egrep|fgrep|rg|find|pwd|stat|wc|head|tail|test|\[|readlink|file|du)\b/i.test(
       trimmed,
     )

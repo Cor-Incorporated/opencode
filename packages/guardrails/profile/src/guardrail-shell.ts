@@ -177,6 +177,8 @@ function rawSegments(cmd: string) {
     if (quote === "'") {
       if (ch === "'") quote = ""
       cur += ch
+    } else if (ch === "\\" && cmd[i + 1] === "\n") {
+      i++ // a line continuation vanishes before the shell reads the word (Codex review: `-de\<newline>lete` hid -delete)
     } else if (quote === '"') {
       if (ch === "\\") cur += ch + (cmd[++i] ?? "")
       else if (ch === "$" && cmd[i + 1] === "(") (cut(), i++)
