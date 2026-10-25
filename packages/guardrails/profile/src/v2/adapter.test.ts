@@ -1013,6 +1013,10 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       // Codex review of a229d555fb: a quote inside a comment is not a quote; the next line is its own segment
       [`cat ${RT}/state.json # '\nunlink ${RT}/state.json`, M],
       [`cat ${RT}/state.json # just a note`, "PASS"],
+      // Codex review of 20ace60111: an escaped space before `#` is not a comment start; a substitution inside quotes
+      // may hold its own quotes, so any command substitution is simply not a read (ADR-012)
+      [`cat ${RT}/state.json x\\ #; unlink ${RT}/state.json`, M],
+      [`test -z "$(true "x";find ${RT}/state.json -delete)"`, M],
       [`cat /dev/null"x$(find ${RT}/state.json -delete)y"`, M],
     ])
   })

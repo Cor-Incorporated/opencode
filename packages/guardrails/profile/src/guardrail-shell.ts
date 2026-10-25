@@ -36,6 +36,9 @@ export function shellReachesRuntime(rt: Runtime, cmd: string, workdir: string) {
 export function shellReadOnly(cmd: string) {
   if (bash(cmd)) return false
   if (/\bsed\b.*['"\s;{}/][wW]\s+\S/.test(cmd)) return false // sed's `w file` command writes
+  // a command substitution runs whatever it holds, quoted or not; a read never needs one here (Codex review: the
+  // quote state inside `"$(…)"` could not be tracked safely, so the whole command is not a read — ADR-012)
+  if (/\$\(|`/.test(cmd)) return false
   const text = prose(cmd)
   if (/>(?!\s*(?:&\d|\/dev\/null\b))/.test(text.replace(/\d>&\d/g, ""))) return false
   // sed is judged on the raw segment (its quoted script intact): prose() would drop `'/review state/p'` and leave the
@@ -161,40 +164,37 @@ function prose(cmd: string) {
 
 /**
  * The command's segments, cut at unquoted `;`, `|`, `&`, `(`, `)`, `{`, `}`, newline and the then / else / elif / do
- * words. Inside double quotes `$(…)` and backticks still run (Codex review: `cat x"$(find … -delete)"` hid a find),
- * so they cut a segment too; a keyword inside quotes does not (`sed -n '/do work/p'` is one segment).
+ * words. A keyword inside quotes does not cut (`sed -n '/do work/p'` is one segment). Command substitutions are
+ * not tracked here: shellReadOnly refuses any command that holds one.
  */
 function rawSegments(cmd: string) {
   const out: string[] = []
   let cur = ""
   let quote = ""
-  let subshell = 0
+  let escaped = false // the last character appended came from a backslash escape (`x\ #` is not a comment)
   const cut = () => {
     out.push(cur)
     cur = ""
   }
   for (let i = 0; i < cmd.length; i++) {
     const ch = cmd[i]
+    const wasEscaped = escaped
+    escaped = false
     if (quote === "'") {
       if (ch === "'") quote = ""
       cur += ch
     } else if (ch === "\\" && cmd[i + 1] === "\n") {
       i++ // a line continuation vanishes before the shell reads the word (Codex review: `-de\<newline>lete` hid -delete)
+    } else if (ch === "\\") {
+      cur += ch + (cmd[++i] ?? "")
+      escaped = true
     } else if (quote === '"') {
-      // only a `$(` and the `)` that closes it cut the segment; a plain `)` in quoted text (`"(a|b)"`) is text
-      if (ch === "\\") cur += ch + (cmd[++i] ?? "")
-      else if (ch === "$" && cmd[i + 1] === "(") (cut(), i++, subshell++)
-      else if (ch === ")" && subshell > 0) (cut(), subshell--)
-      else if (ch === "`") cut()
-      else {
-        if (ch === '"') quote = ""
-        cur += ch
-      }
-    } else if (ch === "\\") cur += ch + (cmd[++i] ?? "")
-    else if (ch === "#" && /(?:^|[\s;|&(){}])$/.test(cur)) {
+      if (ch === '"') quote = ""
+      cur += ch
+    } else if (ch === "#" && !wasEscaped && /(?:^|[\s;|&(){}])$/.test(cur)) {
       // a comment runs to the end of the line and its quotes mean nothing (Codex review: `# '` swallowed the next line)
       while (i + 1 < cmd.length && cmd[i + 1] !== "\n") i++
-    } else if (/[;|&(){}\n`]/.test(ch)) cut()
+    } else if (/[;|&(){}\n]/.test(ch)) cut()
     else if (/\W/.test(cmd[i - 1] ?? " ") && /^(?:then|else|elif|do)\b/.test(cmd.slice(i))) {
       cut()
       i += /^(?:then|else|elif|do)/.exec(cmd.slice(i))![0].length - 1
