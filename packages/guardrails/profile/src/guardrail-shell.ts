@@ -38,7 +38,7 @@ export function shellReadOnly(cmd: string) {
   if (/\bsed\b.*['"\s;{}/][wW]\s+\S/.test(cmd)) return false // sed's `w file` command writes
   // a command substitution runs whatever it holds, quoted or not; a read never needs one here (Codex review: the
   // quote state inside `"$(…)"` could not be tracked safely, so the whole command is not a read — ADR-012)
-  if (/\$\(|`/.test(cmd)) return false
+  if (/\$\(|`|\$['"]/.test(cmd)) return false // nor is `$'…'` / `$"…"` quoting (its escapes defeat a quote tracker)
   const text = prose(cmd)
   if (/>(?!\s*(?:&\d|\/dev\/null\b))/.test(text.replace(/\d>&\d/g, ""))) return false
   // sed is judged on the raw segment (its quoted script intact): prose() would drop `'/review state/p'` and leave the
@@ -63,7 +63,8 @@ export function shellReadOnly(cmd: string) {
  */
 export function sedReadOnly(segment: string) {
   if (/[\\$"`#;&|<>()]|--/.test(segment)) return false
-  const words = segment.trim().match(/'[^']*'|\S+/g) ?? []
+  const words = shellWords(segment)
+  if (words === null) return false
   if (!/^(?:\/[\w./-]*\/)?g?sed$/.test(words[0] ?? "")) return false
   let i = 1
   const opts = new Set<string>()
@@ -75,6 +76,23 @@ export function sedReadOnly(segment: string) {
   // after quote removal sed sees the word itself: a leading `-` is another option (`'-f' program.sed` ran a file)
   if (body === null || body.startsWith("-") || !sedScriptReads(body)) return false
   return words.slice(i).every((w) => /^[\w./~+][\w./~+-]*$/.test(w))
+}
+
+/**
+ * The segment as whole words: a single-quoted word must end at whitespace (the shell glues `'…'w.file` into one word,
+ * so a script with a `w` flag hid behind the quote — Codex review), a bare word holds no quote. null when the segment
+ * does not divide that way.
+ */
+function shellWords(segment: string) {
+  const words: string[] = []
+  let rest = segment.trim()
+  while (rest !== "") {
+    const m = /^('[^']*'|[^\s']+)(?:\s+|$)/.exec(rest)
+    if (!m) return null
+    words.push(m[1])
+    rest = rest.slice(m[0].length)
+  }
+  return words
 }
 
 /**
@@ -185,6 +203,7 @@ function rawSegments(cmd: string) {
       cur += ch
     } else if (ch === "\\" && cmd[i + 1] === "\n") {
       i++ // a line continuation vanishes before the shell reads the word (Codex review: `-de\<newline>lete` hid -delete)
+      escaped = wasEscaped // `x\ \<newline>#` — the escaped space still precedes the `#`
     } else if (ch === "\\") {
       cur += ch + (cmd[++i] ?? "")
       escaped = true

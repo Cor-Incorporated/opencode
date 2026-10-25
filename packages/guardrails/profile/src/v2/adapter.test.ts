@@ -1017,6 +1017,11 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       // may hold its own quotes, so any command substitution is simply not a read (ADR-012)
       [`cat ${RT}/state.json x\\ #; unlink ${RT}/state.json`, M],
       [`test -z "$(true "x";find ${RT}/state.json -delete)"`, M],
+      // Codex review of d1ce0b7de2: a word glued to a quoted script; an escaped space across a line continuation;
+      // ANSI-C quoting (never a read)
+      [`sed -E -n 's/false/true/p'w${RT}/state.json seed.txt`, M],
+      [`cat ${RT}/state.json x\\ \\\n#; unlink ${RT}/state.json`, M],
+      [`cat ${RT}/state.json $'\\'';unlink ${RT}/state.json;#'`, M],
       [`cat /dev/null"x$(find ${RT}/state.json -delete)y"`, M],
     ])
   })
