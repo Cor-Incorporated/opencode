@@ -48,7 +48,10 @@ export function createAccessHandlers(ctx: GuardrailContext) {
     const trimmed = cmd.trim()
     if (bash(trimmed)) return false
     if (/\bfind\b[\s\S]*(?:\s-delete\b|\s-exec\b|\s-ok\b)/i.test(trimmed)) return false
-    return /^(?:ls|cat|grep|egrep|fgrep|rg|find|pwd|stat|wc|head|tail|sed\s+-n|test|\[|readlink|file|du)\b/i.test(
+    // sed is a read only in its one positive shape, judged per segment so `sed -n '1,20p' f | head -n 5` stays a read
+    // (guardrail-shell.ts sedReadOnly via shellReadOnly, opencode#353 round 3)
+    if (/^(?:\/\S*\/)?g?sed\b/.test(trimmed)) return shellReadOnly(trimmed)
+    return /^(?:ls|cat|grep|egrep|fgrep|rg|find|pwd|stat|wc|head|tail|test|\[|readlink|file|du)\b/i.test(
       trimmed,
     )
   }

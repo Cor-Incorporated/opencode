@@ -903,3 +903,138 @@ describe("F8 directory tracking only adds blocks: every way a shell can change o
     for (const d of [dir, wt, elsewhere]) rmSync(d, { recursive: true, force: true })
   })
 })
+
+describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4, opencode#351)", () => {
+  // The read-only allowlists took any `sed -n` as a reader, and the write pattern only saw `-i` right after `sed`,
+  // so `sed -n -i '' …` rewrote plugin-owned state (real BSD sed did, in the #350 round-2 acceptance).
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-sed-")))
+  const f = fakeCtx(dir)
+  const RT = ".opencode/guardrails"
+  const M = "runtime-mutation"
+  const judge = async (rows: [string, string, string?][]) => {
+    const key = (command: string, workdir?: string) => `${workdir ?? "-"} | ${command}`
+    const got = await at(dir, async () => {
+      const out: Record<string, string> = {}
+      for (const [command, , workdir] of rows) {
+        const input = workdir === undefined ? { command } : { command, workdir }
+        out[key(command, workdir)] = await verdict(
+          f.fire("tool.execute.before", { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-sh", input }),
+        )
+      }
+      return out
+    })
+    expect(got).toEqual(Object.fromEntries(rows.map(([command, want, workdir]) => [key(command, workdir), want])))
+  }
+
+  test("setup", async () => {
+    await guardrailV2.setup(f.ctx)
+  })
+
+  test("an in-place flag anywhere among sed's options is a runtime mutation", async () => {
+    await judge([
+      [`sed -n -i '' 's/"reviewed":false/"reviewed":true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n -i '' 's/false/true/p' state.json`, M],
+      [`sed -n -i.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -E -n -i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -ni 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-place 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -I '' 's/false/true/p' ${RT}/state.json`, M],
+      [`/usr/bin/sed -n -i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -i '' 's/false/true/p' state.json`, M, join(dir, RT)],
+      [`sed -n '1p;2p' -i ${RT}/state.json`, M],
+      [`sed -n p '-i' ${RT}/state.json`, M],
+      [`sh -c "sed -n -i '' s/x/y/ ${RT}/state.json"`, M],
+    ])
+  })
+
+  test("escaped or ANSI-C-quoted flags and names, and GNU long-option prefixes, are still writes (#353 round 2)", async () => {
+    // opencode#353 acceptance: a backslash outside quotes vanishes before sed sees the word, `$'…'` is decoded by bash,
+    // and GNU getopt_long accepts any unambiguous prefix of --in-place. Real BSD sed rewrote state.json through the
+    // first six; real GNU sed 4.10 through all of them (gsed, 2026-10-24).
+    await judge([
+      [`sed -n \\-i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n -\\i '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n $'-i' '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n $'\\x2di' '' 's/false/true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && \\sed -n -i '' 's/false/true/p' state.json`, M],
+      [`cd ${RT} && s\\ed -n -i '' 's/false/true/p' state.json`, M],
+      [`sed -n --in 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-pl 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --in-place=.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n 's/false/true/p' -i ${RT}/state.json`, M],
+      [`sed -n 's/false/true/p' '-i' ${RT}/state.json`, M],
+      // round 3: a double-quoted word is outside the one accepted read shape (single-quote the script instead)
+      [`sed -n "\\-i" ${RT}/state.json`, M],
+    ])
+  })
+
+  test("round 3: only `sed -n [-E|-r] <script> <path>…` with no \\ $ \" ` # -- is a read; every other sed is a write", async () => {
+    // aidd-governance#219 (round-2 acceptance, REJECT): `$"-i"`, another `$'-i'` reading, GNU `--i` / `--i=.bak`, a
+    // postfix `-i` behind an escaped quote, and `I=-i; … $I` still reached sed as in-place. Each wrote state.json with
+    // real BSD or GNU sed. Owner (A): stop enumerating write shapes; accept one narrow read shape and block the rest.
+    await judge([
+      [`sed -n p ${RT}/state.json`, "PASS"],
+      [`sed -n 's/false/true/p' ${RT}/state.json`, "PASS"],
+      [`sed -n -E '/rev/p' ${RT}/state.json`, "PASS"],
+      [`cd ${RT} && sed -n -r 1p state.json`, "PASS"],
+      [`sed -n $"-i" '' 's/false/true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n $"-i" '' 's/false/true/p' state.json`, M],
+      [`sed -n $'-i' '' 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --i 's/false/true/p' ${RT}/state.json`, M],
+      [`sed -n --i=.bak 's/false/true/p' ${RT}/state.json`, M],
+      [`cd ${RT} && sed -n --i 's/false/true/p' state.json`, M],
+      [`sed -n 's/false/true/p' \\" -i ${RT}/state.json \\"`, M],
+      [`sed -n 's/false/true/p' \\' -i ${RT}/state.json \\'`, M],
+      [`cd ${RT} && I=-i; sed -n $I '' 's/false/true/p' state.json`, M],
+      [`sed -n "p" ${RT}/state.json`, M],
+      [`sed -n -- p ${RT}/state.json`, M],
+      [`sed -n p ${RT}/state.json # -i`, M],
+      [`sed -n 'w /tmp/x' ${RT}/state.json`, M],
+      [`sed -n 's/a/b/e' ${RT}/state.json`, M],
+      [`sed p ${RT}/state.json`, M],
+      // Codex review of d978389483: write commands behind an address or another delimiter, and a quoted option in the
+      // script's place, slipped through the first positive shape; a quoted script with spaces must still read
+      [`sed -E -n '1w ${RT}/state.json' seed.txt`, M],
+      [`sed -n 's:false:true:w ${RT}/state.json' seed.txt`, M],
+      [`sed -E -n '-f' program.sed ${RT}/state.json`, M],
+      [`sed -n '/a/,/b/w out' ${RT}/state.json`, M],
+      [`sed -n '/review state/p' ${RT}/state.json`, "PASS"],
+      [`sed -n '/a/!d' ${RT}/state.json`, "PASS"],
+      // Codex review of 085fd01125: an expansion inside double quotes still runs; `*` as the s delimiter; `do` in a script
+      [`cat /dev/null"$(find ${RT}/state.json -delete)"`, M],
+      [`cat /dev/null"\`rm ${RT}/state.json\`"`, M],
+      [`sed -n 's*a*b*p' ${RT}/state.json`, "PASS"],
+      [`sed -n 's+a+b+p' ${RT}/state.json`, "PASS"],
+      [`sed -n '/do work/p' ${RT}/state.json`, "PASS"],
+      // Codex review of fafd32bc88: a line continuation vanishes before the shell reads the word; a pipe of reads is a read
+      [`find ${RT}/state.json -de\\\n` + `lete`, M],
+      [`sed -n '1,20p' ${RT}/state.json | head -n 5`, "PASS"],
+      [`grep -E "(runtime mutation|blocked)" ${RT}/events.jsonl`, "PASS"],
+      // Codex review of a229d555fb: a quote inside a comment is not a quote; the next line is its own segment
+      [`cat ${RT}/state.json # '\nunlink ${RT}/state.json`, M],
+      [`cat ${RT}/state.json # just a note`, "PASS"],
+      // Codex review of 20ace60111: an escaped space before `#` is not a comment start; a substitution inside quotes
+      // may hold its own quotes, so any command substitution is simply not a read (ADR-012)
+      [`cat ${RT}/state.json x\\ #; unlink ${RT}/state.json`, M],
+      [`test -z "$(true "x";find ${RT}/state.json -delete)"`, M],
+      // Codex review of d1ce0b7de2: a word glued to a quoted script; an escaped space across a line continuation;
+      // ANSI-C quoting (never a read)
+      [`sed -E -n 's/false/true/p'w${RT}/state.json seed.txt`, M],
+      [`cat ${RT}/state.json x\\ \\\n#; unlink ${RT}/state.json`, M],
+      [`cat ${RT}/state.json $'\\'';unlink ${RT}/state.json;#'`, M],
+      [`cat /dev/null"x$(find ${RT}/state.json -delete)y"`, M],
+    ])
+  })
+
+  test("`-i` inside a sed script is not a flag, so these reads stay allowed", async () => {
+    await judge([
+      [`sed -n p ${RT}/state.json`, "PASS"],
+      [`sed -n 's/x/-i/p' ${RT}/state.json`, "PASS"],
+      [`sed -n 's/false/ -i /p' ${RT}/state.json`, "PASS"],
+    ])
+  })
+
+  test("cleanup", () => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

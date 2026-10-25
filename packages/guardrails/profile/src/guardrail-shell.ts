@@ -36,14 +36,93 @@ export function shellReachesRuntime(rt: Runtime, cmd: string, workdir: string) {
 export function shellReadOnly(cmd: string) {
   if (bash(cmd)) return false
   if (/\bsed\b.*['"\s;{}/][wW]\s+\S/.test(cmd)) return false // sed's `w file` command writes
+  // a command substitution runs whatever it holds, quoted or not; a read never needs one here (Codex review: the
+  // quote state inside `"$(…)"` could not be tracked safely, so the whole command is not a read — ADR-012)
+  if (/\$\(|`|\$['"]/.test(cmd)) return false // nor is `$'…'` / `$"…"` quoting (its escapes defeat a quote tracker)
   const text = prose(cmd)
   if (/>(?!\s*(?:&\d|\/dev\/null\b))/.test(text.replace(/\d>&\d/g, ""))) return false
-  return segments(text).every((segment) => {
+  // sed is judged on the raw segment (its quoted script intact): prose() would drop `'/review state/p'` and leave the
+  // path in the script's place (Codex review of #353 round 3, P2). Segments are cut outside quotes only.
+  return rawSegments(cmd).every((raw) => {
+    const segment = prose(raw)
     const name = command(segment)
     if (name === "find") return !/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(segment)
-    if (name === "sed") return /\s-n\b/.test(segment)
+    if (name === "sed") return sedReadOnly(raw)
     return /^(?:|cd|pushd|popd|ls|cat|grep|egrep|fgrep|rg|pwd|stat|wc|head|tail|test|\[|readlink|file|du|true|:|fi|done|esac)$/.test(name)
   })
+}
+
+/**
+ * The ONE shape of sed accepted as a read of the runtime (opencode#353 round 3, owner decision (A) 2026-10-24): the
+ * segment is exactly `sed -n [-E|-r] <script> <path>…` where the script is single-quoted or a bare word, every path
+ * is a bare word, and nothing in the segment can hide an option: no `\`, `$`, `"`, backtick, `#`, `--`, `;`, `&`,
+ * `|`, `<`, `>` or parentheses. Rounds 1 and 2 enumerated the shapes that spell `-i` (escapes, ANSI-C quotes, GNU
+ * prefixes) and the acceptance (aidd-governance#218, #219) found five more each time, so the allowance is now
+ * positive and narrow; every other sed is a write. Scripts that run or write (`e`, `w`, `W`, `r`, `R`, the `e` / `w`
+ * flags of `s`) are not reads either. Workaround for an honest read that this refuses: single-quote the script.
+ */
+export function sedReadOnly(segment: string) {
+  if (/[\\$"`#;&|<>()]|--/.test(segment)) return false
+  const words = shellWords(segment)
+  if (words === null) return false
+  if (!/^(?:\/[\w./-]*\/)?g?sed$/.test(words[0] ?? "")) return false
+  let i = 1
+  const opts = new Set<string>()
+  while (i < words.length && /^-[nEr]$/.test(words[i])) opts.add(words[i++])
+  if (!opts.has("-n")) return false
+  const script = words[i++]
+  if (script === undefined) return false
+  const body = /^'[^']*'$/.test(script) ? script.slice(1, -1) : /^[\w,;/^.*+?=!{}\[\]]+$/.test(script) ? script : null
+  // after quote removal sed sees the word itself: a leading `-` is another option (`'-f' program.sed` ran a file)
+  if (body === null || body.startsWith("-") || !sedScriptReads(body)) return false
+  return words.slice(i).every((w) => /^[\w./~+][\w./~+-]*$/.test(w))
+}
+
+/**
+ * The segment as whole words: a single-quoted word must end at whitespace (the shell glues `'…'w.file` into one word,
+ * so a script with a `w` flag hid behind the quote — Codex review), a bare word holds no quote. null when the segment
+ * does not divide that way.
+ */
+function shellWords(segment: string) {
+  const words: string[] = []
+  let rest = segment.trim()
+  while (rest !== "") {
+    const m = /^('[^']*'|[^\s']+)(?:\s+|$)/.exec(rest)
+    if (!m) return null
+    words.push(m[1])
+    rest = rest.slice(m[0].length)
+  }
+  return words
+}
+
+/**
+ * A sed script that only reads: every command, after its optional address(es) and `!`, is one of the print / hold /
+ * branch / control commands, `y`, or an `s` whose flags carry no `w` or `e`, with any delimiter. Anything else (the
+ * `w` / `W` / `r` / `R` / `e` commands, `s///w file`, `s///e`, an address or delimiter this does not parse) is not a
+ * read (Codex review of round 3: `'1w file'` and `s:a:b:w file` had slipped past a `/`-only flag check).
+ */
+function sedScriptReads(script: string) {
+  const addr = String.raw`(?:\d+|\$|/(?:[^/\\]|\\.)*/)[IM]*`
+  const prefix = new RegExp(String.raw`^\s*(?:${addr}(?:\s*[,~+]\s*(?:${addr}|\d+))?\s*)?!?\s*`)
+  let rest = script
+  for (let guard = 0; guard < 256 && rest.trim() !== ""; guard++) {
+    rest = rest.slice((prefix.exec(rest) ?? [""])[0].length)
+    const c = rest[0]
+    if (c === undefined) return true
+    if ("pPlnNdDhHgGxqQ={}".includes(c)) rest = rest.slice(1)
+    else if ("btT:".includes(c)) rest = rest.replace(/^.[^;\n]*/, "")
+    else if (c === "s" || c === "y") {
+      const d = rest[1]
+      if (d === undefined || /[\s\\\n\w]/.test(d)) return false
+      const lit = d.replace(/[.*+?^${}()|[\]\\\/-]/g, "\\$&")
+      const part = String.raw`(?:[^\\${lit}]|\\.)*`
+      const m = new RegExp(String.raw`^${c}${lit}${part}${lit}${part}${lit}([gpIimM0-9]*)`).exec(rest)
+      if (!m) return false
+      rest = rest.slice(m[0].length)
+    } else return false
+    rest = rest.replace(/^\s*(?:;\s*|\n\s*)*/, "")
+  }
+  return rest.trim() === ""
 }
 
 type Runtime = Pick<GuardrailContext, "input" | "runtime" | "hidden" | "runtimes">
@@ -99,6 +178,52 @@ function expand(cmd: string) {
 /** Quoted text with spaces (commit messages, PR bodies) is prose; quotes pair left to right. */
 function prose(cmd: string) {
   return cmd.replace(/"[^"]*"|'[^']*'/g, (quoted) => (/\s/.test(quoted) ? " " : quoted))
+}
+
+/**
+ * The command's segments, cut at unquoted `;`, `|`, `&`, `(`, `)`, `{`, `}`, newline and the then / else / elif / do
+ * words. A keyword inside quotes does not cut (`sed -n '/do work/p'` is one segment). Command substitutions are
+ * not tracked here: shellReadOnly refuses any command that holds one.
+ */
+function rawSegments(cmd: string) {
+  const out: string[] = []
+  let cur = ""
+  let quote = ""
+  let escaped = false // the last character appended came from a backslash escape (`x\ #` is not a comment)
+  const cut = () => {
+    out.push(cur)
+    cur = ""
+  }
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]
+    const wasEscaped = escaped
+    escaped = false
+    if (quote === "'") {
+      if (ch === "'") quote = ""
+      cur += ch
+    } else if (ch === "\\" && cmd[i + 1] === "\n") {
+      i++ // a line continuation vanishes before the shell reads the word (Codex review: `-de\<newline>lete` hid -delete)
+      escaped = wasEscaped // `x\ \<newline>#` — the escaped space still precedes the `#`
+    } else if (ch === "\\") {
+      cur += ch + (cmd[++i] ?? "")
+      escaped = true
+    } else if (quote === '"') {
+      if (ch === '"') quote = ""
+      cur += ch
+    } else if (ch === "#" && !wasEscaped && /(?:^|[\s;|&(){}])$/.test(cur)) {
+      // a comment runs to the end of the line and its quotes mean nothing (Codex review: `# '` swallowed the next line)
+      while (i + 1 < cmd.length && cmd[i + 1] !== "\n") i++
+    } else if (/[;|&(){}\n]/.test(ch)) cut()
+    else if (/\W/.test(cmd[i - 1] ?? " ") && /^(?:then|else|elif|do)\b/.test(cmd.slice(i))) {
+      cut()
+      i += /^(?:then|else|elif|do)/.exec(cmd.slice(i))![0].length - 1
+    } else {
+      if (ch === "'" || ch === '"') quote = ch
+      cur += ch
+    }
+  }
+  cut()
+  return out
 }
 
 function segments(text: string) {
