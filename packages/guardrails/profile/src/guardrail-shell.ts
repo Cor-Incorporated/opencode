@@ -191,7 +191,10 @@ function rawSegments(cmd: string) {
         cur += ch
       }
     } else if (ch === "\\") cur += ch + (cmd[++i] ?? "")
-    else if (/[;|&(){}\n`]/.test(ch)) cut()
+    else if (ch === "#" && /(?:^|[\s;|&(){}])$/.test(cur)) {
+      // a comment runs to the end of the line and its quotes mean nothing (Codex review: `# '` swallowed the next line)
+      while (i + 1 < cmd.length && cmd[i + 1] !== "\n") i++
+    } else if (/[;|&(){}\n`]/.test(ch)) cut()
     else if (/\W/.test(cmd[i - 1] ?? " ") && /^(?:then|else|elif|do)\b/.test(cmd.slice(i))) {
       cut()
       i += /^(?:then|else|elif|do)/.exec(cmd.slice(i))![0].length - 1

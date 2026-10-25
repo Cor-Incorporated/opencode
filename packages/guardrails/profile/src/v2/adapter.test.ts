@@ -1010,6 +1010,9 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       [`find ${RT}/state.json -de\\\n` + `lete`, M],
       [`sed -n '1,20p' ${RT}/state.json | head -n 5`, "PASS"],
       [`grep -E "(runtime mutation|blocked)" ${RT}/events.jsonl`, "PASS"],
+      // Codex review of a229d555fb: a quote inside a comment is not a quote; the next line is its own segment
+      [`cat ${RT}/state.json # '\nunlink ${RT}/state.json`, M],
+      [`cat ${RT}/state.json # just a note`, "PASS"],
       [`cat /dev/null"x$(find ${RT}/state.json -delete)y"`, M],
     ])
   })
