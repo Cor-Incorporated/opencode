@@ -1009,6 +1009,8 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       // Codex review of fafd32bc88: a line continuation vanishes before the shell reads the word; a pipe of reads is a read
       [`find ${RT}/state.json -de\\\n` + `lete`, M],
       [`sed -n '1,20p' ${RT}/state.json | head -n 5`, "PASS"],
+      [`grep -E "(runtime mutation|blocked)" ${RT}/events.jsonl`, "PASS"],
+      [`cat /dev/null"x$(find ${RT}/state.json -delete)y"`, M],
     ])
   })
 

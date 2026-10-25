@@ -168,6 +168,7 @@ function rawSegments(cmd: string) {
   const out: string[] = []
   let cur = ""
   let quote = ""
+  let subshell = 0
   const cut = () => {
     out.push(cur)
     cur = ""
@@ -180,9 +181,11 @@ function rawSegments(cmd: string) {
     } else if (ch === "\\" && cmd[i + 1] === "\n") {
       i++ // a line continuation vanishes before the shell reads the word (Codex review: `-de\<newline>lete` hid -delete)
     } else if (quote === '"') {
+      // only a `$(` and the `)` that closes it cut the segment; a plain `)` in quoted text (`"(a|b)"`) is text
       if (ch === "\\") cur += ch + (cmd[++i] ?? "")
-      else if (ch === "$" && cmd[i + 1] === "(") (cut(), i++)
-      else if (ch === ")" || ch === "`") cut()
+      else if (ch === "$" && cmd[i + 1] === "(") (cut(), i++, subshell++)
+      else if (ch === ")" && subshell > 0) (cut(), subshell--)
+      else if (ch === "`") cut()
       else {
         if (ch === '"') quote = ""
         cur += ch
