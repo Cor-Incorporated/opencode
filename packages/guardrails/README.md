@@ -215,6 +215,18 @@ Cold-start note: the router loads models on first request. GLM in particular can
 
 Offline verification (no network): `bun run local:check-offline` runs the guardrails whitelist/paid/preview pin tests plus `scripts/sync-model-whitelist.py`'s consistency check across the three copies (managed, profile, `paid`).
 
+## cor-os (Cor OS router lane)
+
+`cor-os` reaches the Cor OS router at `https://llm.cor-jp.com/v1` (OpenAI-compatible, behind Cloudflare Access / Tunnel). The router checks the requested model name against what it publishes, so `cor-local` cannot be pointed at it: the guardrail admits only cor-local's three llama-server ids and the router answers `model_not_found` for them. The block is generated in the ai-cluster repo (`ops/opencode-pi/opencode.cor-os.json` from `ops/opencode-pi/cor-os-models.json`); change it there and copy it into both `managed/opencode.json` and `profile/opencode.json`. `profile/src/cor-os-router-lane.test.ts` pins both copies.
+
+- `apiKey` is `{env:COR_OS_LLM_TOKEN}` (the router's Bearer; the owner keeps it in Bitwarden as `env/common/COR_OS_LLM_TOKEN` and exports it with `eval "$(~/Developer/bin/bwenv env COR_OS_LLM_TOKEN)"`). Unset, the header is not sent and the router answers 401.
+- Two public aliases are whitelisted: `cor-qwen3.6-35b` and `gemma4-12b` (cor-os `a43df4e`; which of them production publishes is confirmed with ai-cluster `ops/opencode-pi/verify_router.py`). Both are in `paid["cor-os"]` for the same reason as cor-local.
+- `limit.context` is 32768, the production runner's `-c 32768 -np 1`. OpenCode's first agent request with this profile is about 125-128 KB, so at 32768 it compacts after the first answer; the context has to grow on the router side before this lane is usable for agent work (ai-cluster L2).
+
+```sh
+opencode run --model cor-os/cor-qwen3.6-35b "..."
+```
+
 ## Managed deployment
 
 Copy [managed/opencode.json](/Users/teradakousuke/Developer/opencode/packages/guardrails/managed/opencode.json) into the system managed config directory:
