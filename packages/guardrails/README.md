@@ -221,7 +221,7 @@ Offline verification (no network): `bun run local:check-offline` runs the guardr
 
 - `apiKey` is `{env:COR_OS_LLM_TOKEN}` (the router's Bearer; the owner keeps it in Bitwarden as `env/common/COR_OS_LLM_TOKEN` and exports it with `eval "$(~/Developer/bin/bwenv env COR_OS_LLM_TOKEN)"`). Unset, the header is not sent and the router answers 401.
 - Two public aliases are whitelisted: `cor-qwen3.6-35b` and `gemma4-12b` (cor-os `a43df4e`; which of them production publishes is confirmed with ai-cluster `ops/opencode-pi/verify_router.py`). Both are in `paid["cor-os"]` for the same reason as cor-local.
-- `limit.context` is 32768, the production runner's `-c 32768 -np 1`. OpenCode's first agent request with this profile is about 125-128 KB, so at 32768 it compacts after the first answer; the context has to grow on the router side before this lane is usable for agent work (ai-cluster L2).
+- `limit.context` is 32768, the production runner's `-c 32768 -np 1`. OpenCode's first agent request with this profile is about 125 KB (two thirds of it the skills catalog), which is over the `context - limit.output` budget, so at 32768 OpenCode sends a compaction request before the model ever sees the question; the context has to grow on the router side before this lane is usable for agent work (ai-cluster L2).
 
 ```sh
 opencode run --model cor-os/cor-qwen3.6-35b "..."
