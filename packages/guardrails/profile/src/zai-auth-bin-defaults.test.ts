@@ -1,18 +1,10 @@
 /**
- * `zai` (Z.AI, api.z.ai/api/paas/v4) is admitted by the guardrails profile
- * without its own credential: `opencode auth login` for the coding plan
- * stores the key under the `zai-coding-plan` id only, so `zai` requests carry
- * no Authorization header and the z.ai gateway rejects them with code 1001
- * "Authentication parameter not received in Header, unable to authenticate"
- * (@ai-sdk/openai-compatible omits the header entirely when apiKey is
- * undefined -- packages/opencode/src/provider/provider.ts resolveSDK).
- *
- * The bridge is `packages/guardrails/bin/zai-auth-env.js`, imported by
- * `bin/opencode-guardrails` (the single Node entry point that runs before
- * every invocation -- managed deploy, the live wrapper, and a direct call
- * alike). Z.AI accepts one account key on both the coding and platform
- * endpoints, so the stored coding-plan key is exported as `ZHIPU_API_KEY`
- * -- the env var both lanes declare in models.dev.
+ * Legacy auth.json labels Standard and Coding Plan keys separately. The
+ * launcher must not export a plain `zai` Standard key to the Coding Plan
+ * lane: after the 2026-10-16 key-scope split, that produces error 1113 even
+ * when the provider and Coding Plan endpoint are selected correctly.
+ * Only a declared `zai-coding-plan` entry can supply this legacy bridge.
+ * Native 2.x credential selection remains the CLI's responsibility.
  *
  * Cases unit-test `zai-auth-env.js` directly; the subprocess case runs the
  * real `bin/opencode-guardrails` entry point against a stub "opencode"
@@ -44,17 +36,30 @@ function writeAuthFile(dir: string, auth: unknown) {
   return file
 }
 
-describe("zai-auth-env.js: extractZaiKey precedence", () => {
+describe("zai-auth-env.js: Coding Plan key scope", () => {
   test("(a) a zai-coding-plan api key is adopted", () => {
     expect(extractZaiKey({ "zai-coding-plan": { type: "api", key: "test-key-abc" } })).toBe("test-key-abc")
   })
 
-  test("(b) a direct zai api key wins over zai-coding-plan", () => {
+  test("(b) a Coding Plan key is selected when a Standard key is also stored", () => {
     const auth = {
       zai: { type: "api", key: "zai-own-key" },
       "zai-coding-plan": { type: "api", key: "coding-plan-key" },
     }
-    expect(extractZaiKey(auth)).toBe("zai-own-key")
+    expect(extractZaiKey(auth)).toBe("coding-plan-key")
+  })
+
+  test("a Standard-only key never supplies the Coding Plan bridge", () => {
+    expect(extractZaiKey({ zai: { type: "api", key: "standard-only-key" } })).toBeUndefined()
+  })
+
+  test("an invalid Coding Plan entry never falls back to a Standard key", () => {
+    expect(
+      extractZaiKey({
+        zai: { type: "api", key: "standard-only-key" },
+        "zai-coding-plan": { type: "api", key: 'bad"quote' },
+      }),
+    ).toBeUndefined()
   })
 
   test("(d) oauth entries are ignored", () => {
@@ -89,7 +94,7 @@ describe("zai-auth-env.js: applyZaiAuthDefaults", () => {
     })
   })
 
-  test("(f) OPENCODE_AUTH_CONTENT replaces the auth file, as upstream Auth.all does", () => {
+  test("(f) legacy OPENCODE_AUTH_CONTENT replaces the auth file", () => {
     withTmpDir("zai-auth-content-", (dir) => {
       const authFile = writeAuthFile(dir, { "zai-coding-plan": { type: "api", key: "from-file" } })
       const env: Record<string, string> = {
@@ -98,6 +103,27 @@ describe("zai-auth-env.js: applyZaiAuthDefaults", () => {
       }
       applyZaiAuthDefaults(env, { authFile, warn: () => {} })
       expect(env.ZHIPU_API_KEY).toBe("from-content")
+    })
+  })
+
+  test("Standard-only auth content does not fall back to a file's Coding Plan key", () => {
+    withTmpDir("zai-auth-content-scope-", (dir) => {
+      const authFile = writeAuthFile(dir, { "zai-coding-plan": { type: "api", key: "from-file" } })
+      const env: Record<string, string> = {
+        HOME: dir,
+        OPENCODE_AUTH_CONTENT: JSON.stringify({ zai: { type: "api", key: "standard-only-key" } }),
+      }
+      applyZaiAuthDefaults(env, { authFile, warn: () => {} })
+      expect(env.ZHIPU_API_KEY).toBeUndefined()
+    })
+  })
+
+  test("invalid auth content retains the legacy fallback to the auth file", () => {
+    withTmpDir("zai-auth-content-invalid-", (dir) => {
+      const authFile = writeAuthFile(dir, { "zai-coding-plan": { type: "api", key: "from-file" } })
+      const env: Record<string, string> = { HOME: dir, OPENCODE_AUTH_CONTENT: "{not json" }
+      applyZaiAuthDefaults(env, { authFile, warn: () => {} })
+      expect(env.ZHIPU_API_KEY).toBe("from-file")
     })
   })
 
@@ -129,7 +155,7 @@ describe("zai-auth-env.js: applyZaiAuthDefaults", () => {
       mkdirSync(path.join(xdgData, "opencode"), { recursive: true })
       writeFileSync(
         path.join(xdgData, "opencode", "auth.json"),
-        JSON.stringify({ zai: { type: "api", key: "via-xdg" } }),
+        JSON.stringify({ "zai-coding-plan": { type: "api", key: "via-xdg" } }),
       )
       const env: Record<string, string> = { HOME: path.join(dir, "home"), XDG_DATA_HOME: xdgData }
       applyZaiAuthDefaults(env, { warn: () => {} })
@@ -170,25 +196,35 @@ describe("bin/opencode-guardrails: zai auth bridge (subprocess, offline)", () =>
     return new TextDecoder().decode(run.stdout)
   }
 
-  test("a coding-plan key in HOME's auth.json is bridged into ZHIPU_API_KEY", () => {
+  test("only the Coding Plan key from a mixed auth.json reaches the child", () => {
     withTmpDir("zai-entry-keyed-", (projectDir) => {
       withTmpDir("zai-entry-home-", (homeDir) => {
         mkdirSync(path.join(homeDir, ".local", "share", "opencode"), { recursive: true })
         writeFileSync(
           path.join(homeDir, ".local", "share", "opencode", "auth.json"),
-          JSON.stringify({ "zai-coding-plan": { type: "api", key: "bridged-key-1" } }),
+          JSON.stringify({
+            zai: { type: "api", key: "standard-only-key" },
+            "zai-coding-plan": { type: "api", key: "bridged-key-1" },
+          }),
         )
         const out = runEntryPoint({ projectDir, homeDir })
         expect(out).toContain("ZHIPU_API_KEY=bridged-key-1")
+        expect(out).not.toContain("standard-only-key")
       })
     })
   })
 
-  test("no auth.json: ZHIPU_API_KEY stays unset through the real entry point", () => {
+  test("a Standard-only auth.json leaves the child ZHIPU_API_KEY unset", () => {
     withTmpDir("zai-entry-bare-", (projectDir) => {
       withTmpDir("zai-entry-home2-", (homeDir) => {
+        mkdirSync(path.join(homeDir, ".local", "share", "opencode"), { recursive: true })
+        writeFileSync(
+          path.join(homeDir, ".local", "share", "opencode", "auth.json"),
+          JSON.stringify({ zai: { type: "api", key: "standard-only-key" } }),
+        )
         const out = runEntryPoint({ projectDir, homeDir })
         expect(out).toContain("ZHIPU_API_KEY=<unset>")
+        expect(out).not.toContain("standard-only-key")
       })
     })
   })
