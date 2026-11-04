@@ -57,6 +57,12 @@
       "dependsOn": ["transit"],
       "outputs": []
     },
+    // Windows PowerShell must retain the runner's module-analysis cache configuration.
+    "@opencode-ai/guardrails#test": {
+      "dependsOn": ["transit"],
+      "outputs": [],
+      "passThroughEnv": ["PSModuleAnalysisCachePath"]
+    },
     "@opencode/desktop#test": {
       "outputs": [],
       "cache": false

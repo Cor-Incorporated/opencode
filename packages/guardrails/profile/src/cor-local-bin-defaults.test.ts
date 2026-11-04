@@ -228,6 +228,7 @@ describe("bin/opencode-guardrails: real entry point ordering (subprocess, offlin
         PATH: process.env.PATH ?? "",
         HOME: opts.homeDir,
         USERPROFILE: opts.homeDir,
+        PSModuleAnalysisCachePath: process.env.PSModuleAnalysisCachePath,
         OPENCODE_BIN_PATH: stubPath,
         OPENCODE_DISABLE_MODELS_FETCH: "1",
         ...opts.env,
