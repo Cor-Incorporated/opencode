@@ -96,8 +96,10 @@ Tests: `bun test profile/src profile/plugins` (from `packages/guardrails`). `src
 entries with a recording 2.x ctx; `src/plugin-loads.test.ts` pins the loader facts against upstream source.
 Runtime settings use the native 2.x `providers` schema in both `opencode.json` copies. The plugin-owned allowlists
 live separately in `profile/model-policy.json` and `managed/model-policy.json`; the guardrail entry reads the
-packaged policy and enforces it on all four model request hooks. An unreadable or invalid policy keeps those hooks
-blocked. `src/native-config.test.ts` passes both runtime files through the real normalizer and requires zero
+packaged policy and enforces it on all four model request hooks. The policy must be a provider record covering every
+provider declared by the same profile's native configuration; an array or partial policy keeps those hooks blocked
+and records the denials. Explicitly configured additional providers can supply their own matching policy entries.
+`src/native-config.test.ts` passes both runtime files through the real normalizer and requires zero
 unsupported, invalid, or conflicting settings. Catalog synchronization updates the two policies and the `paid` sets
 without changing runtime model overrides.
 

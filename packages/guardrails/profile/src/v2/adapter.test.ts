@@ -21,7 +21,7 @@
  * Run: bun test packages/guardrails/profile/src/v2/adapter.test.ts
  */
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import guardrailV2, { admissionConfig } from "../../plugins/guardrail/index"
@@ -168,6 +168,35 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
       await cleanup()
     }
   })
+
+  for (const [name, provider] of Object.entries({
+    "an array-shaped policy": [{ whitelist: ["glm-5.3"] }],
+    "a policy missing a configured provider": { openai: { whitelist: ["gpt-5.3-codex"] } },
+  })) {
+    test(`${name} blocks all four model request hooks and appends four denial records`, async () => {
+      const policyDir = mkdtempSync(join(tmpdir(), "guardrails-v2-invalid-policy-"))
+      writeFileSync(join(policyDir, "opencode.json"), JSON.stringify({ providers: { openai: {}, "zai-coding-plan": {} } }))
+      writeFileSync(join(policyDir, "model-policy.json"), JSON.stringify({ provider }))
+      const invalid = fakeCtx(policyDir)
+      const input = v1Input(invalid.ctx)
+      const hooks = await guardrail.server(input)
+      const cleanup = await bridge(invalid.ctx, hooks, { input, config: admissionConfig(policyDir) })
+      try {
+        for (const hook of ["context", "generate", "title", "compaction"]) {
+          await expect(invalid.fire(`session.${hook}`, { model: { id: "nope-9000", providerID: "zai-coding-plan" } })).rejects.toThrow(/Guardrail model policy unavailable/)
+        }
+        const blocks = readFileSync(join(policyDir, ".opencode", "guardrails", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+        expect(blocks).toHaveLength(4)
+        for (const block of blocks) {
+          expect(block).toMatchObject({ type: "guardrail.block", tool: "chat.params" })
+          expect(block.reason).toContain("Guardrail model policy unavailable")
+        }
+      } finally {
+        await cleanup()
+        rmSync(policyDir, { recursive: true, force: true })
+      }
+    })
+  }
 
   test("context hook: an allowed model passes and the system transform appends SystemParts", async () => {
     const e = {

@@ -48,6 +48,7 @@ describe("packaged 2.x provider configuration", () => {
   test("the admission policy loader rejects absent or malformed policies", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardrail-policy-"))
     try {
+      writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({ providers: { openai: {} } }))
       expect(() => profileConfig(dir)).toThrow()
       writeFileSync(path.join(dir, "model-policy.json"), JSON.stringify({ provider: { openai: { whitelist: [] } } }))
       expect(() => profileConfig(dir)).toThrow(/model policy/)
@@ -56,6 +57,37 @@ describe("packaged 2.x provider configuration", () => {
         JSON.stringify({ provider: { openai: { whitelist: ["gpt-5.3-codex"] } } }),
       )
       expect(profileConfig(dir)).toEqual({ provider: { openai: { whitelist: ["gpt-5.3-codex"] } } })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  for (const [name, provider] of Object.entries({
+    "array instead of a provider record": [{ whitelist: ["glm-5.3"] }],
+    "missing a natively configured provider": { openai: { whitelist: ["gpt-5.3-codex"] } },
+  })) {
+    test(`the admission policy loader rejects ${name}`, () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "guardrail-policy-coverage-"))
+      try {
+        writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({ providers: { openai: {}, "zai-coding-plan": {} } }))
+        writeFileSync(path.join(dir, "model-policy.json"), JSON.stringify({ provider }))
+        expect(() => profileConfig(dir)).toThrow(/model policy/)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
+
+  test("coverage follows explicitly configured providers instead of a fixed packaged provider list", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardrail-policy-custom-provider-"))
+    const provider = {
+      openai: { whitelist: ["gpt-5.3-codex"] },
+      custom: { whitelist: ["custom-model"] },
+    }
+    try {
+      writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({ providers: { openai: {}, custom: {} } }))
+      writeFileSync(path.join(dir, "model-policy.json"), JSON.stringify({ provider }))
+      expect(profileConfig(dir)).toEqual({ provider })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

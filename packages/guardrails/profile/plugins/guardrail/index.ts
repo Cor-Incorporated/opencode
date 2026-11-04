@@ -14,8 +14,17 @@ export function profileConfig(dir = path.resolve(path.dirname(fileURLToPath(impo
   if (typeof policy !== "object" || policy === null || !("provider" in policy))
     throw new Error("Invalid guardrail model policy")
   const providers = policy.provider
-  if (typeof providers !== "object" || providers === null || !Object.keys(providers).length)
+  if (typeof providers !== "object" || providers === null || Array.isArray(providers) || !Object.keys(providers).length)
     throw new Error("Invalid guardrail model policy")
+  const runtime: unknown = JSON.parse(readFileSync(path.join(dir, "opencode.json"), "utf8"))
+  if (typeof runtime !== "object" || runtime === null || !("providers" in runtime))
+    throw new Error("Invalid guardrail model policy coverage")
+  const configured = runtime.providers
+  if (typeof configured !== "object" || configured === null || Array.isArray(configured))
+    throw new Error("Invalid guardrail model policy coverage")
+  // An absent allowlist would otherwise leave this admitted provider unrestricted in the request gate.
+  if (Object.keys(configured).some((id) => !Object.hasOwn(providers, id)))
+    throw new Error("Invalid guardrail model policy coverage")
   for (const value of Object.values(providers)) {
     if (typeof value !== "object" || value === null || !("whitelist" in value) || !Array.isArray(value.whitelist))
       throw new Error("Invalid guardrail model policy")
