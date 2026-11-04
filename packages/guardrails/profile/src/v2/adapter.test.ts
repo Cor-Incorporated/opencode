@@ -27,6 +27,8 @@ import { join } from "node:path"
 import guardrailV2 from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
 import { createContext } from "../guardrail-context"
+import { norm } from "../guardrail-patterns"
+import { shellReachesRuntime } from "../guardrail-shell"
 import { bridge, toV1Call, toV1Calls, toV2Input, v1Input } from "./adapter"
 import { createClient, toolDenyRules, toV1Message, toV2Rules } from "./client"
 
@@ -577,14 +579,14 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
   })
 
   test("toV1Call / toV1Calls / toV2Input with a base: paths are resolved like core FileAccess.resolvePath and written back as given", () => {
-    expect(toV1Call("edit", { path: "src/a.ts" }, "/w").args.filePath).toBe("/w/src/a.ts")
-    expect(toV1Call("read", { path: "/p/a" }, "/w").args.filePath).toBe("/p/a")
-    expect(toV1Call("read", { path: "~/notes.md" }, "/w").args.filePath).toBe(join(homedir(), "notes.md"))
-    expect(toV1Call("shell", { command: "ls", workdir: "sub" }, "/w").args.workdir).toBe("/w/sub")
-    expect(toV1Calls("patch", { patchText: patch("*** Update File: src/a.ts", "*** Move to: b.ts", "*** Add File: ./src/a.ts") }, "/w").map((c) => c.args.filePath)).toEqual(["/w/src/a.ts", "/w/b.ts"])
-    expect(toV2Input("edit", { path: "src/a.ts", filePath: "/w/src/a.ts" }, { path: "src/a.ts" }, "/w")).toEqual({ path: "src/a.ts" })
-    expect(toV2Input("edit", { path: "src/a.ts", filePath: "/w/src/b.ts" }, { path: "src/a.ts" }, "/w")).toEqual({ path: "/w/src/b.ts" }) // a rewrite is written back
-    expect(toV2Input("shell", { command: "ls", workdir: "/w/sub" }, { command: "ls", workdir: "sub" }, "/w")).toEqual({ command: "ls", workdir: "sub" })
+    expect(toV1Call("edit", { path: "src/a.ts" }, dir).args.filePath).toBe(join(dir, "src", "a.ts"))
+    expect(toV1Call("read", { path: join(elsewhere, "a") }, dir).args.filePath).toBe(join(elsewhere, "a"))
+    expect(toV1Call("read", { path: "~/notes.md" }, dir).args.filePath).toBe(join(homedir(), "notes.md"))
+    expect(toV1Call("shell", { command: "ls", workdir: "sub" }, dir).args.workdir).toBe(join(dir, "sub"))
+    expect(toV1Calls("patch", { patchText: patch("*** Update File: src/a.ts", "*** Move to: b.ts", "*** Add File: ./src/a.ts") }, dir).map((c) => c.args.filePath)).toEqual([join(dir, "src", "a.ts"), join(dir, "b.ts")])
+    expect(toV2Input("edit", { path: "src/a.ts", filePath: join(dir, "src", "a.ts") }, { path: "src/a.ts" }, dir)).toEqual({ path: "src/a.ts" })
+    expect(toV2Input("edit", { path: "src/a.ts", filePath: join(dir, "src", "b.ts") }, { path: "src/a.ts" }, dir)).toEqual({ path: join(dir, "src", "b.ts") }) // a rewrite is written back
+    expect(toV2Input("shell", { command: "ls", workdir: join(dir, "sub") }, { command: "ls", workdir: "sub" }, dir)).toEqual({ command: "ls", workdir: "sub" })
   })
 
   // PAIR: adapter.ts resolveIn restates where core puts a tool path. Pinned by string (core is not importable without
@@ -597,8 +599,10 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
     expect(src("file-access.ts")).toContain('normalized.startsWith("~/")')
     expect(src("file-access.ts")).toContain("AbsolutePath.make(resolvePath(location.directory, input.path))")
     expect(src("tool/plugin/read.ts")).toContain("access.authorizeRead(input.path, context)")
-    expect(src("tool/plugin/edit.ts")).toContain('access.resolve({ path: input.path, kind: "file" })')
-    expect(src("tool/plugin/write.ts")).toContain('access.resolve({ path: input.path, kind: "file" })')
+    expect(src("tool/plugin/edit.ts")).toContain("fileWrite.target(input.path, context)")
+    expect(src("tool/plugin/write.ts")).toContain("fileWrite.write(input, context)")
+    expect(src("file-write.ts")).toContain('access.resolve({ path: file, kind: "file" })')
+    expect(src("file-write.ts")).toContain("const resolved = yield* target(input.path, context)")
     expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.path)")
     expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.movePath)")
     expect(src("tool/plugin/shell.ts")).toContain("cwd: input.workdir,")
@@ -814,6 +818,19 @@ describe("F8 directory tracking only adds blocks: every way a shell can change o
   test("setup", async () => {
     await guardrailV2.setup(ordinary.ctx)
     await guardrailV2.setup(worker.ctx)
+  })
+
+  test("glob runtime matching normalizes Windows path separators on every host", () => {
+    const directory = String.raw`C:\guardrails-path-test`
+    const runtime = {
+      input: v1Input(fakeCtx(directory).ctx),
+      runtimes: [norm(join(directory, ".opencode", "guardrails"))],
+      runtime: () => false,
+      hidden: () => false,
+    }
+    expect(shellReachesRuntime(runtime, "printf x > .opencode/guard*/state.json", ".")).toBe(true)
+    expect(shellReachesRuntime(runtime, "printf x > guard*/state.json", ".opencode")).toBe(true)
+    expect(shellReachesRuntime(runtime, "printf x > .opencode/cache*/state.json", ".")).toBe(false)
   })
 
   test("ordinary session (cwd == location, no workdir): cd spellings, compound commands, CDPATH, cd - / popd", async () => {
