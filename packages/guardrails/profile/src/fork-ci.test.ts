@@ -66,6 +66,12 @@ describe("fork CI runner eligibility", () => {
 })
 
 describe("upstream-only automation", () => {
+  test("process daemon publishing is upstream-only while fork builds remain eligible", () => {
+    const jobs = workflow("release-process-daemon.yml").jobs
+    expect(evaluate(jobs.release.if, fork)).toBe(false)
+    expect(evaluate(jobs.release.if, upstream)).toBe(true)
+    for (const id of ["checks", "build", "build-windows"]) expect(evaluate(jobs[id].if, fork)).toBe(true)
+  })
   for (const names of [
     ["triage-close-prs.yml", "close-prs.yml"],
     ["triage-close-issues.yml", "close-issues.yml"],
