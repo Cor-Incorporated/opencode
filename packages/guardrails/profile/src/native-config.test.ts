@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { ConfigNormalize } from "../../../core/src/config/normalize"
+import { ConfigNormalize } from "@opencode/core/config/normalize"
 import managed from "../../managed/opencode.json"
 import profile from "../opencode.json"
 import { profileConfig } from "../plugins/guardrail"
@@ -69,7 +69,10 @@ describe("packaged 2.x provider configuration", () => {
     test(`the admission policy loader rejects ${name}`, () => {
       const dir = mkdtempSync(path.join(tmpdir(), "guardrail-policy-coverage-"))
       try {
-        writeFileSync(path.join(dir, "opencode.json"), JSON.stringify({ providers: { openai: {}, "zai-coding-plan": {} } }))
+        writeFileSync(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({ providers: { openai: {}, "zai-coding-plan": {} } }),
+        )
         writeFileSync(path.join(dir, "model-policy.json"), JSON.stringify({ provider }))
         expect(() => profileConfig(dir)).toThrow(/model policy/)
       } finally {
