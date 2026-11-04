@@ -21,8 +21,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # A pull request checks out its merge into the current base; the first parent is that base.
-          fetch-depth: 2
+          # Fork PRs need the shared upstream ancestor; keep the upstream job's original shallow checkout.
+          fetch-depth: ${{ github.repository != 'anomalyco/opencode' && github.event_name == 'pull_request' && '0' || '2' }}
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -34,10 +34,25 @@ jobs:
       - name: Typecheck (TypeScript 7.1)
         run: bun run typecheck:tsc
 
+      # Match lint:changed's local upstream/dev merge base. Imported upstream files retain upstream ownership;
+      # every fork-owned GUI change, including an untracked file, still runs the whole-file warning gate.
+      - name: Resolve fork lint baseline
+        id: lint_base
+        if: github.event_name == 'pull_request' && github.repository != 'anomalyco/opencode'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags https://github.com/anomalyco/opencode.git dev
+          base="$(git merge-base HEAD FETCH_HEAD)"
+          test -n "$base"
+          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+
       # Every GUI package file (app, desktop, gui-plugins, the plugin package's GUI SDK, ui, session-ui) a pull request adds or edits must be free of
       # oxlint problems, warn-level rules (anti-slop) included. Other packages are not affected.
       - name: Lint changed files
         if: github.event_name == 'pull_request'
-        # Against the merge's first parent, so base-branch commits the pull request has not merged are not counted as its
-        # changes (the event's base SHA can predate them).
-        run: bun run lint:changed HEAD^1
+        env:
+          LINT_BASE: ${{ github.repository == 'anomalyco/opencode' && 'HEAD^1' || steps.lint_base.outputs.base }}
+        run: |
+          test -n "$LINT_BASE"
+          bun run lint:changed "$LINT_BASE"
