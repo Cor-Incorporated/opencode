@@ -110,6 +110,29 @@ jobs:
       - name: Verify search tool prerequisites
         working-directory: packages/core
         run: bun run script/test.ts test/ripgrep.test.ts test/tool-search.test.ts
+      - name: Prepare private ACL diagnostic snapshot
+        id: acl-snapshot
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:RUNNER_TEMP 'opencode-acl-environment.json'
+          New-Item -ItemType File -Path $path -Force | Out-Null
+          $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+          $acl = [System.Security.AccessControl.FileSecurity]::new()
+          $acl.SetOwner($user)
+          $acl.SetAccessRuleProtection($true, $false)
+          $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($user, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))
+          Set-Acl -LiteralPath $path -AclObject $acl
+
+      - name: Capture ACL diagnostic environment
+        id: acl-environment
+        if: runner.os == 'Windows' && steps.acl-snapshot.outcome == 'success'
+        continue-on-error: true
+        run: |
+          node -e 'require("node:fs").writeFileSync(require("node:path").join(process.env.RUNNER_TEMP, "opencode-acl-environment.json"), JSON.stringify({PSModulePath: process.env.PSModulePath, LOCALAPPDATA: process.env.LOCALAPPDATA}), {flag:"r+"})'
+
       - name: Diagnose ACL transport directly
         if: runner.os == 'Windows'
         continue-on-error: true
@@ -120,6 +143,21 @@ jobs:
         if: runner.os == 'Windows'
         continue-on-error: true
         run: GITHUB_ACTIONS=false bun turbo test --filter=@opencode-ai/guardrails -- --test-name-pattern 'Windows ACL transport'
+
+      - name: Diagnose ACL transport with loose environment
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: GITHUB_ACTIONS=false bun turbo test --env-mode=loose --filter=@opencode-ai/guardrails -- --test-name-pattern 'Windows ACL transport'
+
+      - name: Diagnose ACL environment factors under strict mode
+        if: runner.os == 'Windows' && steps.acl-environment.outcome == 'success'
+        continue-on-error: true
+        run: GITHUB_ACTIONS=false bun turbo test --filter=@opencode-ai/guardrails -- bin/windows-acl-environment.test.ts --test-name-pattern 'Windows ACL environment factor'
+
+      - name: Remove private ACL diagnostic snapshot
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'opencode-acl-environment.json') -Force -ErrorAction SilentlyContinue
 
       - name: Test Effect simplification rules
         if: runner.os == 'Linux'

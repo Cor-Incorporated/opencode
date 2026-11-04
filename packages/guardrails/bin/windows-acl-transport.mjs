@@ -17,22 +17,39 @@ const sources = {
   )?.[1],
 }
 
-function presence() {
-  const names = new Set(Object.keys(process.env).map((key) => key.toUpperCase()))
+function presence(env = process.env) {
+  const names = new Set(Object.keys(env).map((key) => key.toUpperCase()))
   return {
     ...Object.fromEntries(
       ["SYSTEMROOT", "WINDIR", "PSMODULEPATH", "USERPROFILE", "TEMP", "TMP", "PATH", "LOCALAPPDATA", "COMSPEC"].map(
         (key) => [key, names.has(key)],
       ),
     ),
-    SystemRootLookup: Boolean(process.env.SystemRoot),
-    SYSTEMROOTLookup: Boolean(process.env.SYSTEMROOT),
+    SystemRootLookup: Boolean(env.SystemRoot),
+    SYSTEMROOTLookup: Boolean(env.SYSTEMROOT),
   }
 }
 
-function probe(stage) {
+function probe(stage, restore = "none") {
   const script = sources[stage]
   if (!script) throw new Error("Unknown ACL diagnostic stage")
+  const choices = {
+    none: [],
+    PSModulePath: ["PSModulePath"],
+    LOCALAPPDATA: ["LOCALAPPDATA"],
+    both: ["PSModulePath", "LOCALAPPDATA"],
+  }
+  if (!Object.hasOwn(choices, restore)) throw new Error("Unknown ACL environment factor")
+  const env = { ...process.env }
+  if (restore !== "none") {
+    const snapshot = JSON.parse(
+      readFileSync(path.join(process.env.RUNNER_TEMP, "opencode-acl-environment.json"), "utf8"),
+    )
+    for (const key of choices[restore]) {
+      if (typeof snapshot[key] !== "string" || !snapshot[key]) throw new Error("ACL environment factor unavailable")
+      env[key] = snapshot[key]
+    }
+  }
   const dir = mkdtempSync(path.join(tmpdir(), "opencode-acl-transport-"))
   const file = path.join(dir, "fixture [key]'s.key")
   writeFileSync(file, "diagnostic-placeholder\n")
@@ -43,7 +60,7 @@ function probe(stage) {
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
       {
         env: {
-          ...process.env,
+          ...env,
           OPENCODE_COR_LOCAL_TEST_PATH: file,
           OPENCODE_COR_LOCAL_TEST_PUBLIC: "0",
           OPENCODE_COR_LOCAL_ACL_PATH: file,
@@ -59,7 +76,8 @@ function probe(stage) {
     return {
       stage,
       runtime: process.versions.bun ? `Bun ${process.versions.bun}` : `Node ${process.versions.node}`,
-      envPresence: presence(),
+      restore,
+      envPresence: presence(env),
       scriptSha256: createHash("sha256").update(script).digest("hex"),
       status: result.status,
       signal: result.signal,
@@ -73,9 +91,9 @@ function probe(stage) {
   }
 }
 
-export function diagnose(stage, transport) {
-  if (transport === "bun") return probe(stage)
-  const result = spawnSync("node", [fileURLToPath(import.meta.url), stage], {
+export function diagnose(stage, transport, restore = "none") {
+  if (transport === "bun") return probe(stage, restore)
+  const result = spawnSync("node", [fileURLToPath(import.meta.url), stage, restore], {
     env: process.env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -88,6 +106,7 @@ export function diagnose(stage, transport) {
   return {
     stage,
     runtime: "Node child did not report",
+    restore,
     envPresence: presence(),
     status: result.status,
     signal: result.signal,
@@ -100,5 +119,5 @@ export function diagnose(stage, transport) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.platform !== "win32" || process.versions.node.split(".")[0] !== "24")
     throw new Error("ACL diagnostic child requires Windows Node 24")
-  console.log(JSON.stringify(probe(process.argv[2])))
+  console.log(JSON.stringify(probe(process.argv[2], process.argv[3])))
 }
