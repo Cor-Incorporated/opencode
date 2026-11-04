@@ -19,6 +19,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 
 export const DEFAULT_COR_LOCAL_BASE_URL = "http://127.0.0.1:18082/v1"
 export const DEFAULT_COR_LOCAL_KEY_FILE = path.join(os.homedir(), "cluster-ops", "cor-local.key")
@@ -31,6 +32,55 @@ export const DEFAULT_COR_LOCAL_KEY_FILE = path.join(os.homedir(), "cluster-ops",
 // accepted; anything else is ignored with a warning that never echoes the
 // value.
 export const VALID_KEY_RE = /^[A-Za-z0-9._~+/=-]+$/
+
+const WINDOWS_KEY_ACL = `
+$ErrorActionPreference = 'Stop'
+$acl = Get-Acl -LiteralPath $env:OPENCODE_COR_LOCAL_ACL_PATH
+$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])
+$allowed = @($rules | Where-Object { $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow } | ForEach-Object { $_.IdentityReference.Value })
+@{
+  user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  allow = $allowed
+} | ConvertTo-Json -Compress
+`
+
+/** Decode the ACL probe without accepting unreadable, null-DACL or foreign-principal access. */
+export function privateWindowsKeyAcl(result) {
+  if (!result || result.error || result.status !== 0 || typeof result.stdout !== "string") return false
+  let acl
+  try {
+    acl = JSON.parse(result.stdout)
+  } catch {
+    return false
+  }
+  if (!acl || typeof acl !== "object" || typeof acl.user !== "string" || !/^S-\d+-\d+(?:-\d+)+$/.test(acl.user))
+    return false
+  if (!Array.isArray(acl.allow) || acl.allow.length === 0) return false
+  const principals = new Set([acl.user, "S-1-5-18", "S-1-5-32-544"])
+  return principals.has(acl.owner) && acl.allow.every((sid) => typeof sid === "string" && principals.has(sid))
+}
+
+function windowsKeyFilePrivate(filePath) {
+  const powershell = path.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  )
+  return privateWindowsKeyAcl(
+    spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_KEY_ACL], {
+      env: { ...process.env, OPENCODE_COR_LOCAL_ACL_PATH: path.resolve(filePath) },
+      encoding: "utf8",
+      timeout: 5_000,
+      maxBuffer: 65_536,
+      windowsHide: true,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  )
+}
 
 /**
  * Reads and validates a cor-local API key from `filePath`. Returns the key
@@ -47,8 +97,9 @@ export function loadCorLocalKeyFromFile(filePath, { warn = (msg) => console.erro
     return undefined
   }
   if (!stat.isFile()) return undefined
-  // Owner-only permissions: reject any group/other read/write/exec bit.
-  if ((stat.mode & 0o077) !== 0) {
+  // Windows mode bits do not describe its ACL. Both checks reject unprivileged access before reading the key.
+  const secure = process.platform === "win32" ? windowsKeyFilePrivate(filePath) : (stat.mode & 0o077) === 0
+  if (!secure) {
     warn("cor-local: key file ignored (invalid format)")
     return undefined
   }
