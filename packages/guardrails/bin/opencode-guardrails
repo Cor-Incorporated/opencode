@@ -130,7 +130,7 @@ const childEnv = { ...process.env }
 // the @opencode/cli `opencode.cjs` shim reads OPENCODE_BIN_PATH as *its* target; handing it its own path loops forever
 if (target.endsWith(".cjs")) delete childEnv.OPENCODE_BIN_PATH
 
-const out = spawnSync(target, process.env.OPENCODE_GUARDRAILS_ALLOW_SERVICE === "1" ? process.argv.slice(2) : withStandalone(process.argv.slice(2)), {
+const out = spawnSync(target, process.env.OPENCODE_GUARDRAILS_ALLOW_SERVICE === "1" ? process.argv.slice(2) : withStandalone(process.argv.slice(2), { binary: target, env: childEnv }), {
   stdio: "inherit",
   env: childEnv,
 })
