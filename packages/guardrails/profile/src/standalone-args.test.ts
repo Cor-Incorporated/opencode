@@ -5,7 +5,7 @@
  * service (it listed 0 openrouter models), 385 openrouter models with --standalone.
  */
 import { describe, expect, test } from "bun:test"
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -106,25 +106,26 @@ describe("launcher argv against the 2.x command help contract (offline)", () => 
   // The installed 2.0.32 debug commands are local; newer CLI versions advertise
   // --standalone for debug config/agents. This stub returns each real help shape
   // and rejects the invalid intermediate-group flag without loading credentials.
-  function run(args: string[], debug: "local" | "server" | "color" | "failed") {
+  function run(args: string[], debug: "local" | "server" | "color" | "failed", extension: "js" | "mjs" | "cjs" = "mjs") {
     const dir = mkdtempSync(path.join(tmpdir(), "opencode-argv-"))
     try {
-      const binary = path.join(dir, "opencode.mjs")
+      const binary = path.join(dir, `opencode.${extension}`)
       writeFileSync(
         binary,
         `#!/usr/bin/env node
 const args = process.argv.slice(2)
+if (${JSON.stringify(extension)} === "cjs" && process.env.OPENCODE_BIN_PATH) process.exit(3)
 if (args[0] === "debug" && args.at(-1) === "--help") {
   if (${JSON.stringify(debug)} === "failed") process.exit(2)
   process.stdout.write(${JSON.stringify(debug === "server" ? "FLAGS\n  --standalone  Run with a private server\n" : debug === "color" ? "FLAGS\n  \u001b[1m--standalone\u001b[0m  Run with a private server\n" : "GLOBAL FLAGS\n  --print-logs  Print logs (server logs require --standalone)\n")})
   process.exit(0)
 }
 if (args[0] === "auth" && (args[1] !== "export" || args[2] !== "--standalone")) process.exit(2)
-if (args[0] === "debug" && (args[1] !== "config" || args.includes("--standalone") !== ${debug === "server" || debug === "color"})) process.exit(2)
+if (args[0] === "debug" && (!["config", "agents"].includes(args[1]) || args.includes("--standalone") !== ${debug === "server" || debug === "color"})) process.exit(2)
 process.stdout.write(JSON.stringify(args))
 `,
+        { mode: 0o600 },
       )
-      chmodSync(binary, 0o755)
       const result = Bun.spawnSync(
         ["node", fileURLToPath(new URL("../../bin/opencode-guardrails", import.meta.url)), ...args],
         {
@@ -156,6 +157,13 @@ process.stdout.write(JSON.stringify(args))
       capability !== "local" ? ["debug", "config", "--standalone"] : ["debug", "config"],
     )
   })
+  for (const leaf of ["config", "agents"]) {
+    test.each(["js", "mjs", "cjs"] as const)(`debug ${leaf} probe executes a non-executable .%s shim through Node`, (extension) => {
+      const result = run(["debug", leaf], "server", extension)
+      expect(result.code, result.stderr).toBe(0)
+      expect(JSON.parse(result.stdout)).toEqual(["debug", leaf, "--standalone"])
+    })
+  }
   test("failed capability inspection stops instead of using the background service", () => {
     const result = run(["debug", "config"], "failed")
     expect(result.code).not.toBe(0)

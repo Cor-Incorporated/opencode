@@ -1,6 +1,7 @@
 // Argument rewrite for bin/opencode-guardrails (kept separate so tests can import it without launching the CLI).
 import { spawnSync } from "node:child_process"
 import { stripVTControlCharacters } from "node:util"
+import { cliCommand } from "./cli-command.js"
 
 const direct = ["run", "models", "stats", "mini", "api", "reload"]
 const nested = {
@@ -45,7 +46,8 @@ export function withStandalone(args, options = {}) {
   if (args[i] === "debug") {
     if (!["config", "agents"].includes(args[j])) return args
     if (!options.binary) throw new Error(`opencode-guardrails: could not inspect debug ${args[j]} without a CLI binary`)
-    const help = spawnSync(options.binary, ["debug", args[j], "--help"], {
+    const [command, ...probeArgs] = cliCommand(options.binary, ["debug", args[j], "--help"])
+    const help = spawnSync(command, probeArgs, {
       encoding: "utf8",
       env: options.env,
       timeout: 10000,
