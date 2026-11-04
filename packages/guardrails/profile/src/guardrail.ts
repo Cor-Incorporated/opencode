@@ -70,6 +70,7 @@ const CATALOG_LANES_REQUIRING_KEYS = {
 } as const
 
 type GuardrailConfig = {
+  policyError?: string
   provider?: { [id: string]: { whitelist?: string[] } | undefined }
 }
 
@@ -103,9 +104,11 @@ async function guardrailServer(input: GuardrailInput, opts?: Record<string, unkn
   const ssotHandlers = createSsotHandlers(ctx)
   const testHonestyHandlers = createTestHonestyHandlers(ctx)
   const worktreeBootstrapHandlers = createWorktreeBootstrapHandlers(ctx)
+  let policyError: string | undefined
 
   return {
     config: async (cfg: GuardrailConfig) => {
+      policyError = cfg.policyError
       for (const key of Object.keys(ctx.allow)) delete ctx.allow[key]
       await dropKeylessCatalogLanes(cfg)
       for (const [key, val] of Object.entries(cfg.provider ?? {})) {
@@ -647,7 +650,7 @@ async function guardrailServer(input: GuardrailInput, opts?: Record<string, unkn
         options: Record<string, unknown>
       },
     ) => {
-      const err = ctx.gate(item)
+      const err = policyError ?? ctx.gate(item)
       if (err) {
         await ctx.mark({
           last_block: "chat.params",
