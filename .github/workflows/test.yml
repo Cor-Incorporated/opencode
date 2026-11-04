@@ -131,7 +131,7 @@ jobs:
         if: runner.os == 'Windows' && steps.acl-snapshot.outcome == 'success'
         continue-on-error: true
         run: |
-          node -e 'require("node:fs").writeFileSync(require("node:path").join(process.env.RUNNER_TEMP, "opencode-acl-environment.json"), JSON.stringify({PSModulePath: process.env.PSModulePath, LOCALAPPDATA: process.env.LOCALAPPDATA}), {flag:"r+"})'
+          node --input-type=module -e 'import {captureEnvironment} from "./packages/guardrails/bin/windows-acl-transport.mjs"; captureEnvironment()'
 
       - name: Diagnose ACL transport directly
         if: runner.os == 'Windows'
@@ -149,10 +149,11 @@ jobs:
         continue-on-error: true
         run: GITHUB_ACTIONS=false bun turbo test --env-mode=loose --filter=@opencode-ai/guardrails -- --test-name-pattern 'Windows ACL transport'
 
-      - name: Diagnose ACL environment factors under strict mode
+      - name: Diagnose ACL environment adaptively under strict mode
         if: runner.os == 'Windows' && steps.acl-environment.outcome == 'success'
         continue-on-error: true
-        run: GITHUB_ACTIONS=false bun turbo test --filter=@opencode-ai/guardrails -- bin/windows-acl-environment.test.ts --test-name-pattern 'Windows ACL environment factor'
+        timeout-minutes: 3
+        run: GITHUB_ACTIONS=false bun turbo test --filter=@opencode-ai/guardrails -- bin/windows-acl-adaptive.test.ts --test-name-pattern 'Windows ACL adaptive probe'
 
       - name: Remove private ACL diagnostic snapshot
         if: always() && runner.os == 'Windows'

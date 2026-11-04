@@ -7,6 +7,72 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+export const DIAGNOSTIC_ENV_KEYS = [
+  "PSExecutionPolicyPreference",
+  "PSModuleAnalysisCachePath",
+  "PSModulePath",
+  "PSHOME",
+  "PSDisableModuleAnalysisCacheCleanup",
+  "__PSLockdownPolicy",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ProgramData",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "ProgramW6432",
+  "CommonProgramFiles",
+  "CommonProgramFiles(x86)",
+  "CommonProgramW6432",
+  "USERDOMAIN",
+  "USERDOMAIN_ROAMINGPROFILE",
+  "USERDNSDOMAIN",
+  "USERNAME",
+  "LOGONSERVER",
+  "COMPUTERNAME",
+  "ALLUSERSPROFILE",
+  "PUBLIC",
+  "OS",
+  "PROCESSOR_ARCHITECTURE",
+  "PROCESSOR_IDENTIFIER",
+  "PROCESSOR_LEVEL",
+  "PROCESSOR_REVISION",
+  "NUMBER_OF_PROCESSORS",
+  "SystemRoot",
+  "WINDIR",
+  "SYSTEMDRIVE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "USERPROFILE",
+  "HOME",
+  "USER",
+  "TEMP",
+  "TMP",
+  "PATH",
+  "COMSPEC",
+  "PATHEXT",
+  "SESSIONNAME",
+]
+
+function snapshotPath() {
+  return path.join(process.env.RUNNER_TEMP, "opencode-acl-environment.json")
+}
+
+export function captureEnvironment() {
+  writeFileSync(
+    snapshotPath(),
+    JSON.stringify(
+      Object.fromEntries(DIAGNOSTIC_ENV_KEYS.filter((key) => process.env[key]).map((key) => [key, process.env[key]])),
+    ),
+    { flag: "r+" },
+  )
+}
+
+export function snapshotNames() {
+  return Object.keys(JSON.parse(readFileSync(snapshotPath(), "utf8"))).filter((key) =>
+    DIAGNOSTIC_ENV_KEYS.includes(key),
+  )
+}
+
 const sources = {
   "exit 0": "exit 0",
   "Set-Acl": readFileSync(path.join(here, "../profile/src/cor-local-bin-defaults.test.ts"), "utf8").match(
@@ -20,11 +86,7 @@ const sources = {
 function presence(env = process.env) {
   const names = new Set(Object.keys(env).map((key) => key.toUpperCase()))
   return {
-    ...Object.fromEntries(
-      ["SYSTEMROOT", "WINDIR", "PSMODULEPATH", "USERPROFILE", "TEMP", "TMP", "PATH", "LOCALAPPDATA", "COMSPEC"].map(
-        (key) => [key, names.has(key)],
-      ),
-    ),
+    ...Object.fromEntries(DIAGNOSTIC_ENV_KEYS.map((key) => [key.toUpperCase(), names.has(key.toUpperCase())])),
     SystemRootLookup: Boolean(env.SystemRoot),
     SYSTEMROOTLookup: Boolean(env.SYSTEMROOT),
   }
@@ -39,13 +101,13 @@ function probe(stage, restore = "none") {
     LOCALAPPDATA: ["LOCALAPPDATA"],
     both: ["PSModulePath", "LOCALAPPDATA"],
   }
-  if (!Object.hasOwn(choices, restore)) throw new Error("Unknown ACL environment factor")
+  const keys = Array.isArray(restore) ? restore : Object.hasOwn(choices, restore) ? choices[restore] : undefined
+  if (!keys || !keys.every((key) => DIAGNOSTIC_ENV_KEYS.includes(key)))
+    throw new Error("Unknown ACL environment factor")
   const env = { ...process.env }
-  if (restore !== "none") {
-    const snapshot = JSON.parse(
-      readFileSync(path.join(process.env.RUNNER_TEMP, "opencode-acl-environment.json"), "utf8"),
-    )
-    for (const key of choices[restore]) {
+  if (keys.length) {
+    const snapshot = JSON.parse(readFileSync(snapshotPath(), "utf8"))
+    for (const key of keys) {
       if (typeof snapshot[key] !== "string" || !snapshot[key]) throw new Error("ACL environment factor unavailable")
       env[key] = snapshot[key]
     }
@@ -93,7 +155,7 @@ function probe(stage, restore = "none") {
 
 export function diagnose(stage, transport, restore = "none") {
   if (transport === "bun") return probe(stage, restore)
-  const result = spawnSync("node", [fileURLToPath(import.meta.url), stage, restore], {
+  const result = spawnSync("node", [fileURLToPath(import.meta.url), stage, JSON.stringify(restore)], {
     env: process.env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -119,5 +181,5 @@ export function diagnose(stage, transport, restore = "none") {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.platform !== "win32" || process.versions.node.split(".")[0] !== "24")
     throw new Error("ACL diagnostic child requires Windows Node 24")
-  console.log(JSON.stringify(probe(process.argv[2], process.argv[3])))
+  console.log(JSON.stringify(probe(process.argv[2], process.argv[3] ? JSON.parse(process.argv[3]) : "none")))
 }
