@@ -8,12 +8,29 @@ import { fileURLToPath } from "node:url"
 import guardrail from "../../src/guardrail"
 import { bridge, v1Input } from "../../src/v2/adapter"
 
-/** profile/opencode.json: the 1.x `config` hook read the provider whitelists from the loaded config. */
+/** Admission data belongs to the plugin; the CLI only reads native providers from opencode.json. */
 export function profileConfig(dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")): unknown {
+  const policy: unknown = JSON.parse(readFileSync(path.join(dir, "model-policy.json"), "utf8"))
+  if (typeof policy !== "object" || policy === null || !("provider" in policy))
+    throw new Error("Invalid guardrail model policy")
+  const providers = policy.provider
+  if (typeof providers !== "object" || providers === null || !Object.keys(providers).length)
+    throw new Error("Invalid guardrail model policy")
+  for (const value of Object.values(providers)) {
+    if (typeof value !== "object" || value === null || !("whitelist" in value) || !Array.isArray(value.whitelist))
+      throw new Error("Invalid guardrail model policy")
+    if (!value.whitelist.length || !value.whitelist.every((id: unknown) => typeof id === "string" && id.length > 0))
+      throw new Error("Invalid guardrail model policy")
+  }
+  return policy
+}
+
+/** A failed setup can be unloaded by the host. Keep this plugin active and deny model requests instead. */
+export function admissionConfig(dir?: string): unknown {
   try {
-    return JSON.parse(readFileSync(path.join(dir, "opencode.json"), "utf8"))
+    return profileConfig(dir)
   } catch {
-    return undefined
+    return { policyError: "Guardrail model policy unavailable; restore model-policy.json before making model requests" }
   }
 }
 
@@ -22,6 +39,6 @@ export default {
   setup: async (ctx: any) => {
     const input = v1Input(ctx)
     const hooks = await guardrail.server(input, ctx?.options)
-    return bridge(ctx, hooks, { input, config: profileConfig() })
+    return bridge(ctx, hooks, { input, config: admissionConfig() })
   },
 }

@@ -1,8 +1,8 @@
 /**
  * The model whitelist lives in three places that must move together:
  *
- *   1. packages/guardrails/managed/opencode.json   (admin profile)
- *   2. packages/guardrails/profile/opencode.json   (packaged profile)
+ *   1. packages/guardrails/managed/model-policy.json   (admin admission policy)
+ *   2. packages/guardrails/profile/model-policy.json   (packaged admission policy)
  *   3. guardrail-patterns.ts `paid`                (free-vs-paid classification)
  *
  * 2026-09-02: all three were stale. `glm-5.3-flash` (released 2026-08-26) was
@@ -19,13 +19,19 @@
  * Run: bun test packages/guardrails/profile/plugins/model-whitelist.test.ts
  */
 import { describe, expect, test } from "bun:test"
-import managed from "../../managed/opencode.json"
-import profile from "../opencode.json"
+import managedConfig from "../../managed/opencode.json"
+import managedPolicy from "../../managed/model-policy.json"
+import profileConfig from "../opencode.json"
+import profilePolicy from "../model-policy.json"
 import { free, paid, preview } from "./guardrail-patterns"
+
+const managed = { ...managedConfig, ...managedPolicy }
+const profile = { ...profileConfig, ...profilePolicy }
 
 type ModelLimit = { context?: number; output?: number }
 type Config = {
-  enabled_providers?: string[]
+  policies?: { action: string; resource: string; effect: string }[]
+  providers?: Record<string, { models?: Record<string, { limit?: ModelLimit }>; settings?: Record<string, unknown> }>
   provider?: Record<
     string,
     {
@@ -36,11 +42,11 @@ type Config = {
   >
 }
 
-const providers = (config: Config) => Object.keys(config.provider ?? {})
+const providers = (config: Config) => Object.keys(config.providers ?? {})
 const whitelist = (config: Config, id: string) => config.provider?.[id]?.whitelist ?? []
 const modelLimit = (config: Config, providerID: string, modelID: string) =>
-  config.provider?.[providerID]?.models?.[modelID]?.limit ?? {}
-const providerOptions = (config: Config, providerID: string) => config.provider?.[providerID]?.options ?? {}
+  config.providers?.[providerID]?.models?.[modelID]?.limit ?? {}
+const providerOptions = (config: Config, providerID: string) => config.providers?.[providerID]?.settings ?? {}
 
 describe("model whitelist stays consistent across its copies", () => {
   test("managed and packaged profiles declare the same providers", () => {
@@ -84,7 +90,9 @@ describe("model whitelist stays consistent across its copies", () => {
     // (guardrail.ts's dropKeylessCatalogLanes stays as defense-in-depth).
     for (const config of [managed as Config, profile as Config]) {
       expect(providers(config)).not.toContain("zai")
-      expect(config.enabled_providers ?? []).not.toContain("zai")
+      expect(
+        config.policies?.filter((rule) => rule.effect === "allow").map((rule) => rule.resource) ?? [],
+      ).not.toContain("zai")
     }
   })
 

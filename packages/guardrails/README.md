@@ -48,14 +48,14 @@ as a plugin, so the 1.x sources moved to `profile/src/` and `profile/plugins/` h
 `profile/src/guardrail.ts` and `profile/src/team.ts` are kept in their 1.x shape (every policy test runs against them
 unchanged); `profile/src/v2/` is the bridge:
 
-| file | role |
-|------|------|
-| `src/v2/adapter.ts` | 1.x hook object → 2.x registrations (`session.hook` prompt/context/compaction, `tool.hook`, `shell.hook("create.before")`, `tool.transform`, `event.subscribe`). Mapping table in the file header. |
-| `src/v2/client.ts` | 1.x SDK-shaped `client.session.*` over `ctx.session.*` (create / promptAsync / prompt / messages / status / abort) for team.ts |
-| `src/v2/events.ts` | session status derived from `session.status` / `session.execution.*` events (2.x has no status call in the plugin domain) |
-| `src/v2/tool.ts` | 1.x `tool({ args: tool.schema.* })` helper emitting JSON Schema (no zod), defaults filled before `execute` |
-| `src/v2/background.ts` | local copy of the 19-line `Background` registry team.ts used from core |
-| `plugins/guardrail/index.ts`, `plugins/team/index.ts` | the directory entries listed in `profile/opencode.json` `plugins` |
+| file                                                  | role                                                                                                                                                                                               |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/v2/adapter.ts`                                   | 1.x hook object → 2.x registrations (`session.hook` prompt/context/compaction, `tool.hook`, `shell.hook("create.before")`, `tool.transform`, `event.subscribe`). Mapping table in the file header. |
+| `src/v2/client.ts`                                    | 1.x SDK-shaped `client.session.*` over `ctx.session.*` (create / promptAsync / prompt / messages / status / abort) for team.ts                                                                     |
+| `src/v2/events.ts`                                    | session status derived from `session.status` / `session.execution.*` events (2.x has no status call in the plugin domain)                                                                          |
+| `src/v2/tool.ts`                                      | 1.x `tool({ args: tool.schema.* })` helper emitting JSON Schema (no zod), defaults filled before `execute`                                                                                         |
+| `src/v2/background.ts`                                | local copy of the 19-line `Background` registry team.ts used from core                                                                                                                             |
+| `plugins/guardrail/index.ts`, `plugins/team/index.ts` | the directory entries listed in `profile/opencode.json` `plugins`                                                                                                                                  |
 
 Tool vocabulary: 2.x renamed the built-in tools and their argument keys (`bash→shell`, `task→subagent`,
 `write/patch→edit`; file tools take `path`, the subagent tool `agent`, the shell result `metadata.exit` — the same table
@@ -93,10 +93,13 @@ the `context`, `compaction`, `generate` and `title` hooks and reads model cost/s
 `session.execution.*` events and a failed execution is surfaced to team.ts as an errored assistant row.
 
 Tests: `bun test profile/src profile/plugins` (from `packages/guardrails`). `src/v2/adapter.test.ts` drives the real v2
-entries with a recording 2.x ctx; `src/plugin-loads.test.ts` pins the three 2.x loader facts the entries rely on against
-upstream source. The 2.x config loader reports `provider.<id>.whitelist` as an "unsupported legacy setting" diagnostic:
-the whitelist is plugin-owned declaration data (read by `plugins/guardrail/index.ts` from the profile file), not CLI
-config, and the diagnostic is expected.
+entries with a recording 2.x ctx; `src/plugin-loads.test.ts` pins the loader facts against upstream source.
+Runtime settings use the native 2.x `providers` schema in both `opencode.json` copies. The plugin-owned allowlists
+live separately in `profile/model-policy.json` and `managed/model-policy.json`; the guardrail entry reads the
+packaged policy and enforces it on all four model request hooks. An unreadable or invalid policy keeps those hooks
+blocked. `src/native-config.test.ts` passes both runtime files through the real normalizer and requires zero
+unsupported, invalid, or conflicting settings. Catalog synchronization updates the two policies and the `paid` sets
+without changing runtime model overrides.
 
 ## Current scope
 
@@ -136,8 +139,8 @@ opencode-guardrails
 What the wrapper does on the 2.x CLI (since the 2026-10-19 re-platform, #343):
 
 - **CLI binary**: `OPENCODE_BIN_PATH`, else the first `opencode` on `PATH` that is not a wrapper around this launcher. A monorepo checkout is not used (`bun install` does not fetch the `@opencode/cli-*` binaries).
-- **Private server**: every call gets `--standalone` (`bin/standalone-args.js`; after the subcommand, first for the TUI; not for `service` / `upgrade` / `uninstall` or an explicit `--server`). The 2.x background service is a long-lived process started earlier with its own environment, so the profile and the keys of the current call never reach it. `OPENCODE_GUARDRAILS_ALLOW_SERVICE=1` keeps the service on purpose.
-- **Config layering**: in 2.x `OPENCODE_CONFIG_DIR` *replaces* the global config directory, so the user's global `opencode.json(c)` is handed back through `OPENCODE_CONFIG`. Extra plugin directories (for example the AIDD H17 control) go in `OPENCODE_GUARDRAILS_EXTRA_PLUGINS` (`:`-separated) and are merged into `OPENCODE_CONFIG_CONTENT`.
+- **Private server**: server-backed commands get `--standalone` after the command leaf, and the TUI gets it first. Local configuration commands and server lifecycle commands pass through; `debug` leaves are checked against the selected CLI version. See [launcher arguments](./launcher-arguments.md). The background service retains its startup environment; `OPENCODE_GUARDRAILS_ALLOW_SERVICE=1` deliberately keeps that connection.
+- **Config layering**: in 2.x `OPENCODE_CONFIG_DIR` _replaces_ the global config directory, so the user's global `opencode.json(c)` is handed back through `OPENCODE_CONFIG`. Extra plugin directories (for example the AIDD H17 control) go in `OPENCODE_GUARDRAILS_EXTRA_PLUGINS` (`:`-separated) and are merged into `OPENCODE_CONFIG_CONTENT`.
 - On this Mac the entry point is `~/.local/bin/opencode` → `opencode2` (claude-code-skills `opencode/launcher/opencode2`), which calls this wrapper from the main checkout.
 
 Paths under `packages/opencode/src/…` cited further below describe the 1.x runtime the fork ran before the re-platform; that package no longer exists upstream.
@@ -146,25 +149,69 @@ It respects an existing `OPENCODE_CONFIG_DIR` so project- or environment-specifi
 
 The packaged profile defaults to the `implement` agent. Review and release-readiness work should run through the packaged `/review`, `/ship`, and `/handoff` commands so the workflow stays read-only at the gate layer.
 
-Provider admission is also packaged here. Standard confidential-code work is admitted on the `zai-coding-plan`, `openai`, and `deepseek` lane. `zai-coding-plan` is kept as its own provider because Z.AI's official OpenCode guide tells Coding Plan subscribers to select `Z.AI Coding Plan` explicitly; Coding Plan subscriptions cover that endpoint (`api.z.ai/api/coding/paas/v4`) only. The `zai` platform lane (`api.z.ai/api/paas/v4`) was removed from the default admission on 2026-09-11: Coding Plan accounts have no platform balance, so every model on it failed — re-add it via `enabled_providers` + a `provider.zai` whitelist when a platform key and balance exist (see "ZHIPU_API_KEY (z.ai lane credential bridge)" below). OpenRouter-backed candidates remain available for evaluation and multi-vendor routing without replacing the default implementation path.
+Provider admission is packaged here. Standard work is admitted on `zai-coding-plan`, `openai`, and `deepseek`;
+OpenRouter remains available for multi-vendor routing and evaluation. Native `provider.use` policies enumerate the
+admitted providers. Model allowlists remain an independent request gate in `model-policy.json`. The `zai` platform
+lane (`api.z.ai/api/paas/v4`) is excluded from both provider admission and model policy; enabling it requires its own
+Standard API credential and billing entitlement.
 
-The `zai` pay-as-you-go lane was retired on 2026-09-11 after the keyless-lane incident. opencode loads config-declared providers even without a credential (`packages/opencode/src/provider/provider.ts`'s config re-apply merge), so a whitelist-only `provider.zai` block put keyless `zai/*` models into the picker — every call then died with z.ai error 1001 `Authentication parameter not received in Header, unable to authenticate`, because the coding-plan key is scoped to `/api/coding` and no Authorization header is sent at all without a credential. The lane is now absent from both config copies and the catalog snapshot, `model-whitelist.test.ts` pins its retirement, and `profile/src/guardrail.ts`'s `config()` hook keeps `dropKeylessCatalogLanes` as defense-in-depth: if any config ever re-declares the lane, machines without `ZHIPU_API_KEY` or a `zai` auth-store entry still never see it (`profile/src/zai-keyless-lane.test.ts`, fail-open on an unreadable store).
+## Z.AI Coding Plan credentials and model access
+
+[Z.AI's OpenCode guide](https://docs.z.ai/devpack/tool/opencode) requires the `Z.AI Coding Plan` integration and the
+Coding endpoint `https://api.z.ai/api/coding/paas/v4`. The provider ID and endpoint alone do not establish the key's
+scope. The API Keys management page separates **Standard** and **Personal Coding Plan** keys; keys issued in the
+Standard tab since 2026-10-16 are for the Standard API. Select an existing key from **Personal Coding Plan** and use
+`opencode auth login --standalone` with `Z.AI Coding Plan`. Keep the key out of logs and repository files.
+
+Error `1113` can therefore occur with the correct endpoint when a Standard-only key is stored under the Coding Plan
+integration. The account quota API returning a plan level or unused quota does not prove that key can make Coding
+Plan model requests. Check the key scope and a bounded request through OpenCode before concluding that funds are
+missing. See the [official FAQ](https://docs.z.ai/devpack/faq).
+
+Model access is a separate entitlement. `glm-5.3` is the default; `glm-5.2-highspeed` and `glm-5.3-highspeed` are
+disabled in native configuration because a Coding Plan subscription does not by itself establish Highspeed access.
+A correct Coding Plan key can still receive `1311` stating that the current subscription excludes Highspeed. After
+confirming the account's Highspeed entitlement, an explicit user or project override can enable that model:
+
+```json
+{
+  "providers": {
+    "zai-coding-plan": {
+      "models": {
+        "glm-5.3-highspeed": { "disabled": false }
+      }
+    }
+  }
+}
+```
+
+The allowlist retains the model ID so this explicit opt-in still passes the request gate. Catalog synchronization
+changes only admission policy data and cannot remove the native `disabled` defaults.
 
 ## ZHIPU_API_KEY (z.ai lane credential bridge)
 
-`zai` and `zai-coding-plan` declare the same models.dev env var (`ZHIPU_API_KEY`), but `opencode auth login` for the coding plan stores the key under the `zai-coding-plan` provider id only. A config-defined provider is listed even without a credential, so selecting a `zai` model then sends no `Authorization` header at all — `@ai-sdk/openai-compatible` omits it when `apiKey` is undefined — and the z.ai gateway answers with the misleading `Authentication parameter not received in Header, unable to authenticate` (code 1001).
+`zai` and `zai-coding-plan` declare the same catalog environment variable, `ZHIPU_API_KEY`. That shared name does not
+make credentials interchangeable between the two products.
 
-`packages/guardrails/bin/zai-auth-env.js` (imported by the same `bin/opencode-guardrails` entry point as the cor-local defaults) bridges that gap: when `ZHIPU_API_KEY` is unset or empty, it reads opencode's auth store (`OPENCODE_AUTH_CONTENT`, else `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json` — the same precedence as upstream `Auth.all`) and exports the stored API key as `ZHIPU_API_KEY`. A direct `zai` auth entry wins over a shared `zai-coding-plan` one, and a caller-supplied `ZHIPU_API_KEY` (shell or project `.env`, loaded earlier) always wins. Covered by `packages/guardrails/profile/src/zai-auth-bin-defaults.test.ts`.
+`bin/zai-auth-env.js` is a legacy `auth.json` compatibility helper imported by the launcher. It does not read the
+2.x credential database, and its selection cannot establish a key's product entitlement. In 2.x, saved active
+integration credentials take precedence over an environment credential; changing an environment variable does not
+replace the selected account. Use the native authentication commands to select the intended credential. Legacy
+helper behavior is covered by `profile/src/zai-auth-bin-defaults.test.ts`.
 
-The bridge fixes authentication, not billing: a Coding Plan key authenticates on the platform endpoint but the account has no platform balance there, so a re-enabled `zai` lane still answers `Insufficient balance or no resource package` until platform credits exist. `zai-coding-plan/*` (including `glm-5.3-flash`) works on the subscription. The lane's removal from `enabled_providers` is pinned by `model-whitelist.test.ts` ("the zai platform lane is not admitted in either copy") so a sync or hand-edit cannot silently re-admit it, and `guardrail.ts`'s `dropKeylessCatalogLanes` keeps machines without any stored key from ever seeing a re-declared lane.
+`model-whitelist.test.ts` pins the exclusion of the platform lane in both runtime files and policies. The legacy
+`dropKeylessCatalogLanes` helper only shapes admission data; it does not remove models from the native 2.x picker.
 
 ## cor-local (ローカル lane)
 
-`cor-local` is an opt-in, fully offline provider that routes through a local `llama-server`-based router (Mac Studio) exposing an OpenAI-compatible endpoint, normally `http://127.0.0.1:18082/v1`. It is wired into `managed/opencode.json` and `profile/opencode.json` (both copies, kept identical) via `@ai-sdk/openai-compatible`, the same mechanism documented for the upstream `llama.cpp` / `lmstudio` recipes in `packages/web/src/content/docs/providers.mdx`. It does not change the default model (`zai-coding-plan/glm-5.3`) — it is only reachable by asking for it explicitly.
+`cor-local` is an opt-in provider for a local `llama-server` router exposing an OpenAI-compatible endpoint, normally
+`http://127.0.0.1:18082/v1`. Both runtime files use `@opencode/ai/providers/openai-compatible` with the same model
+settings. It does not change the default model (`zai-coding-plan/glm-5.3`).
 
 ### baseURL / apiKey (env vars)
 
-`options.baseURL` and `options.apiKey` are `{env:COR_LOCAL_BASE_URL}` / `{env:COR_LOCAL_API_KEY}` (see `packages/opencode/src/config/config.mdx`'s Env vars section and `packages/opencode/src/config/variable.ts`), not hardcoded strings — this is what lets a MacBook reach the Mac Studio router over tailnet with one key exported, without editing this repo.
+`settings.baseURL` and `settings.apiKey` use `{env:COR_LOCAL_BASE_URL}` / `{env:COR_LOCAL_API_KEY}` substitutions so the
+router address and authentication stay outside the repository.
 
 `{env:VAR}` resolves an _unset_ variable to `""` unconditionally (`variable.ts`'s `substitute()` never errors on a missing env var, unlike `{file:...}`), so an empty `COR_LOCAL_BASE_URL` would break every cor-local call the moment this change lands. `packages/guardrails/bin/opencode-guardrails` — the single Node entry point that runs before every invocation (managed deploy, the deployed live wrapper, and a direct `opencode-guardrails` call alike) — is the layer that keeps that from happening, via `packages/guardrails/bin/cor-local-env.js`:
 
@@ -209,11 +256,15 @@ OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --mod
 
 `share` is already `disabled` in both guardrails profiles, so no extra flag is needed for that.
 
-Cold-start note: the router loads models on first request. GLM in particular can block up to roughly 60 seconds before the first byte arrives — this is expected, not a hang. `options.headerTimeout` is set to 900000ms (15m) and `options.timeout` to `false` so that cold load doesn't trip the request-level timeout. `options.chunkTimeout` is set to 120000ms (2m) separately: once headers arrive, a stalled generation (no SSE chunk for 2 minutes) still aborts instead of hanging forever, since `timeout: false` alone does not bound the time between streamed chunks. All three models return `reasoning_content` (surfaced via each model's `interleaved: "reasoning_content"` declaration), structured `tool_calls`, and SSE streaming. Context window is 262144 tokens, max output 16384 tokens.
+Cold-start note: the router loads models on first request. `settings.headerTimeout` is 900000ms, `settings.timeout`
+is `false`, and `settings.chunkTimeout` is 120000ms, bounding stalled streams separately from cold loading.
+`compatibility.reasoningField` preserves `reasoning_content`; native `capabilities.reasoning` declares the effort
+controls. Context window is 262144 tokens and maximum output is 16384 tokens.
 
 `limit.context` (262144) must equal the router's `llama-server` launch flag `-c 262144` (ai-cluster repo, `config/llama-router/cor-local.ini.template`). They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both `qwen3.8-27b` and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins both to 262144.
 
-Offline verification (no network): `bun run local:check-offline` runs the guardrails whitelist/paid/preview pin tests plus `scripts/sync-model-whitelist.py`'s consistency check across the three copies (managed, profile, `paid`).
+Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
+consistency check across the two admission policies and `paid` sets. These checks make no model requests.
 
 ## Managed deployment
 

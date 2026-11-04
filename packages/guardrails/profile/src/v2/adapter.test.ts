@@ -24,9 +24,10 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import guardrailV2 from "../../plugins/guardrail/index"
+import guardrailV2, { admissionConfig } from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
 import { createContext } from "../guardrail-context"
+import guardrail from "../guardrail"
 import { bridge, toV1Call, toV1Calls, toV2Input, v1Input } from "./adapter"
 import { createClient, toolDenyRules, toV1Message, toV2Rules } from "./client"
 
@@ -141,9 +142,31 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
     expect(e.env.OPENCODE_GUARDRAIL_ROOT).toBe(join(dir, ".opencode", "guardrails"))
   })
 
-  test("context hook: the provider gate blocks a model outside the whitelist (chat.params reachability)", async () => {
-    const e = { sessionID: "ses_1", agent: "implement", model: { id: "nope-9000", providerID: "zai-coding-plan" }, system: [], messages: [], options: {}, tools: {} }
-    await expect(f.fire("session.context", e)).rejects.toThrow(/Guardrail policy blocked/)
+  for (const hook of ["context", "generate", "title", "compaction"]) {
+    test(`${hook} hook: the provider gate blocks a model outside the whitelist (chat.params reachability)`, async () => {
+      const e = { sessionID: "ses_1", agent: "implement", model: { id: "nope-9000", providerID: "zai-coding-plan" }, system: [], messages: [], options: {}, tools: {} }
+      await expect(f.fire(`session.${hook}`, e)).rejects.toThrow(/Guardrail policy blocked/)
+    })
+  }
+
+  test("a missing admission policy keeps all four model request hooks blocked", async () => {
+    const missing = fakeCtx(dir)
+    const input = v1Input(missing.ctx)
+    const hooks = await guardrail.server(input)
+    const cleanup = await bridge(missing.ctx, hooks, { input, config: admissionConfig(dir) })
+    try {
+      for (const hook of ["context", "generate", "title", "compaction"]) {
+        await expect(missing.fire(`session.${hook}`, { model: { id: "glm-5.3", providerID: "zai-coding-plan" } })).rejects.toThrow(/Guardrail model policy unavailable/)
+      }
+      const blocks = readFileSync(join(dir, ".opencode", "guardrails", "events.jsonl"), "utf8").trim().split("\n").slice(-4).map((line) => JSON.parse(line))
+      expect(blocks).toHaveLength(4)
+      for (const block of blocks) {
+        expect(block).toMatchObject({ type: "guardrail.block", tool: "chat.params" })
+        expect(block.reason).toContain("Guardrail model policy unavailable")
+      }
+    } finally {
+      await cleanup()
+    }
   })
 
   test("context hook: an allowed model passes and the system transform appends SystemParts", async () => {
