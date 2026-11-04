@@ -9,7 +9,7 @@ const bin = fileURLToPath(new URL("../../bin/opencode-guardrails", import.meta.u
 test("explicit JavaScript CLI paths run through Node without executable permission", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "guardrails-launcher-"))
   try {
-    for (const extension of ["js", "mjs", "cjs"]) {
+    for (const extension of ["js", "mjs", "cjs", "CJS"]) {
       const target = path.join(dir, `cli.${extension}`)
       writeFileSync(
         target,
@@ -23,7 +23,7 @@ test("explicit JavaScript CLI paths run through Node without executable permissi
       expect(run.exitCode, new TextDecoder().decode(run.stderr)).toBe(0)
       expect(JSON.parse(new TextDecoder().decode(run.stdout))).toEqual({
         args: ["models", "--standalone"],
-        ...(extension === "cjs" ? {} : { binary: target }),
+        ...(extension.toLowerCase() === "cjs" ? {} : { binary: target }),
       })
     }
   } finally {

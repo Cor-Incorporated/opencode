@@ -129,7 +129,7 @@ extraPlugins()
 const target = bin()
 const childEnv = { ...process.env }
 // the @opencode/cli `opencode.cjs` shim reads OPENCODE_BIN_PATH as *its* target; handing it its own path loops forever
-if (target.endsWith(".cjs")) delete childEnv.OPENCODE_BIN_PATH
+if (/\.cjs$/i.test(target)) delete childEnv.OPENCODE_BIN_PATH
 
 const [command, ...args] = cliCommand(
   target,
