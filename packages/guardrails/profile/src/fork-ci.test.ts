@@ -7,7 +7,19 @@ const directory = path.join(root, ".github/workflows")
 const upstream = "anomalyco/opencode"
 const fork = "Cor-Incorporated/opencode"
 
-type Job = { "runs-on"?: string; if?: string; steps?: { name?: string; if?: string; run?: string; uses?: string }[] }
+type Job = {
+  "runs-on"?: string
+  if?: string
+  steps?: {
+    name?: string
+    id?: string
+    if?: string
+    run?: string
+    uses?: string
+    with?: Record<string, string | number>
+    env?: Record<string, string>
+  }[]
+}
 
 function workflow(...names: string[]) {
   const name = names.find((name) => existsSync(path.join(directory, name)))
@@ -17,13 +29,15 @@ function workflow(...names: string[]) {
 
 // These workflow expressions use the shared JavaScript/GitHub subset: property access, strings, ==, && and ||.
 // Evaluate the actual YAML expressions, not a second runner-selection implementation.
-function evaluate(value: string | undefined, repository: string, name = "linux") {
+function evaluate(value: string | number | undefined, repository: string, name = "linux", event = "push", base = "") {
   if (value === undefined) return true
+  if (typeof value === "number") return value
   if (!value.includes("${{") && !value.includes("github.")) return value
   const expression = value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-  return new Function("github", "matrix", `return (${expression})`)(
-    { repository, event_name: "push", ref: "refs/heads/dev" },
+  return new Function("github", "matrix", "steps", `return (${expression})`)(
+    { repository, event_name: event, ref: "refs/heads/dev" },
     { settings: { name, host: `blacksmith-4vcpu-${name === "windows" ? "windows-2025" : "ubuntu-2404"}` } },
+    { lint_base: { outputs: { base } } },
   ) as string | boolean
 }
 
@@ -62,6 +76,26 @@ describe("fork CI runner eligibility", () => {
     const run = steps.findIndex((step) => step.run === "bun test profile/src profile/plugins")
     expect(install).toBeDefined()
     expect(steps.indexOf(install!)).toBeLessThan(run)
+  })
+  test("fork pull requests keep complete history without changing upstream checkout depth", () => {
+    const checkout = workflow("check.yml").jobs.check.steps?.find((step) => step.name === "Checkout repository")
+    expect(evaluate(checkout?.with?.["fetch-depth"], fork, "linux", "pull_request")).toBe("0")
+    expect(String(evaluate(checkout?.with?.["fetch-depth"], fork))).toBe("2")
+    expect(String(evaluate(checkout?.with?.["fetch-depth"], upstream, "linux", "pull_request"))).toBe("2")
+  })
+  test("only fork pull requests resolve and consume the upstream merge base", () => {
+    const steps = workflow("check.yml").jobs.check.steps ?? []
+    const resolve = steps.find((step) => step.id === "lint_base")
+    const lint = steps.find((step) => step.name === "Lint changed files")
+    expect(resolve).toBeDefined()
+    expect(evaluate(resolve?.if, fork, "linux", "pull_request")).toBe(true)
+    expect(evaluate(resolve?.if, upstream, "linux", "pull_request")).toBe(false)
+    expect(evaluate(resolve?.if, fork)).toBe(false)
+    expect(steps.indexOf(resolve!)).toBeLessThan(steps.indexOf(lint!))
+    const sha = "55276f2108c8853f94cf16dc530e7754a6ce8318"
+    expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request", sha)).toBe(sha)
+    expect(evaluate(lint?.env?.LINT_BASE, upstream, "linux", "pull_request", sha)).toBe("HEAD^1")
+    expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request")).toBe("")
   })
 })
 
