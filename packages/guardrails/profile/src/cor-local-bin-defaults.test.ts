@@ -24,11 +24,12 @@
  * network (OPENCODE_DISABLE_MODELS_FETCH=1, stub never fetches).
  */
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { applyCorLocalDefaults, loadCorLocalKeyFromFile } from "../../bin/cor-local-env.js"
+import { applyCorLocalDefaults, loadCorLocalKeyFromFile, privateWindowsKeyAcl } from "../../bin/cor-local-env.js"
 
 const binPath = fileURLToPath(new URL("../../bin/opencode-guardrails", import.meta.url))
 
@@ -41,15 +42,77 @@ function withTmpDir<T>(prefix: string, fn: (dir: string) => T): T {
   }
 }
 
+// Windows chmod does not set a private DACL: create the actual ACL used by the production probe.
+function keyPermissions(filePath: string, mode: number) {
+  if (process.platform !== "win32") return chmodSync(filePath, mode)
+  const script = `
+$ErrorActionPreference = 'Stop'
+$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = New-Object System.Security.AccessControl.FileSecurity
+$acl.SetOwner($user)
+$acl.SetAccessRuleProtection($true, $false)
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($user, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow))
+if ($env:OPENCODE_COR_LOCAL_TEST_PUBLIC -eq '1') {
+  $everyone = [System.Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+  $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($everyone, [System.Security.AccessControl.FileSystemRights]::Read, [System.Security.AccessControl.AccessControlType]::Allow))
+}
+Set-Acl -LiteralPath $env:OPENCODE_COR_LOCAL_TEST_PATH -AclObject $acl
+`
+  const result = spawnSync(
+    path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      env: {
+        ...process.env,
+        OPENCODE_COR_LOCAL_TEST_PATH: filePath,
+        OPENCODE_COR_LOCAL_TEST_PUBLIC: mode === 0o600 ? "0" : "1",
+      },
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true,
+      shell: false,
+    },
+  )
+  expect(result.status, result.stderr).toBe(0)
+}
+
+describe("cor-local-env.js: Windows key-file ACL policy", () => {
+  const user = "S-1-5-21-1001"
+  const probe = (allow = [user], owner = user) => ({ status: 0, stdout: JSON.stringify({ user, owner, allow }) })
+
+  test("accepts current-user access with optional SYSTEM and Administrators", () => {
+    expect(privateWindowsKeyAcl(probe())).toBe(true)
+    expect(privateWindowsKeyAcl(probe([user, "S-1-5-18", "S-1-5-32-544"]))).toBe(true)
+  })
+
+  test.each([
+    ["Everyone access", probe([user, "S-1-1-0"])],
+    ["another user", probe([user, "S-1-5-21-2002"])],
+    ["foreign owner", probe([user], "S-1-5-21-2002")],
+    ["empty/null DACL", probe([])],
+    ["missing SID", { status: 0, stdout: JSON.stringify({ owner: user, allow: [user] }) }],
+    ["invalid SID", { status: 0, stdout: JSON.stringify({ user: "not-a-sid", owner: user, allow: [user] }) }],
+    ["malformed JSON", { status: 0, stdout: "not-json" }],
+    ["failed probe", { ...probe(), status: 1 }],
+    ["timed-out probe", { ...probe(), error: new Error("ETIMEDOUT") }],
+    ["interrupted probe", { ...probe(), status: null, signal: "SIGTERM" }],
+  ])("rejects %s", (_name, result) => {
+    expect(privateWindowsKeyAcl(result)).toBe(false)
+  })
+})
+
 describe("cor-local-env.js: COR_LOCAL_BASE_URL defaulting", () => {
   test("(a) unset -> defaults to the Mac Studio router", () => {
-    const env: Record<string, string> = {}
+    const env: Record<string, string> = { COR_LOCAL_API_KEY: "test-key-no-file-read" }
     applyCorLocalDefaults(env, { warn: () => {} })
     expect(env.COR_LOCAL_BASE_URL).toBe("http://127.0.0.1:18082/v1")
   })
 
   test("(b) already set -> caller's value is never overridden", () => {
-    const env: Record<string, string> = { COR_LOCAL_BASE_URL: "http://mac-studio.tailb30e58.ts.net:18082/v1" }
+    const env: Record<string, string> = {
+      COR_LOCAL_BASE_URL: "http://mac-studio.tailb30e58.ts.net:18082/v1",
+      COR_LOCAL_API_KEY: "test-key-no-file-read",
+    }
     applyCorLocalDefaults(env, { warn: () => {} })
     expect(env.COR_LOCAL_BASE_URL).toBe("http://mac-studio.tailb30e58.ts.net:18082/v1")
   })
@@ -60,7 +123,7 @@ describe("cor-local-env.js: key file validation", () => {
     withTmpDir("cor-local-key-perm-", (dir) => {
       const keyFile = path.join(dir, "cor-local.key")
       writeFileSync(keyFile, "top-secret-value\n")
-      chmodSync(keyFile, 0o644)
+      keyPermissions(keyFile, 0o644)
 
       const warnings: string[] = []
       const key = loadCorLocalKeyFromFile(keyFile, { warn: (msg) => warnings.push(msg) })
@@ -76,7 +139,7 @@ describe("cor-local-env.js: key file validation", () => {
     withTmpDir("cor-local-key-quote-", (dir) => {
       const keyFile = path.join(dir, "cor-local.key")
       writeFileSync(keyFile, 'sk-"bad\n')
-      chmodSync(keyFile, 0o600)
+      keyPermissions(keyFile, 0o600)
 
       const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
       expect(key).toBeUndefined()
@@ -87,7 +150,7 @@ describe("cor-local-env.js: key file validation", () => {
     withTmpDir("cor-local-key-2line-", (dir) => {
       const keyFile = path.join(dir, "cor-local.key")
       writeFileSync(keyFile, "sk-good\nextra-line\n")
-      chmodSync(keyFile, 0o600)
+      keyPermissions(keyFile, 0o600)
 
       const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
       expect(key).toBeUndefined()
@@ -96,9 +159,9 @@ describe("cor-local-env.js: key file validation", () => {
 
   test("(f) a normal owner-only key with a trailing newline is adopted without the newline", () => {
     withTmpDir("cor-local-key-ok-", (dir) => {
-      const keyFile = path.join(dir, "cor-local.key")
+      const keyFile = path.join(dir, "cor-local [key]'s.key")
       writeFileSync(keyFile, "sk-good-value123\n")
-      chmodSync(keyFile, 0o600)
+      keyPermissions(keyFile, 0o600)
 
       const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
       expect(key).toBe("sk-good-value123")
@@ -118,7 +181,7 @@ describe("cor-local-env.js: key file validation", () => {
     withTmpDir("cor-local-key-apply-", (dir) => {
       const keyFile = path.join(dir, "cor-local.key")
       writeFileSync(keyFile, "sk-applied-value\n")
-      chmodSync(keyFile, 0o600)
+      keyPermissions(keyFile, 0o600)
 
       const env: Record<string, string> = { COR_LOCAL_KEY_FILE: keyFile }
       applyCorLocalDefaults(env, { warn: () => {} })
@@ -130,7 +193,7 @@ describe("cor-local-env.js: key file validation", () => {
     withTmpDir("cor-local-key-noverride-", (dir) => {
       const keyFile = path.join(dir, "cor-local.key")
       writeFileSync(keyFile, "should-not-be-read\n")
-      chmodSync(keyFile, 0o600)
+      keyPermissions(keyFile, 0o600)
 
       const env: Record<string, string> = { COR_LOCAL_KEY_FILE: keyFile, COR_LOCAL_API_KEY: "caller-value" }
       applyCorLocalDefaults(env, { warn: () => {} })
@@ -163,6 +226,7 @@ describe("bin/opencode-guardrails: real entry point ordering (subprocess, offlin
       env: {
         PATH: process.env.PATH ?? "",
         HOME: opts.homeDir,
+        USERPROFILE: opts.homeDir,
         OPENCODE_BIN_PATH: stubPath,
         OPENCODE_DISABLE_MODELS_FETCH: "1",
         ...opts.env,
@@ -198,7 +262,7 @@ describe("bin/opencode-guardrails: real entry point ordering (subprocess, offlin
         mkdirSync(path.join(homeDir, "cluster-ops"), { recursive: true })
         const keyFile = path.join(homeDir, "cluster-ops", "cor-local.key")
         writeFileSync(keyFile, "sk-from-home\n")
-        chmodSync(keyFile, 0o600)
+        keyPermissions(keyFile, 0o600)
 
         const out = runEntryPoint({ projectDir, homeDir })
         expect(out).toContain("API_KEY=sk-from-home")

@@ -17,6 +17,12 @@ ripgrep 15.1.0 を公式 release から取得し、公式の SHA-256 を固定�
 guardrails の設定互換テストは core の実 normalizer を読み込むため、Node 24 と固定 lockfile による
 workspace の依存インストールを行ってから実行する。ローカルの既存 node_modules に依存させない。
 
+Windows では POSIX の `chmod(600)` で鍵ファイルの非公開性を判定できない。cor-local の鍵ファイルは
+組み込み PowerShell の `Get-Acl` で SID を照合し、本人・SYSTEM・Administrators 以外への許可や
+検査失敗を拒否する。テストも保護した実 ACL と Everyone の読み取り許可を使って判定を確認する。
+`OPENCODE_BIN_PATH` の JavaScript shim は launcher と同じ Node で起動し、native executable の
+呼び出しは維持する。Python の検査パスは `fileURLToPath` で変換し、Windows の drive を重複させない。
+
 `close-prs` の失敗 run 41727034808 は、固定対象 `anomalyco/opencode` の PR を 1,428 件取得後、
 fork の GITHUB_TOKEN での更新が 403 となっていた。`close-issues` も上流を固定対象にする。
 これらの job、上流の有料モデルを使う issue triage、上流 App secret で更新する Nix hash の
