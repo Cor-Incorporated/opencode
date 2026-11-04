@@ -77,6 +77,7 @@ function windowsKeyFilePrivate(filePath) {
       maxBuffer: 65_536,
       windowsHide: true,
       shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
     }),
   )
 }

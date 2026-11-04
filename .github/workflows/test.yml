@@ -110,10 +110,6 @@ jobs:
       - name: Verify search tool prerequisites
         working-directory: packages/core
         run: bun run script/test.ts test/ripgrep.test.ts test/tool-search.test.ts
-      - name: Diagnose Windows ACL subprocess transport
-        if: runner.os == 'Windows'
-        run: bun packages/guardrails/bin/windows-acl-diagnostic.mjs
-
       - name: Test Effect simplification rules
         if: runner.os == 'Linux'
         run: bun run test:effect-simplification-rules

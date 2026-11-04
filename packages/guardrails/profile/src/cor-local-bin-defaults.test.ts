@@ -71,6 +71,7 @@ Set-Acl -LiteralPath $env:OPENCODE_COR_LOCAL_TEST_PATH -AclObject $acl
       timeout: 5_000,
       windowsHide: true,
       shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
     },
   )
   expect(result.status, result.stderr).toBe(0)
