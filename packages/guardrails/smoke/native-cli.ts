@@ -68,7 +68,7 @@ const manifests = {
     launcher,
     path.join(plugin, "index.ts"),
     guard,
-    ...["standalone-args.js", "zai-auth-env.js", "cor-local-env.js"].map((name) =>
+    ...["standalone-args.js", "cli-command.js", "zai-auth-env.js", "cor-local-env.js"].map((name) =>
       path.join(path.dirname(guard), name),
     ),
   ].map((file) => ({ path: file, sha256: hash(file) })),
