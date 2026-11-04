@@ -9,6 +9,14 @@ GitHub 標準の `ubuntu-24.04` / `windows-2025` を使う。Linux と Windows �
 affected 判定、browser test、集約 check を省略しない。公開リポジトリの標準 runner が対象で、
 larger runner、新サービス、追加 secret は使用しない。
 
+標準 runner の clean 環境には `rg` がない場合がある。core のテストは意図しない HTTP 呼び出しを
+拒否するため、通常実行時の自動ダウンロードには依存できない。unit job で既存 runtime と同じ
+ripgrep 15.1.0 を公式 release から取得し、公式の SHA-256 を固定して照合してから PATH へ追加する。
+続けて隔離 HOME の実際の Ripgrep / search tool テストを実行し、`which` の確認だけで済ませない。
+
+guardrails の設定互換テストは core の実 normalizer を読み込むため、Node 24 と固定 lockfile による
+workspace の依存インストールを行ってから実行する。ローカルの既存 node_modules に依存させない。
+
 `close-prs` の失敗 run 41727034808 は、固定対象 `anomalyco/opencode` の PR を 1,428 件取得後、
 fork の GITHUB_TOKEN での更新が 403 となっていた。`close-issues` も上流を固定対象にする。
 これらの job、上流の有料モデルを使う issue triage、上流 App secret で更新する Nix hash の

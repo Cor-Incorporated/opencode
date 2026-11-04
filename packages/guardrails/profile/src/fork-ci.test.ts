@@ -7,7 +7,7 @@ const directory = path.join(root, ".github/workflows")
 const upstream = "anomalyco/opencode"
 const fork = "Cor-Incorporated/opencode"
 
-type Job = { "runs-on"?: string; if?: string }
+type Job = { "runs-on"?: string; if?: string; steps?: { name?: string; if?: string; run?: string; uses?: string }[] }
 
 function workflow(...names: string[]) {
   const name = names.find((name) => existsSync(path.join(directory, name)))
@@ -44,6 +44,25 @@ describe("fork CI runner eligibility", () => {
       })
     }
   }
+  test("clean unit runners install verified ripgrep before exercising the real search tools", () => {
+    const steps = workflow("check-test.yml", "test.yml").jobs.unit.steps ?? []
+    for (const os of ["Linux", "Windows"]) {
+      const install = steps.find((step) => step.name === `Prepare ripgrep (${os})`)
+      expect(install?.if).toBe(`runner.os == '${os}'`)
+      expect(install?.run).toContain("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/")
+      expect(install?.run).toMatch(/[a-f0-9]{64}/)
+    }
+    const verify = steps.find((step) => step.name === "Verify search tool prerequisites")
+    expect(verify?.run).toContain("script/test.ts test/ripgrep.test.ts test/tool-search.test.ts")
+    expect(steps.indexOf(verify!)).toBeLessThan(steps.findIndex((step) => step.name === "Run unit tests"))
+  })
+  test("guardrails installs the frozen workspace before importing the native normalizer", () => {
+    const steps = workflow("guardrails.yml").jobs.test.steps ?? []
+    const install = steps.find((step) => step.run === "bun install --frozen-lockfile")
+    const run = steps.findIndex((step) => step.run === "bun test profile/src profile/plugins")
+    expect(install).toBeDefined()
+    expect(steps.indexOf(install!)).toBeLessThan(run)
+  })
 })
 
 describe("upstream-only automation", () => {
