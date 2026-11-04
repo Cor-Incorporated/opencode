@@ -19,6 +19,7 @@
  * Run: bun test packages/guardrails/profile/plugins/model-whitelist.test.ts
  */
 import { describe, expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 import managed from "../../managed/opencode.json"
 import profile from "../opencode.json"
 import { free, paid, preview } from "./guardrail-patterns"
@@ -93,7 +94,7 @@ describe("model whitelist stays consistent across its copies", () => {
   // committed snapshot is what makes that answerable offline, and this is the
   // check that fails when a model reaches the catalog and not the whitelist.
   test("the whitelist covers every model in the committed catalog snapshot", () => {
-    const script = new URL("../../../../scripts/sync-model-whitelist.py", import.meta.url).pathname
+    const script = fileURLToPath(new URL("../../../../scripts/sync-model-whitelist.py", import.meta.url))
     const run = Bun.spawnSync(["python3", script])
     const output = new TextDecoder().decode(run.stdout) + new TextDecoder().decode(run.stderr)
     expect(output).not.toContain("snapshot missing")

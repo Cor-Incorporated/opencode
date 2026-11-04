@@ -143,7 +143,7 @@ function writes(rt: Runtime, text: string, base: string) {
 /** `.opencode/guard*` style globs: true when a leading part of the pattern can match a runtime dir. */
 function glob(rt: Runtime, file: string) {
   if (!/[*?[]/.test(file)) return false
-  const parts = file.split("/")
+  const parts = file.replaceAll("\\", "/").split("/")
   return parts.some((_, i) => {
     const prefix = parts.slice(0, i + 1).join("/")
     return /[*?[]/.test(prefix) && rt.runtimes.some((dir) => new Bun.Glob(prefix.toLowerCase()).match(dir.toLowerCase()))
