@@ -14,17 +14,20 @@ bun run smoke/native-cli.ts
 
 HOMEとXDG各領域、profileの写し、作業ディレクトリ、AIDD状態・台帳をすべて出力先のscratch HOMEへ置く。配備済みPython判定器と関連ソースもバイトを変えずに写し、Pythonのbytecode cacheが配備先へ書かれないようにする。設定と判定器の写しはハッシュを照合する。AIDDの無効化・変異フラグ、guardrailのadvisory化、権限の自動承認は使わない。
 
-| 層                 | 実際の入力                                   | 必須の証跡                                                                  |
-| ------------------ | -------------------------------------------- | --------------------------------------------------------------------------- |
-| CLI構文・ロード    | 実ランチャーからの `run`                     | CLI終了0と後続の実発火                                                      |
-| profile許可        | `echo ALLOW_SENTINEL`                        | ネイティブtool結果とAIDD post行の終了0・出力                                |
-| profile拒否        | plugin所有runtime配下へのshell書込           | 実 `guardrail.block` 行と対象ファイルの不在                                 |
-| H17 C-ITER         | 同じ意図的失敗テストを4回要求                | 実行回数3、4回目toolの `[H17]` エラー、`iter.repeat-without-delta` のdeny行 |
-| H17 C-EVIDENCE拒否 | tool使用後にStatusを付けない最終回答         | `evidence` のdeny行と `no status declared`                                  |
-| H17 C-EVIDENCE許可 | 別セッションでtool使用後に `Status: partial` | `evidence.status-partial` のallow行                                         |
+| 層                  | 実際の入力                                                              | 必須の証跡                                                                                        |
+| ------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| CLI構文・ロード     | 実ランチャーからの `run`                                                | CLI終了0と後続の実発火                                                                            |
+| profile許可         | `echo ALLOW_SENTINEL`                                                   | ネイティブtool結果とAIDD post行の終了0・出力                                                      |
+| profile拒否         | plugin所有runtime配下へのshell書込                                      | 実 `guardrail.block` 行と対象ファイルの不在                                                       |
+| H17 C-ITER          | 同じ意図的失敗テストを4回要求                                           | 実行回数3、4回目toolの `[H17]` エラー、`iter.repeat-without-delta` のdeny行                       |
+| H17 C-EVIDENCE拒否  | tool使用後にStatusを付けない最終回答                                    | `evidence` のdeny行と `no status declared`                                                        |
+| H17 C-EVIDENCE許可  | 別セッションでtool使用後に `Status: partial`                            | `evidence.status-partial` のallow行                                                               |
+| 不正なsidecarの拒否 | scratchの `model-policy.json` を既知の不正入力 `{"provider":[]}` に置換 | CLI失敗、loopback要求0件、実 `guardrail.block` のpolicy unavailable、tool実行と対象ファイルの不在 |
 
 失敗テストの反復はC-ITERを発火させるための負の対照で、4回の要求に固定している。CLI実行は各90秒、終了後の非同期H17判定待ちは各30秒、通常のモデル応答系列は各9要求までに制限する。
 
-`sources.json` に、profile全ファイル（`model-policy.json` があれば含む）、plugin entry、adapter、guardrail本体、実CLI・ランチャー、指定guardとその引数・認証・ローカル接続helper、Python判定器ファミリーのSHA-256を記録する。profileと判定器の写し、および実行中の元ソースもこのmanifestと突き合わせる。`results.json` には層ごとの真偽、参照した配備先、manifestのハッシュを出力する。`requests.json` にはloopbackで受け取ったtool名・実tool結果を残す。各caseの `stdout.jsonl`、`stderr.log`、`home/guard-ledger.jsonl`、`home/project/.opencode/guardrails/events.jsonl`、`home/aidd-state` が一次証跡になる。外部の本番台帳には書かない。
+検証対象は `model-policy.json` を持つ移行済みprofileを指定する。`sources.json` に、profile全ファイル、plugin entry、adapter、guardrail本体、実CLI・ランチャー、指定guardとその引数・認証・ローカル接続helper、Python判定器ファミリーのSHA-256を記録する。profileと判定器の写し、および実行中の元ソースもこのmanifestと突き合わせる。不正sidecar caseは置換前の写しを照合したうえで、置換入力と前後ハッシュを `results.json` の `mutations` に記録する。置換後は `profileSourcesCopiedExactly` を主張せず、意図した置換との差分だけを `profileSourcesMatchExpectedMutation` で確認する。元profileは変更しない。
+
+`results.json` には層ごとの真偽、参照した配備先、manifestのハッシュを出力する。`requests.json` にはloopbackで受け取ったtool名・実tool結果を残す。各caseの `stdout.jsonl`、`stderr.log`、`home/guard-ledger.jsonl`、`home/project/.opencode/guardrails/events.jsonl`、`home/aidd-state` が一次証跡になる。外部の本番台帳には書かない。
 
 全項目が満たされ、H17 unavailableが0件の場合だけ検査を成功とする。ここでのCLI終了0は、H17が回答を承認したことを意味しない。拒否caseはCLI終了0でもH17の実denyが必要である。また、この検査は本番モデルの利用権限、外部APIへの接続、既存TUIの画面状態を検証しない。

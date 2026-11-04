@@ -34,7 +34,15 @@ const guard = realpathSync(
 const destination = option("--out", "")
 const out = destination ? path.resolve(destination) : mkdtempSync(path.join(os.tmpdir(), "opencode-native-fire-"))
 if (existsSync(out) && readdirSync(out).length > 0) throw new Error("--out must be empty; retain prior run evidence")
-for (const file of [path.join(profile, "opencode.json"), cli, launcher, guard, path.join(plugin, "index.ts"), oracle]) {
+for (const file of [
+  path.join(profile, "opencode.json"),
+  path.join(profile, "model-policy.json"),
+  cli,
+  launcher,
+  guard,
+  path.join(plugin, "index.ts"),
+  oracle,
+]) {
   if (!existsSync(file)) throw new Error(`required runtime is missing: ${file}`)
 }
 mkdirSync(out, { recursive: true, mode: 0o700 })
@@ -91,7 +99,7 @@ type ChatRequest = {
   tools?: { function?: { name?: string } }[]
   messages?: { role?: string; tool_call_id?: string; content?: unknown }[]
 }
-type Case = "deny" | "partial"
+type Case = "deny" | "partial" | "invalid-policy"
 let current: Case = "deny"
 let step = 0
 const requests: Record<string, unknown>[] = []
@@ -100,8 +108,11 @@ const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   async fetch(request) {
-    if (new URL(request.url).pathname !== "/v1/chat/completions")
+    const pathname = new URL(request.url).pathname
+    if (pathname !== "/v1/chat/completions") {
+      requests.push({ case: current, path: pathname, unexpected: true })
       return new Response("unexpected path", { status: 404 })
+    }
     const body = (await request.json()) as ChatRequest
     const tools = body.tools?.map((tool) => tool.function?.name).filter(Boolean) ?? []
     const returned = (body.messages ?? []).filter((message) => message.role === "tool")
@@ -114,6 +125,8 @@ const server = Bun.serve({
     }
     const main = tools.includes("shell")
     requests.push({ case: current, model: body.model, main, tools, returned })
+    if (current === "invalid-policy")
+      return Response.json({ error: { message: "invalid policy reached loopback" } }, { status: 400 })
     const i = main ? step++ : -1
     if (step > 9) return new Response("bounded harness request limit reached", { status: 429 })
     const commands =
@@ -213,8 +226,9 @@ const run = (directory: string, env: Record<string, string>) =>
   })
 
 const all: Record<string, unknown>[] = []
+const mutations: { case: Case; path: string; before: string; after: string; input: { provider: [] } }[] = []
 try {
-  for (const scenario of ["deny", "partial"] as const) {
+  for (const scenario of ["deny", "partial", "invalid-policy"] as const) {
     current = scenario
     step = 0
     const root = path.join(out, scenario)
@@ -226,6 +240,16 @@ try {
       recursive: true,
       filter: (file) => !["node_modules", "service.json"].includes(path.basename(file)),
     })
+    const profileBaselineCopiedExactly = manifests.profile.every(
+      (file) => file.sha256 === hash(path.join(copied, file.path)),
+    )
+    const policy = path.join(copied, "model-policy.json")
+    if (scenario === "invalid-policy") {
+      const before = hash(policy)
+      const input: { provider: [] } = { provider: [] }
+      writeFileSync(policy, JSON.stringify(input) + "\n")
+      mutations.push({ case: scenario, path: policy, before, after: hash(policy), input })
+    }
     const ledger = path.join(home, "guard-ledger.jsonl")
     const state = path.join(home, "aidd-state")
     const copiedOracle = path.join(home, "oracle", path.basename(oracle))
@@ -263,11 +287,13 @@ try {
       AIDD_LEDGER_SOURCE: "test",
     }
     console.log(`RUN: native CLI ${scenario}; artifacts=${root}`)
+    const requestCount = requests.length
     const processResult = await run(project, env)
     writeFileSync(path.join(root, "stdout.jsonl"), processResult.stdout)
     writeFileSync(path.join(root, "stderr.log"), processResult.stderr)
     const deadline = Date.now() + 30_000
     while (
+      scenario !== "invalid-policy" &&
       !rows(ledger).some(
         (row) => row.component === "H17" && row.rule === (scenario === "deny" ? "evidence" : "evidence.status-partial"),
       ) &&
@@ -278,50 +304,69 @@ try {
     const profileRows = rows(path.join(project, ".opencode/guardrails/events.jsonl"))
     const toolRows = journals(state)
     const observed =
-      scenario === "deny"
+      scenario === "invalid-policy"
         ? {
-            cli: processResult.code === 0,
-            allowedShell:
-              results.get("call_deny_0")?.includes("ALLOW_SENTINEL") === true &&
-              toolRows.some(
-                (row) => row.event === "post" && row.rc === 0 && String(row.out_sample).includes("ALLOW_SENTINEL"),
-              ),
-            profileReject:
-              !existsSync(path.join(project, ".opencode/guardrails/violation.txt")) &&
-              profileRows.some(
-                (row) => row.type === "guardrail.block" && row.reason === "protected runtime or config mutation",
-              ),
-            iterationReject:
-              h17.some(
-                (row) => row.component === "H17" && row.rule === "iter.repeat-without-delta" && row.decision === "deny",
-              ) &&
-              results.get("call_deny_5")?.includes("[H17]") === true &&
-              readFileSync(path.join(project, "executions.txt"), "utf8").split("\n").filter(Boolean).length === 3,
-            completionReject: h17.some(
+            cliRejected: processResult.code !== null && processResult.code !== 0,
+            noModelRequests: requests.length === requestCount,
+            policyReject: profileRows.some(
               (row) =>
-                row.component === "H17" &&
-                row.rule === "evidence" &&
-                row.decision === "deny" &&
-                String(row.cmd_head).includes("no status declared"),
+                row.type === "guardrail.block" && String(row.reason).includes("Guardrail model policy unavailable"),
             ),
+            noToolChanges:
+              !existsSync(path.join(project, ".opencode/guardrails/violation.txt")) &&
+              !existsSync(path.join(project, "executions.txt")) &&
+              !toolRows.some((row) => row.event === "pre"),
           }
-        : {
-            cli: processResult.code === 0,
-            allowedShell: results.get("call_partial_0")?.includes("PARTIAL_SENTINEL") === true,
-            declaredPartial: h17.some(
-              (row) => row.component === "H17" && row.rule === "evidence.status-partial" && row.decision === "allow",
-            ),
-          }
+        : scenario === "deny"
+          ? {
+              cli: processResult.code === 0,
+              allowedShell:
+                results.get("call_deny_0")?.includes("ALLOW_SENTINEL") === true &&
+                toolRows.some(
+                  (row) => row.event === "post" && row.rc === 0 && String(row.out_sample).includes("ALLOW_SENTINEL"),
+                ),
+              profileReject:
+                !existsSync(path.join(project, ".opencode/guardrails/violation.txt")) &&
+                profileRows.some(
+                  (row) => row.type === "guardrail.block" && row.reason === "protected runtime or config mutation",
+                ),
+              iterationReject:
+                h17.some(
+                  (row) =>
+                    row.component === "H17" && row.rule === "iter.repeat-without-delta" && row.decision === "deny",
+                ) &&
+                results.get("call_deny_5")?.includes("[H17]") === true &&
+                readFileSync(path.join(project, "executions.txt"), "utf8").split("\n").filter(Boolean).length === 3,
+              completionReject: h17.some(
+                (row) =>
+                  row.component === "H17" &&
+                  row.rule === "evidence" &&
+                  row.decision === "deny" &&
+                  String(row.cmd_head).includes("no status declared"),
+              ),
+            }
+          : {
+              cli: processResult.code === 0,
+              allowedShell: results.get("call_partial_0")?.includes("PARTIAL_SENTINEL") === true,
+              declaredPartial: h17.some(
+                (row) => row.component === "H17" && row.rule === "evidence.status-partial" && row.decision === "allow",
+              ),
+            }
+    const mutation = mutations.find((row) => row.case === scenario)
     const result = {
       case: scenario,
       ...observed,
       h17Unavailable: h17.filter((row) => row.component === "H17" && row.decision === "unavailable").length,
       profileConfigCopiedExactly:
         hash(path.join(profile, "opencode.json")) === hash(path.join(copied, "opencode.json")),
-      profileSourcesCopiedExactly: manifests.profile.every(
-        (file) =>
-          file.sha256 === hash(path.join(profile, file.path)) && file.sha256 === hash(path.join(copied, file.path)),
-      ),
+      profileBaselineCopiedExactly,
+      [scenario === "invalid-policy" ? "profileSourcesMatchExpectedMutation" : "profileSourcesCopiedExactly"]:
+        manifests.profile.every(
+          (file) =>
+            file.sha256 === hash(path.join(profile, file.path)) &&
+            (mutation && file.path === "model-policy.json" ? mutation.after : file.sha256) ===
+              hash(path.join(copied, file.path)),
+        ),
       runtimeSourcesUnchanged: manifests.runtime.every((file) => file.sha256 === hash(file.path)),
       oracleCopiedExactly,
     }
@@ -347,6 +392,7 @@ try {
           oracle: hash(oracle),
           manifest: hash(manifest),
         },
+        mutations,
         results: all,
       },
       null,
@@ -355,7 +401,7 @@ try {
   )
 }
 const passed =
-  all.length === 2 &&
+  all.length === 3 &&
   all.every((row) =>
     Object.entries(row).every(([key, value]) =>
       key === "case" || key === "h17Unavailable" ? key !== "h17Unavailable" || value === 0 : value === true,
