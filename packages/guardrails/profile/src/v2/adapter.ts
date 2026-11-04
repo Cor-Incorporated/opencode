@@ -241,17 +241,18 @@ export async function bridge(ctx: Ctx, hooks: V1Hooks, opts: { input: V1Input & 
   }
 
   // 2.x hands the model hooks a Model.Ref ({ id, providerID, variant? }) while the 1.x chat.params gate judged a
-  // Model.Info (status + cost: free()/preview()). The catalog is read from ctx.model.list() and cached (misses too,
-  // for CATALOG_TTL_MS); a model that is not in the catalog keeps cost undefined — unknown cost is not evidence of a
+  // Model.Info (status + cost: free()/preview()). The catalog snapshot is refreshed from ctx.model.list() after
+  // CATALOG_TTL_MS (misses too); a model that is not in the catalog keeps cost undefined — unknown cost is not evidence of a
   // free tier (guardrail-patterns free()).
   const catalog = new Map<string, any>()
   let catalogAt = 0
   const modelInfo = async (providerID: string, id: string) => {
     const key = `${providerID}/${id}`
-    if (!catalog.has(key) && Date.now() - catalogAt > CATALOG_TTL_MS && typeof ctx.model?.list === "function") {
+    if (Date.now() - catalogAt > CATALOG_TTL_MS && typeof ctx.model?.list === "function") {
       catalogAt = Date.now()
       try {
         const res = await ctx.model.list()
+        catalog.clear()
         for (const m of res?.data ?? []) catalog.set(`${m.providerID}/${m.id}`, m)
       } catch (error) {
         warn("model.list", error)
