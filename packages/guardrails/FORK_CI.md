@@ -27,7 +27,15 @@ Windows では POSIX の `chmod(600)` で鍵ファイルの非公開性を判定
 fork の GITHUB_TOKEN での更新が 403 となっていた。`close-issues` も上流を固定対象にする。
 これらの job、上流の有料モデルを使う issue triage、上流 App secret で更新する Nix hash の
 job は上流リポジトリでのみ起動する。`context.repo` を対象とする fork の compliance 処理は残す。
-release / deploy workflow はこの変更の対象外。
+release / deploy 用 runner と配布手順は変更しない。process-daemon の配布 job は上流だけに限定し、
+fork の checks / build は維持する。
+
+secret scan は組織 workflow の公式 gitleaks 8.30.1、checksum 検証、PR の差分範囲、
+`--redact`、既定ルールを維持する。上流同期で追加された非 credential の `api_message_id` 299 件と、
+loopback 向け認証設定を説明するドキュメント例 1 件は、既存 `.gitleaksignore` に正確な
+`commit:path:rule:line` を追記する。この fingerprint は位置のメタデータであり秘密値の hash ではない。
+CLI が作業ディレクトリから同ファイルを自動で読み込む。path 全体・rule 全体・上流履歴全体は除外せず、
+同じ path の新 commit と別 path の新規候補を、同じ設定と除外ファイルで引き続き拒否する。
 
 検査は `packages/guardrails` で実行する。
 
