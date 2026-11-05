@@ -82,6 +82,32 @@ describe("model whitelist stays consistent across its copies", () => {
     expect(whitelist(managed as Config, "openai")).toContain("gpt-5.6-luna")
   })
 
+  test("models the 2.x CLI listed but the guardrail rejected on 2026-11-05 are present", () => {
+    // The whitelist had not moved since 2026-09-12 (the refresh still read the 1.x cache), so models the CLI
+    // offered failed with "is not admitted by provider policy". `-fast` is a mode id the 2.x catalog derives.
+    expect(whitelist(managed as Config, "deepseek")).toContain("deepseek-v4-pro")
+    expect(whitelist(managed as Config, "openai")).toContain("gpt-6.1-terra")
+    expect(whitelist(managed as Config, "openai")).toContain("gpt-5.5-fast")
+    expect(whitelist(managed as Config, "openrouter")).toContain("anthropic/claude-opus-5.5")
+  })
+
+  // A fork-side copy of a catalog model freezes its prices and capabilities on the day it was copied:
+  // google/gemini-3.5-flash was copied on 2026-05-20, before models.dev listed it, and still narrowed its
+  // reasoning efforts after the catalog gained it. Catalog models may only be switched off here.
+  test("packaged providers do not redefine models the upstream catalog defines", async () => {
+    const catalog: Record<string, { models?: Record<string, unknown> }> = await Bun.file(
+      fileURLToPath(new URL("../../../core/src/models-dev/snapshot.txt", import.meta.url)),
+    ).json()
+    for (const config of [managed as Config, profile as Config]) {
+      const copies = Object.entries(config.providers ?? {}).flatMap(([providerID, provider]) =>
+        Object.entries(provider.models ?? {})
+          .filter(([modelID, model]) => catalog[providerID]?.models?.[modelID] && Object.keys(model).join() !== "disabled")
+          .map(([modelID]) => `${providerID}/${modelID}`),
+      )
+      expect(copies).toEqual([])
+    }
+  })
+
   test("the zai platform lane is not admitted in either copy", () => {
     // 2026-09-11: config-declared `zai` loaded keylessly (provider.ts's config
     // re-apply merge) and every zai/* call died with z.ai error 1001
@@ -101,6 +127,8 @@ describe("model whitelist stays consistent across its copies", () => {
   // agree with the catalog -- on 2026-09-02 all three were stale together. The
   // committed snapshot is what makes that answerable offline, and this is the
   // check that fails when a model reaches the catalog and not the whitelist.
+  // It also fails when upstream's bundled catalog (packages/core/src/models-dev/
+  // snapshot.txt, brought in by an upstream sync) has models the snapshot lacks.
   test("the whitelist covers every model in the committed catalog snapshot", () => {
     const script = fileURLToPath(new URL("../../../../scripts/sync-model-whitelist.py", import.meta.url))
     const run = Bun.spawnSync(["python3", script])

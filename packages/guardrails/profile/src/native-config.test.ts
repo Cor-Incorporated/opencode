@@ -23,14 +23,6 @@ describe("packaged 2.x provider configuration", () => {
               "glm-5.3-highspeed": { disabled: true },
             },
           },
-          openrouter: {
-            models: {
-              "google/gemini-3.5-flash": {
-                releaseDate: "2026-05-19",
-                capabilities: { temperature: true, reasoning: { supported: true } },
-              },
-            },
-          },
           "cor-local": {
             package: "@opencode/ai/providers/openai-compatible",
             settings: { baseURL: "{env:COR_LOCAL_BASE_URL}", apiKey: "{env:COR_LOCAL_API_KEY}", provider: "cor-local" },
