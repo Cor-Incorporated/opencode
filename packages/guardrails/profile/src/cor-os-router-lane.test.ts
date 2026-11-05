@@ -13,6 +13,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { ConfigNormalize } from "@opencode/core/config/normalize"
+import { ManagedPolicy } from "@opencode/core/managed-policy"
 import managedConfig from "../../managed/opencode.json"
 import managedPolicy from "../../managed/model-policy.json"
 import profileConfig from "../opencode.json"
@@ -40,11 +41,12 @@ describe("cor-os (Cor OS router, llm.cor-jp.com)", () => {
   for (const [name, config, policy] of copies) {
     const provider = config.providers?.["cor-os"] ?? {}
 
-    // policies are evaluated in order and the last match wins; the leading `*` deny keeps every other provider out
-    test(`${name}: provider.use allows cor-os after the catch-all deny`, () => {
-      const rules = (config.policies ?? []).filter((rule) => rule.action === "provider.use")
-      expect(rules[0]).toEqual({ action: "provider.use", resource: "*", effect: "deny" })
-      expect(rules.findLast((rule) => rule.resource === "cor-os")?.effect).toBe("allow")
+    // Judged by upstream's own evaluator (last match wins), so a trailing `*` rule in either direction fails here.
+    test(`${name}: provider.use allows cor-os and still denies a provider that is not listed`, () => {
+      const policies = (config.policies ?? []) as Parameters<typeof ManagedPolicy.decision>[0]
+      expect(ManagedPolicy.decision(policies, "provider.use", "cor-os")).toBe("allow")
+      expect(ManagedPolicy.decision(policies, "provider.use", "zai")).toBe("deny")
+      expect(ManagedPolicy.decision(policies, "provider.use", "unlisted-provider")).toBe("deny")
     })
 
     test(`${name}: admission is exactly the router's public aliases and each one is defined`, () => {
@@ -52,8 +54,8 @@ describe("cor-os (Cor OS router, llm.cor-jp.com)", () => {
       expect(Object.keys(provider.models ?? {}).sort()).toEqual(ids)
     })
 
-    // The token never lives in the config: {env:VAR} splices the environment value, and an unset variable becomes
-    // "" so the openai-compatible package sends no Authorization header and the router answers 401.
+    // The token never lives in the config: {env:VAR} splices the environment value. An unset variable becomes "",
+    // which the 2.x resolver drops (core model-resolver.ts prepareRuntimeModel), so no token is ever sent.
     test(`${name}: baseURL is the production router and apiKey is the COR_OS_LLM_TOKEN_NEXT substitution`, () => {
       expect(provider.package).toBe("@opencode/ai/providers/openai-compatible")
       expect(provider.settings?.baseURL).toBe("https://llm.cor-jp.com/v1")

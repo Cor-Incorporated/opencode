@@ -1,5 +1,6 @@
 {
   "cor-local": {},
+  "cor-os": {},
   "deepseek": {
     "deepseek-flash": {
       "context": 1048576,
