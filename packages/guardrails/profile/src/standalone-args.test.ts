@@ -167,11 +167,14 @@ process.stdout.write(JSON.stringify(args))
     ["plugin", "check"],
     ["plugin", "update"],
   ])("%s %s follows the selected CLI's help (2.0.32 rejects the flag there)", (group, leaf) => {
-    for (const capability of ["local", "server"] as const) {
-      const result = run([group, leaf], capability)
-      expect(result.code, `${capability}: ${result.stderr}`).toBe(0)
-      expect(JSON.parse(result.stdout)).toEqual(capability === "server" ? [group, leaf, "--standalone"] : [group, leaf])
-    }
+    const server = run([group, leaf], "server")
+    expect(server.code, server.stderr).toBe(0)
+    expect(JSON.parse(server.stdout)).toEqual([group, leaf, "--standalone"])
+    // Without the flag the leaf would act on the background service, so the launcher stops instead.
+    const local = run([group, leaf], "local")
+    expect(local.code).not.toBe(0)
+    expect(local.stdout).toBe("")
+    expect(local.stderr).toContain("OPENCODE_GUARDRAILS_ALLOW_SERVICE=1")
   })
   test("failed capability inspection stops instead of using the background service", () => {
     const result = run(["debug", "config"], "failed")

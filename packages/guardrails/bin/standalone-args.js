@@ -10,6 +10,9 @@ const nested = {
 }
 // Leaves that take --standalone only in some 2.x versions: 2.0.32 rejects it on all of these ("Unrecognized flag:
 // --standalone in command opencode mcp list"), 2.2.5 accepts it on all of them. The selected binary's help decides.
+// Without the flag, 2.0.32's debug leaves run locally, but its mcp and plugin leaves would use the background
+// service, the very thing this launcher prevents, so those stop instead.
+const local = ["debug"]
 const probed = {
   debug: ["config", "agents"],
   mcp: ["list", "auth", "logout"],
@@ -24,8 +27,9 @@ const values = ["--log-level", "--session", "-s", "--prompt"]
  * OPENCODE_CONFIG_CONTENT) and the provider keys injected for this call (e.g. `bw-secrets run …`) never reach it, so
  * the guardrail plugins are not loaded and the model is "unavailable" (2026-10-19, owner's live run). The flag goes
  * after the command that owns the flag (or first, for the TUI). Local configuration commands and commands that
- * own their server lifecycle stay unchanged. Older 2.x debug commands are local; their help determines whether
- * the selected CLI supports a private server. A failed inspection stops rather than attaching to the service.
+ * own their server lifecycle stay unchanged. For the debug, mcp and plugin leaves the selected CLI's help determines
+ * whether it supports a private server (2.0.32 does not; its debug leaves are local, its mcp and plugin leaves stop).
+ * A failed inspection stops rather than attaching to the service.
  */
 export function withStandalone(args, options = {}) {
   const flags = args.includes("--") ? args.slice(0, args.indexOf("--")) : args
@@ -50,7 +54,13 @@ export function withStandalone(args, options = {}) {
   if (j === -1) return args
   const leaves = probed[args[i]] ?? nested[args[i]]
   if (!leaves.includes(args[j])) return args
-  if (probed[args[i]] && !advertises(args[i], args[j], options)) return args
+  if (probed[args[i]] && !advertises(args[i], args[j], options)) {
+    if (local.includes(args[i])) return args
+    throw new Error(
+      `opencode-guardrails: this CLI cannot run \`${args[i]} ${args[j]}\` on a private server; ` +
+        "set OPENCODE_GUARDRAILS_ALLOW_SERVICE=1 to use the background service on purpose",
+    )
+  }
   return [...args.slice(0, j + 1), "--standalone", ...args.slice(j + 1)]
 }
 
