@@ -38,12 +38,6 @@ describe("withStandalone", () => {
     ["session", "delete"],
     ["session", "export"],
     ["session", "import"],
-    ["mcp", "list"],
-    ["mcp", "auth"],
-    ["mcp", "logout"],
-    ["plugin", "list"],
-    ["plugin", "check"],
-    ["plugin", "update"],
   ])("%s %s receives the server flag after the leaf", (group, leaf) => {
     expect(withStandalone([group, leaf, "target"])).toEqual([group, leaf, "--standalone", "target"])
   })
@@ -103,9 +97,9 @@ describe("withStandalone", () => {
 })
 
 describe("launcher argv against the 2.x command help contract (offline)", () => {
-  // The installed 2.0.32 debug commands are local; newer CLI versions advertise
-  // --standalone for debug config/agents. This stub returns each real help shape
-  // and rejects the invalid intermediate-group flag without loading credentials.
+  // The installed 2.0.32 debug, mcp and plugin leaves have no --standalone ("Unrecognized flag: --standalone in
+  // command opencode mcp list", measured 2026-11-05); 2.2.5 advertises it on all of them. This stub returns each real
+  // help shape and rejects the flag wherever that CLI would, without loading credentials.
   function run(args: string[], debug: "local" | "server" | "color" | "failed", extension: "js" | "mjs" | "cjs" = "mjs") {
     const dir = mkdtempSync(path.join(tmpdir(), "opencode-argv-"))
     try {
@@ -115,13 +109,14 @@ describe("launcher argv against the 2.x command help contract (offline)", () => 
         `#!/usr/bin/env node
 const args = process.argv.slice(2)
 if (${JSON.stringify(extension)} === "cjs" && process.env.OPENCODE_BIN_PATH) process.exit(3)
-if (args[0] === "debug" && args.at(-1) === "--help") {
+if (["debug", "mcp", "plugin"].includes(args[0]) && args.at(-1) === "--help") {
   if (${JSON.stringify(debug)} === "failed") process.exit(2)
   process.stdout.write(${JSON.stringify(debug === "server" ? "FLAGS\n  --standalone  Run with a private server\n" : debug === "color" ? "FLAGS\n  \u001b[1m--standalone\u001b[0m  Run with a private server\n" : "GLOBAL FLAGS\n  --print-logs  Print logs (server logs require --standalone)\n")})
   process.exit(0)
 }
 if (args[0] === "auth" && (args[1] !== "export" || args[2] !== "--standalone")) process.exit(2)
 if (args[0] === "debug" && (!["config", "agents"].includes(args[1]) || args.includes("--standalone") !== ${debug === "server" || debug === "color"})) process.exit(2)
+if (["mcp", "plugin"].includes(args[0]) && args.includes("--standalone") !== ${debug === "server" || debug === "color"}) process.exit(2)
 process.stdout.write(JSON.stringify(args))
 `,
         { mode: 0o600 },
@@ -164,6 +159,20 @@ process.stdout.write(JSON.stringify(args))
       expect(JSON.parse(result.stdout)).toEqual(["debug", leaf, "--standalone"])
     })
   }
+  test.each([
+    ["mcp", "list"],
+    ["mcp", "auth"],
+    ["mcp", "logout"],
+    ["plugin", "list"],
+    ["plugin", "check"],
+    ["plugin", "update"],
+  ])("%s %s follows the selected CLI's help (2.0.32 rejects the flag there)", (group, leaf) => {
+    for (const capability of ["local", "server"] as const) {
+      const result = run([group, leaf], capability)
+      expect(result.code, `${capability}: ${result.stderr}`).toBe(0)
+      expect(JSON.parse(result.stdout)).toEqual(capability === "server" ? [group, leaf, "--standalone"] : [group, leaf])
+    }
+  })
   test("failed capability inspection stops instead of using the background service", () => {
     const result = run(["debug", "config"], "failed")
     expect(result.code).not.toBe(0)

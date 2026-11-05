@@ -7,6 +7,11 @@ const direct = ["run", "models", "stats", "mini", "api", "reload"]
 const nested = {
   auth: ["list", "login", "logout", "export", "import", "switch"],
   session: ["list", "delete", "export", "import"],
+}
+// Leaves that take --standalone only in some 2.x versions: 2.0.32 rejects it on all of these ("Unrecognized flag:
+// --standalone in command opencode mcp list"), 2.2.5 accepts it on all of them. The selected binary's help decides.
+const probed = {
+  debug: ["config", "agents"],
   mcp: ["list", "auth", "logout"],
   plugin: ["list", "check", "update"],
 }
@@ -37,28 +42,31 @@ export function withStandalone(args, options = {}) {
   )
     return args
   const i = positional(args)
-  if (i === -1 || ![...direct, ...pass, ...Object.keys(nested), "debug"].includes(args[i]))
+  if (i === -1 || ![...direct, ...pass, ...Object.keys(nested), ...Object.keys(probed)].includes(args[i]))
     return ["--standalone", ...args]
   if (pass.includes(args[i])) return args
   if (direct.includes(args[i])) return [...args.slice(0, i + 1), "--standalone", ...args.slice(i + 1)]
   const j = positional(args, i + 1)
   if (j === -1) return args
-  if (args[i] === "debug") {
-    if (!["config", "agents"].includes(args[j])) return args
-    if (!options.binary) throw new Error(`opencode-guardrails: could not inspect debug ${args[j]} without a CLI binary`)
-    const [command, ...probeArgs] = cliCommand(options.binary, ["debug", args[j], "--help"])
-    const help = spawnSync(command, probeArgs, {
-      encoding: "utf8",
-      env: options.env,
-      timeout: 10000,
-      maxBuffer: 256 * 1024,
-    })
-    if (help.error || help.status !== 0)
-      throw new Error(`opencode-guardrails: could not inspect debug ${args[j]} capabilities`)
-    if (!/^\s*--standalone(?:\s|$)/m.test(stripVTControlCharacters(help.stdout))) return args
-  }
-  if (args[i] !== "debug" && !nested[args[i]].includes(args[j])) return args
+  const leaves = probed[args[i]] ?? nested[args[i]]
+  if (!leaves.includes(args[j])) return args
+  if (probed[args[i]] && !advertises(args[i], args[j], options)) return args
   return [...args.slice(0, j + 1), "--standalone", ...args.slice(j + 1)]
+}
+
+/** Whether the selected CLI's help for `<group> <leaf>` declares --standalone. A failed inspection stops the launch. */
+function advertises(group, leaf, options) {
+  if (!options.binary) throw new Error(`opencode-guardrails: could not inspect ${group} ${leaf} without a CLI binary`)
+  const [command, ...probeArgs] = cliCommand(options.binary, [group, leaf, "--help"])
+  const help = spawnSync(command, probeArgs, {
+    encoding: "utf8",
+    env: options.env,
+    timeout: 10000,
+    maxBuffer: 256 * 1024,
+  })
+  if (help.error || help.status !== 0)
+    throw new Error(`opencode-guardrails: could not inspect ${group} ${leaf} capabilities`)
+  return /^\s*--standalone(?:\s|$)/m.test(stripVTControlCharacters(help.stdout))
 }
 
 function positional(args, start = 0) {
