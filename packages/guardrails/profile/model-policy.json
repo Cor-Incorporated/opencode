@@ -501,6 +501,12 @@
         "glm53-flash",
         "qwen3.8-27b"
       ]
+    },
+    "cor-os": {
+      "whitelist": [
+        "cor-qwen3.6-35b",
+        "gemma4-12b"
+      ]
     }
   }
 }

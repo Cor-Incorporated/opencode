@@ -276,6 +276,18 @@ controls. Context window is 262144 tokens and maximum output is 16384 tokens.
 Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
 consistency check across the two admission policies and `paid` sets. These checks make no model requests.
 
+## cor-os (Cor OS router lane)
+
+`cor-os` reaches the Cor OS router at `https://llm.cor-jp.com/v1` (OpenAI-compatible, behind Cloudflare Access / Tunnel). The router checks the requested model name against what it publishes, so `cor-local` cannot be pointed at it: the guardrail admits only cor-local's three llama-server ids and the router answers `model_not_found` for them. The model definitions come from the ai-cluster repo (`ops/opencode-pi/cor-os-models.json`); in 2.x the block is the native `providers["cor-os"]` entry in both `managed/opencode.json` and `profile/opencode.json`, `provider.use` allows it in their `policies`, and both `model-policy.json` copies admit its ids. `profile/src/cor-os-router-lane.test.ts` pins all of them and runs the block through the real normalizer.
+
+- `settings.apiKey` is `{env:COR_OS_LLM_TOKEN_NEXT}` (the router's Bearer; the owner keeps it in Bitwarden as `env/common/COR_OS_LLM_TOKEN_NEXT` and exports it with `eval "$(~/Developer/bin/bwenv env COR_OS_LLM_TOKEN_NEXT)"`). Unset, the substitution is "" and the 2.x resolver drops the empty key (core `model-resolver.ts` `prepareRuntimeModel`), so no token is sent; whether the request then fails locally or reaches the router unauthenticated has not been measured.
+- Two public aliases are admitted: `cor-qwen3.6-35b` and `gemma4-12b` (cor-os `a43df4e`; which of them production publishes is confirmed with ai-cluster `ops/opencode-pi/verify_router.py`). Both are in `paid["cor-os"]` for the same reason as cor-local.
+- `limit.context` is 32768, the production runner's `-c 32768 -np 1`. OpenCode's first agent request with this profile is about 125 KB (two thirds of it the skills catalog), which is over the `context - limit.output` budget, so at 32768 OpenCode sends a compaction request before the model ever sees the question; the context has to grow on the router side before this lane is usable for agent work (ai-cluster L2).
+
+```sh
+opencode run --model cor-os/cor-qwen3.6-35b "..."
+```
+
 ## Managed deployment
 
 Copy [managed/opencode.json](/Users/teradakousuke/Developer/opencode/packages/guardrails/managed/opencode.json) into the system managed config directory:
