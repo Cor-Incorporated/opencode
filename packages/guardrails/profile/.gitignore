@@ -1,3 +1,6 @@
 node_modules
 package-lock.json
 bun.lock
+# 2.x background service settings (port, password): the CLI writes them to its global config directory, which the
+# guardrails launcher points at this profile (OPENCODE_CONFIG_DIR). Never commit them.
+service.json
