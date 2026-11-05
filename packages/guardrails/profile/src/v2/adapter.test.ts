@@ -21,12 +21,13 @@
  * Run: bun test packages/guardrails/profile/src/v2/adapter.test.ts
  */
 import { describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import guardrailV2 from "../../plugins/guardrail/index"
+import guardrailV2, { admissionConfig } from "../../plugins/guardrail/index"
 import teamV2 from "../../plugins/team/index"
 import { createContext } from "../guardrail-context"
+import guardrail from "../guardrail"
 import { norm } from "../guardrail-patterns"
 import { shellReachesRuntime } from "../guardrail-shell"
 import { bridge, toV1Call, toV1Calls, toV2Input, v1Input } from "./adapter"
@@ -59,7 +60,10 @@ function fakeCtx(directory: string) {
     session: {
       hook: reg("session"),
       create: op("session.create", (i) => ({ id: "ses_child1", parentID: i.parentID, permissions: i.permissions })),
-      get: op("session.get", (i) => ({ id: i.sessionID, permissions: [{ action: "edit", resource: "*", effect: "deny" }] })),
+      get: op("session.get", (i) => ({
+        id: i.sessionID,
+        permissions: [{ action: "edit", resource: "*", effect: "deny" }],
+      })),
       update: op("session.update"),
       move: op("session.move"),
       prompt: op("session.prompt", () => ({ id: "inbox1" })),
@@ -75,7 +79,12 @@ function fakeCtx(directory: string) {
           id: "m2",
           content: [
             { type: "text", text: "working" },
-            { type: "tool", id: "c1", name: "shell", state: { status: "completed", input: { command: "ls" }, content: [{ type: "text", text: "a\nb" }] } },
+            {
+              type: "tool",
+              id: "c1",
+              name: "shell",
+              state: { status: "completed", input: { command: "ls" }, content: [{ type: "text", text: "a\nb" }] },
+            },
           ],
           time: { created: 2 },
         },
@@ -85,8 +94,18 @@ function fakeCtx(directory: string) {
     model: {
       list: op("model.list", () => ({
         data: [
-          { id: "glm-5.3", providerID: "zai-coding-plan", status: "active", cost: [{ input: 0.6, output: 2.2, cache: { read: 0.1, write: 0 } }] },
-          { id: "zero-cost", providerID: "acme", status: "active", cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] },
+          {
+            id: "glm-5.3",
+            providerID: "zai-coding-plan",
+            status: "active",
+            cost: [{ input: 0.6, output: 2.2, cache: { read: 0.1, write: 0 } }],
+          },
+          {
+            id: "zero-cost",
+            providerID: "acme",
+            status: "active",
+            cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
+          },
         ],
       })),
     },
@@ -131,22 +150,110 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
   test("setup registers prompt/context/compaction/tool/shell hooks", async () => {
     await guardrailV2.setup(f.ctx)
     expect([...f.hooks.keys()].sort()).toEqual(
-      ["session.compaction", "session.context", "session.generate", "session.title", "session.prompt", "shell.create.before", "tool.execute.after", "tool.execute.before"].sort(),
+      [
+        "session.compaction",
+        "session.context",
+        "session.generate",
+        "session.title",
+        "session.prompt",
+        "shell.create.before",
+        "tool.execute.after",
+        "tool.execute.before",
+      ].sort(),
     )
   })
 
   test("shell create.before: guardrail env is merged into the shell env", async () => {
-    const e = { command: "ls", cwd: dir, timeout: 1000, shell: "bash", env: { PATH: "/bin" } as Record<string, string | undefined> }
+    const e = {
+      command: "ls",
+      cwd: dir,
+      timeout: 1000,
+      shell: "bash",
+      env: { PATH: "/bin" } as Record<string, string | undefined>,
+    }
     await f.fire("shell.create.before", e)
     expect(e.env.PATH).toBe("/bin")
     expect(e.env.OPENCODE_GUARDRAIL_MODE).toBe("enforced")
     expect(e.env.OPENCODE_GUARDRAIL_ROOT).toBe(join(dir, ".opencode", "guardrails"))
   })
 
-  test("context hook: the provider gate blocks a model outside the whitelist (chat.params reachability)", async () => {
-    const e = { sessionID: "ses_1", agent: "implement", model: { id: "nope-9000", providerID: "zai-coding-plan" }, system: [], messages: [], options: {}, tools: {} }
-    await expect(f.fire("session.context", e)).rejects.toThrow(/Guardrail policy blocked/)
+  for (const hook of ["context", "generate", "title", "compaction"]) {
+    test(`${hook} hook: the provider gate blocks a model outside the whitelist (chat.params reachability)`, async () => {
+      const e = {
+        sessionID: "ses_1",
+        agent: "implement",
+        model: { id: "nope-9000", providerID: "zai-coding-plan" },
+        system: [],
+        messages: [],
+        options: {},
+        tools: {},
+      }
+      await expect(f.fire(`session.${hook}`, e)).rejects.toThrow(/Guardrail policy blocked/)
+    })
+  }
+
+  test("a missing admission policy keeps all four model request hooks blocked", async () => {
+    const missing = fakeCtx(dir)
+    const input = v1Input(missing.ctx)
+    const hooks = await guardrail.server(input)
+    const cleanup = await bridge(missing.ctx, hooks, { input, config: admissionConfig(dir) })
+    try {
+      for (const hook of ["context", "generate", "title", "compaction"]) {
+        await expect(
+          missing.fire(`session.${hook}`, { model: { id: "glm-5.3", providerID: "zai-coding-plan" } }),
+        ).rejects.toThrow(/Guardrail model policy unavailable/)
+      }
+      const blocks = readFileSync(join(dir, ".opencode", "guardrails", "events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .slice(-4)
+        .map((line) => JSON.parse(line))
+      expect(blocks).toHaveLength(4)
+      for (const block of blocks) {
+        expect(block).toMatchObject({ type: "guardrail.block", tool: "chat.params" })
+        expect(block.reason).toContain("Guardrail model policy unavailable")
+      }
+    } finally {
+      await cleanup()
+    }
   })
+
+  for (const [name, provider] of Object.entries({
+    "an array-shaped policy": [{ whitelist: ["glm-5.3"] }],
+    "a policy missing a configured provider": { openai: { whitelist: ["gpt-5.3-codex"] } },
+  })) {
+    test(`${name} blocks all four model request hooks and appends four denial records`, async () => {
+      const policyDir = mkdtempSync(join(tmpdir(), "guardrails-v2-invalid-policy-"))
+      writeFileSync(
+        join(policyDir, "opencode.json"),
+        JSON.stringify({ providers: { openai: {}, "zai-coding-plan": {} } }),
+      )
+      writeFileSync(join(policyDir, "model-policy.json"), JSON.stringify({ provider }))
+      const invalid = fakeCtx(policyDir)
+      const input = v1Input(invalid.ctx)
+      const hooks = await guardrail.server(input)
+      const cleanup = await bridge(invalid.ctx, hooks, { input, config: admissionConfig(policyDir) })
+      try {
+        for (const hook of ["context", "generate", "title", "compaction"]) {
+          await expect(
+            invalid.fire(`session.${hook}`, { model: { id: "nope-9000", providerID: "zai-coding-plan" } }),
+          ).rejects.toThrow(/Guardrail model policy unavailable/)
+        }
+        const blocks = readFileSync(join(policyDir, ".opencode", "guardrails", "events.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+        expect(blocks).toHaveLength(4)
+        for (const block of blocks) {
+          expect(block).toMatchObject({ type: "guardrail.block", tool: "chat.params" })
+          expect(block.reason).toContain("Guardrail model policy unavailable")
+        }
+      } finally {
+        await cleanup()
+        rmSync(policyDir, { recursive: true, force: true })
+      }
+    })
+  }
 
   test("context hook: an allowed model passes and the system transform appends SystemParts", async () => {
     const e = {
@@ -166,39 +273,91 @@ describe("F1 guardrail v2 entry: hooks register on the 2.x ctx and keep their ef
   test("context hook: cost/status come from the 2.x model catalog — a zero-cost catalog model is free-tier, an unknown model is not", async () => {
     const base = { sessionID: "ses_1", agent: "implement", system: [], messages: [], options: {}, tools: {} }
     // "acme" has no whitelist in the profile, so only free()/preview() decide
-    await expect(f.fire("session.context", { ...base, model: { id: "zero-cost", providerID: "acme" } })).rejects.toThrow(/free-tier/)
+    await expect(
+      f.fire("session.context", { ...base, model: { id: "zero-cost", providerID: "acme" } }),
+    ).rejects.toThrow(/free-tier/)
     await f.fire("session.context", { ...base, model: { id: "not-in-catalog", providerID: "acme" } })
     expect(f.calls.filter((c) => c.op === "model.list").length).toBeGreaterThan(0)
   })
 
   test("2.x tool calls reach the 1.x gates: shell/read/edit with 2.x names and `path` are blocked like bash/filePath", async () => {
     const before = (tool: string, input: Record<string, unknown>) =>
-      f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+      f.fire("tool.execute.before", {
+        tool,
+        sessionID: "ses_1",
+        agent: "implement",
+        messageID: "m1",
+        id: `c-${tool}`,
+        input,
+      })
     await expect(before("shell", { command: `cat ${ENV_FILE}` })).rejects.toThrow(/protected|secret|blocked/i)
     await expect(before("shell", { command: "git push origin dev" })).rejects.toThrow(/protected branch|blocked/i)
     await expect(before("read", { path: join(dir, ENV_FILE) })).rejects.toThrow(/secret|protected|blocked/i)
-    await expect(before("edit", { path: join(dir, ".opencode", "guardrails", "state.json"), oldString: "a", newString: "b" })).rejects.toThrow(/blocked|guardrail/i)
+    await expect(
+      before("edit", { path: join(dir, ".opencode", "guardrails", "state.json"), oldString: "a", newString: "b" }),
+    ).rejects.toThrow(/blocked|guardrail/i)
     await before("shell", { command: "echo ok" }) // an ordinary call passes
   })
 
   test("a multi-file patch is judged per path: a protected later file or move destination is blocked (Codex #343 r3)", async () => {
     const before = (patchText: string) =>
-      f.fire("tool.execute.before", { tool: "patch", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-patch", input: { patchText } })
+      f.fire("tool.execute.before", {
+        tool: "patch",
+        sessionID: "ses_1",
+        agent: "implement",
+        messageID: "m1",
+        id: "c-patch",
+        input: { patchText },
+      })
     const state = join(dir, ".opencode", "guardrails", "state.json")
-    await expect(before(`*** Begin Patch\n*** Update File: ${join(dir, "src", "ok.ts")}\n@@\n-1\n+2\n*** Update File: ${state}\n@@\n-a\n+b\n*** End Patch\n`)).rejects.toThrow(/blocked|guardrail/i)
-    await expect(before(`*** Begin Patch\n*** Update File: ${join(dir, "src", "ok.ts")}\n*** Move to: ${state}\n@@\n-1\n+2\n*** End Patch\n`)).rejects.toThrow(/blocked|guardrail/i)
+    await expect(
+      before(
+        `*** Begin Patch\n*** Update File: ${join(dir, "src", "ok.ts")}\n@@\n-1\n+2\n*** Update File: ${state}\n@@\n-a\n+b\n*** End Patch\n`,
+      ),
+    ).rejects.toThrow(/blocked|guardrail/i)
+    await expect(
+      before(
+        `*** Begin Patch\n*** Update File: ${join(dir, "src", "ok.ts")}\n*** Move to: ${state}\n@@\n-1\n+2\n*** End Patch\n`,
+      ),
+    ).rejects.toThrow(/blocked|guardrail/i)
   })
 
   test("execute.after: the 2.x shell exit code reaches the 1.x metadata.exitCode and a tool error is a string", async () => {
-    const e: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-after", input: { command: "echo ok" }, status: "completed", result: { content: "ok", metadata: { exit: 0 } } }
+    const e: any = {
+      tool: "shell",
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: "c-after",
+      input: { command: "echo ok" },
+      status: "completed",
+      result: { content: "ok", metadata: { exit: 0 } },
+    }
     await f.fire("tool.execute.after", e)
     expect(e.result.metadata.exitCode).toBe(0)
-    const err: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-err", input: { command: "false" }, status: "error", error: { message: "boom" } }
+    const err: any = {
+      tool: "shell",
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: "c-err",
+      input: { command: "false" },
+      status: "error",
+      error: { message: "boom" },
+    }
     await f.fire("tool.execute.after", err) // must not throw; 1.x reads metadata.error as a string
   })
 
   test("compaction hook: guardrail state summary lands in e.system", async () => {
-    const e = { sessionID: "ses_1", agent: "implement", model: { id: "glm-5.3", providerID: "zai-coding-plan" }, system: [] as any[], messages: [], options: {}, tools: {} }
+    const e = {
+      sessionID: "ses_1",
+      agent: "implement",
+      model: { id: "glm-5.3", providerID: "zai-coding-plan" },
+      system: [] as any[],
+      messages: [],
+      options: {},
+      tools: {},
+    }
     await f.fire("session.compaction", e)
     expect(e.system.length).toBe(1)
     expect(e.system[0].type).toBe("text")
@@ -226,7 +385,15 @@ describe("F2 team v2 entry: tools are added through tool.transform with JSON-Sch
   })
 
   test("system transform: the team notice is unshifted ahead of the existing system parts", async () => {
-    const e = { sessionID: "ses_1", agent: "implement", model: { id: "glm-5.3", providerID: "zai-coding-plan", cost }, system: [{ type: "text", text: "base" }], messages: [], options: {}, tools: {} }
+    const e = {
+      sessionID: "ses_1",
+      agent: "implement",
+      model: { id: "glm-5.3", providerID: "zai-coding-plan", cost },
+      system: [{ type: "text", text: "base" }],
+      messages: [],
+      options: {},
+      tools: {},
+    }
     await f.fire("session.context", e)
     expect(e.system.length).toBe(2)
     expect(e.system[0].text).toContain("team and background tools")
@@ -237,17 +404,25 @@ describe("F2 team v2 entry: tools are added through tool.transform with JSON-Sch
     expect(toV1Call("shell", { command: "ls" })).toEqual({ tool: "bash", args: { command: "ls" } })
     expect(toV1Call("read", { path: "/p/a" }).args).toEqual({ path: "/p/a", filePath: "/p/a" })
     expect(toV1Call("subagent", { agent: "planner", prompt: "x" }).args.subagent_type).toBe("planner")
-    const v1Patch = toV1Call("patch", { patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** End Patch\n" })
+    const v1Patch = toV1Call("patch", {
+      patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-1\n+2\n*** End Patch\n",
+    })
     expect(v1Patch.tool).toBe("edit")
     expect(v1Patch.args.filePath).toBe("src/a.ts")
     expect(toV2Input("read", { path: "/p/a", filePath: "/p/b" }, { path: "/p/a" })).toEqual({ path: "/p/b" }) // a rewritten path is written back
-    expect(toV2Input("edit", { path: "/p/a", filePath: "/p/a", oldString: "x" }, { path: "/p/a", oldString: "x" })).toEqual({ path: "/p/a", oldString: "x" })
+    expect(
+      toV2Input("edit", { path: "/p/a", filePath: "/p/a", oldString: "x" }, { path: "/p/a", oldString: "x" }),
+    ).toEqual({ path: "/p/a", oldString: "x" })
   })
 
   test("tool(): defaults are filled before execute; .optional()/.default() drop the key from required", async () => {
     const def = tool({
       description: "d",
-      args: { a: tool.schema.string(), b: tool.schema.number().int().min(1).max(3).optional().default(2), c: tool.schema.boolean().optional() },
+      args: {
+        a: tool.schema.string(),
+        b: tool.schema.number().int().min(1).max(3).optional().default(2),
+        c: tool.schema.boolean().optional(),
+      },
       async execute(args) {
         return `${args.a}:${args.b}:${String(args.c)}`
       },
@@ -282,11 +457,19 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
   })
 
   test("create: the isolated directory is applied with session.move (parentID makes the child inherit the parent location)", () => {
-    expect(f.calls.find((c) => c.op === "session.move")!.input).toEqual({ sessionID: "ses_child1", directory: join(dir, "box") })
+    expect(f.calls.find((c) => c.op === "session.move")!.input).toEqual({
+      sessionID: "ses_child1",
+      directory: join(dir, "box"),
+    })
   })
 
   test("rules: 1.x permission/tool names are mapped to the 2.x actions (bash→shell, task→subagent, write→edit)", () => {
-    expect(toV2Rules([{ permission: "bash", pattern: "git push*", action: "ask" }, { permission: "task", pattern: "*", action: "deny" }])).toEqual([
+    expect(
+      toV2Rules([
+        { permission: "bash", pattern: "git push*", action: "ask" },
+        { permission: "task", pattern: "*", action: "deny" },
+      ]),
+    ).toEqual([
       { action: "shell", resource: "git push*", effect: "ask" },
       { action: "subagent", resource: "*", effect: "deny" },
     ])
@@ -300,7 +483,13 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
   test("promptAsync: agent/model switch, worker tool denies through update, then an inbox prompt (no wait)", async () => {
     await client.session.promptAsync({
       path: { id: "ses_child1" },
-      body: { agent: "implement", model: { providerID: "openrouter", modelID: "google/gemini-2.5-flash" }, variant: "fast", tools: { task: false, question: false }, parts: [{ type: "text", text: "go" }] },
+      body: {
+        agent: "implement",
+        model: { providerID: "openrouter", modelID: "google/gemini-2.5-flash" },
+        variant: "fast",
+        tools: { task: false, question: false },
+        parts: [{ type: "text", text: "go" }],
+      },
     })
     const ops = f.calls.map((c) => c.op)
     expect(f.calls.find((c) => c.op === "session.update")!.input.permissions).toEqual([
@@ -309,14 +498,24 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
       { action: "question", resource: "*", effect: "deny" },
     ])
     expect(ops).toContain("session.switchAgent")
-    expect(f.calls.find((c) => c.op === "session.switchModel")!.input.model).toEqual({ providerID: "openrouter", id: "google/gemini-2.5-flash", variant: "fast" })
+    expect(f.calls.find((c) => c.op === "session.switchModel")!.input.model).toEqual({
+      providerID: "openrouter",
+      id: "google/gemini-2.5-flash",
+      variant: "fast",
+    })
     expect(f.calls.find((c) => c.op === "session.prompt")!.input).toEqual({ sessionID: "ses_child1", text: "go" })
     expect(ops).not.toContain("session.wait")
   })
 
   test("prompt: noReply → synthetic without resume; otherwise waits for idle; abort → interrupt", async () => {
-    await client.session.prompt({ path: { id: "ses_child1" }, body: { noReply: true, parts: [{ type: "text", text: "worker done" }] } })
-    expect(f.calls.at(-1)).toMatchObject({ op: "session.synthetic", input: { sessionID: "ses_child1", text: "worker done", resume: false } })
+    await client.session.prompt({
+      path: { id: "ses_child1" },
+      body: { noReply: true, parts: [{ type: "text", text: "worker done" }] },
+    })
+    expect(f.calls.at(-1)).toMatchObject({
+      op: "session.synthetic",
+      input: { sessionID: "ses_child1", text: "worker done", resume: false },
+    })
     expect(f.calls.map((c) => c.op)).not.toContain("session.wait")
     await client.session.prompt({ path: { id: "ses_child1" }, body: { parts: [{ type: "text", text: "again" }] } })
     expect(f.calls.map((c) => c.op)).toContain("session.wait")
@@ -331,16 +530,26 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
     expect(rows[0].info.role).toBe("user")
     expect(rows[0].parts).toEqual([{ type: "text", text: "do it" }])
     expect(rows[1].info).toMatchObject({ role: "assistant", finish: "tool-calls" })
-    expect(rows[1].parts[1]).toMatchObject({ type: "tool", tool: "shell", state: { status: "completed", output: "a\nb" } })
+    expect(rows[1].parts[1]).toMatchObject({
+      type: "tool",
+      tool: "shell",
+      state: { status: "completed", output: "a\nb" },
+    })
     expect(rows[2].info).toMatchObject({ role: "assistant", finish: "stop", time: { completed: 4 } })
-    expect(toV1Message({ type: "assistant", content: [], time: { completed: new Date(5) }, error: { message: "boom" } }).info).toMatchObject({
+    expect(
+      toV1Message({ type: "assistant", content: [], time: { completed: new Date(5) }, error: { message: "boom" } })
+        .info,
+    ).toMatchObject({
       time: { completed: 5 },
       error: { data: { message: "boom" } },
     })
   })
 
   test("messages: a failed execution with no completed assistant row becomes an errored assistant row", async () => {
-    events.apply({ type: "session.execution.failed", data: { sessionID: "ses_fail", error: { message: "ZAI_API_KEY is not set" } } })
+    events.apply({
+      type: "session.execution.failed",
+      data: { sessionID: "ses_fail", error: { message: "ZAI_API_KEY is not set" } },
+    })
     f.ctx.session.context = async () => [{ type: "user", id: "u", text: "do", time: { created: 1 } }]
     const r = await client.session.messages({ path: { id: "ses_fail" } })
     const last = r.data!.at(-1)!
@@ -350,9 +559,24 @@ describe("F3 client shim: 1.x SDK calls map to 2.x session operations", () => {
   })
 
   test("messages: a failure after a completed tool step is not hidden by that step's completed time (Codex #343 r3)", async () => {
-    events.apply({ type: "session.execution.failed", data: { sessionID: "ses_fail2", error: { message: "context preparation failed" } } })
+    events.apply({
+      type: "session.execution.failed",
+      data: { sessionID: "ses_fail2", error: { message: "context preparation failed" } },
+    })
     f.ctx.session.context = async () => [
-      { type: "assistant", id: "a1", content: [{ type: "tool", id: "t1", name: "shell", state: { status: "completed", input: {}, content: [{ type: "text", text: "x" }] } }], time: { created: 1, completed: 2 } },
+      {
+        type: "assistant",
+        id: "a1",
+        content: [
+          {
+            type: "tool",
+            id: "t1",
+            name: "shell",
+            state: { status: "completed", input: {}, content: [{ type: "text", text: "x" }] },
+          },
+        ],
+        time: { created: 1, completed: 2 },
+      },
     ]
     const r = await client.session.messages({ path: { id: "ses_fail2" } })
     expect(r.data!.at(-1)!.info.error).toEqual({ data: { message: "context preparation failed" } })
@@ -388,7 +612,13 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
   const hooks = {
     "chat.message": async (_in: any, out: any) => {
       seen.push(out.message.role)
-      out.parts.push({ id: "x", sessionID: out.message.sessionID, messageID: out.message.id, type: "text", text: "[advisory] fetch first" })
+      out.parts.push({
+        id: "x",
+        sessionID: out.message.sessionID,
+        messageID: out.message.id,
+        type: "text",
+        text: "[advisory] fetch first",
+      })
     },
     "command.execute.before": async (item: any, out: any) => {
       seen.push(`${item.command}|${item.arguments}`)
@@ -403,11 +633,21 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
     const e = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "hello", files: [] }, delivery: "steer" }
     await f.fire("session.prompt", e)
     expect(e.prompt.text).toBe("hello\n\n[advisory] fetch first")
-    const cmd = { sessionID: "ses_1", messageID: "msg_2", prompt: { text: "/review src/x.ts", files: [] }, delivery: "steer" }
+    const cmd = {
+      sessionID: "ses_1",
+      messageID: "msg_2",
+      prompt: { text: "/review src/x.ts", files: [] },
+      delivery: "steer",
+    }
     await f.fire("session.prompt", cmd)
     expect(seen).toContain("review|src/x.ts")
     // a 2.x command arrives as its expanded template; the profile templates end with the guardrails marker
-    const expanded = { sessionID: "ses_1", messageID: "msg_3", prompt: { text: "Execute the complete workflow…\n\n<!-- guardrails:command=implement -->\n", files: [] }, delivery: "steer" }
+    const expanded = {
+      sessionID: "ses_1",
+      messageID: "msg_3",
+      prompt: { text: "Execute the complete workflow…\n\n<!-- guardrails:command=implement -->\n", files: [] },
+      delivery: "steer",
+    }
     await f.fire("session.prompt", expanded)
     expect(seen).toContain("implement|")
     expect(cmd.prompt.text).toBe("/review src/x.ts\n\nextra\n\n[advisory] fetch first")
@@ -417,14 +657,26 @@ describe("F4 prompt hook: chat.message advisories and command.execute.before rea
     const g = fakeCtx(dir)
     const got: any[] = []
     await bridge(g.ctx, { "chat.params": async (item: any) => void got.push(item) }, { input: v1Input(g.ctx) })
-    await g.fire("session.context", { sessionID: "ses_v", agent: "implement", model: { id: "glm-5.3", providerID: "zai-coding-plan", variant: "high" }, system: [], messages: [], options: {}, tools: {} })
+    await g.fire("session.context", {
+      sessionID: "ses_v",
+      agent: "implement",
+      model: { id: "glm-5.3", providerID: "zai-coding-plan", variant: "high" },
+      system: [],
+      messages: [],
+      options: {},
+      tools: {},
+    })
     expect(got[0].message.model.variant).toBe("high")
   })
 
   test("cleanup: the returned function stops the event loop (no handling after dispose, no resubscribe)", async () => {
     const g = fakeCtx(dir)
     const got: string[] = []
-    const stop = await bridge(g.ctx, { event: async ({ event }: any) => void got.push(event.type) }, { input: v1Input(g.ctx) })
+    const stop = await bridge(
+      g.ctx,
+      { event: async ({ event }: any) => void got.push(event.type) },
+      { input: v1Input(g.ctx) },
+    )
     g.emit({ type: "session.created", data: { sessionID: "ses_c1" } })
     await new Promise((r) => setTimeout(r, 20))
     await stop()
@@ -451,7 +703,11 @@ const verdict = (p: Promise<unknown>) =>
     () => "PASS",
     (error) => {
       const msg = error instanceof Error ? error.message : String(error)
-      return /plugin-owned/.test(msg) ? "plugin-owned" : /protected runtime or config mutation/.test(msg) ? "runtime-mutation" : msg
+      return /plugin-owned/.test(msg)
+        ? "plugin-owned"
+        : /protected runtime or config mutation/.test(msg)
+          ? "runtime-mutation"
+          : msg
     },
   )
 const at = async <T>(cwd: string, run: () => Promise<T>) => {
@@ -475,7 +731,14 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
   const f = fakeCtx(dir)
   const RUNTIME = join(dir, ".opencode", "guardrails")
   const before = (tool: string, input: Record<string, unknown>) =>
-    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+    f.fire("tool.execute.before", {
+      tool,
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: `c-${tool}`,
+      input,
+    })
 
   test("setup", async () => {
     await guardrailV2.setup(f.ctx)
@@ -494,7 +757,9 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
       "read REL": await verdict(before("read", { path: REL })),
       "patch Update REL": await verdict(before("patch", { patchText: patch(`*** Update File: ${REL}`) })),
       "patch Add REL": await verdict(before("patch", { patchText: patch(`*** Add File: ${REL}`) })),
-      "patch Move to REL": await verdict(before("patch", { patchText: patch("*** Update File: src/ok.ts", `*** Move to: ${REL}`) })),
+      "patch Move to REL": await verdict(
+        before("patch", { patchText: patch("*** Update File: src/ok.ts", `*** Move to: ${REL}`) }),
+      ),
     }))
     expect(rows).toEqual({
       "edit ABS (control)": "plugin-owned",
@@ -512,40 +777,91 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
   })
 
   test("cwd == location (control): the relative state path is denied", async () => {
-    expect(await at(dir, () => verdict(before("edit", { path: REL, oldString: "a", newString: "b" })))).toBe("plugin-owned")
+    expect(await at(dir, () => verdict(before("edit", { path: REL, oldString: "a", newString: "b" })))).toBe(
+      "plugin-owned",
+    )
   })
 
   test("an ordinary relative edit passes and reaches the 2.x tool unchanged (the guard judges the absolute path only)", async () => {
-    const e: any = { tool: "edit", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-ok", input: { path: "src/a.ts", oldString: "x", newString: "y" } }
+    const e: any = {
+      tool: "edit",
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: "c-ok",
+      input: { path: "src/a.ts", oldString: "x", newString: "y" },
+    }
     await at(elsewhere, () => f.fire("tool.execute.before", e))
     expect(e.input).toEqual({ path: "src/a.ts", oldString: "x", newString: "y" })
   })
 
   test("shell workdir: a command run in, or naming a path into, the runtime dir from its workdir is a runtime mutation; prose is not", async () => {
     const rows = await at(elsewhere, async () => ({
-      "explicit path (control)": await verdict(before("shell", { command: "printf '{}' > .opencode/guardrails/state.json" })),
-      "redirect, absolute workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: RUNTIME })),
+      "explicit path (control)": await verdict(
+        before("shell", { command: "printf '{}' > .opencode/guardrails/state.json" }),
+      ),
+      "redirect, absolute workdir": await verdict(
+        before("shell", { command: "printf '{}' > state.json", workdir: RUNTIME }),
+      ),
       "tee, absolute workdir": await verdict(before("shell", { command: "echo x | tee state.json", workdir: RUNTIME })),
-      "redirect, relative workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: ".opencode/guardrails" })),
-      "rm, workdir below runtime": await verdict(before("shell", { command: "rm ../state.json", workdir: ".opencode/guardrails/team-runs" })),
-      "redirect, workdir .opencode": await verdict(before("shell", { command: "printf '{}' >guardrails/state.json", workdir: ".opencode" })),
-      "./ redirect, workdir .opencode": await verdict(before("shell", { command: "printf '{}' > ./guardrails/state.json", workdir: ".opencode" })),
-      "cd;, workdir .opencode": await verdict(before("shell", { command: "cd guardrails; printf '{}' > state.json", workdir: ".opencode" })),
-      "cd ./ &&, workdir .opencode": await verdict(before("shell", { command: "cd ./guardrails && printf '{}' > state.json", workdir: ".opencode" })),
-      "$PWD redirect, workdir .opencode": await verdict(before("shell", { command: `printf '{}' > "$PWD"/guardrails/state.json`, workdir: ".opencode" })),
-      "--opt=route, workdir .opencode": await verdict(before("shell", { command: "sort --output=guardrails/state.json x", workdir: ".opencode" })),
-      "quoted route, workdir .opencode": await verdict(before("shell", { command: `printf '{}' > "guardrails/state.json"`, workdir: ".opencode" })),
+      "redirect, relative workdir": await verdict(
+        before("shell", { command: "printf '{}' > state.json", workdir: ".opencode/guardrails" }),
+      ),
+      "rm, workdir below runtime": await verdict(
+        before("shell", { command: "rm ../state.json", workdir: ".opencode/guardrails/team-runs" }),
+      ),
+      "redirect, workdir .opencode": await verdict(
+        before("shell", { command: "printf '{}' >guardrails/state.json", workdir: ".opencode" }),
+      ),
+      "./ redirect, workdir .opencode": await verdict(
+        before("shell", { command: "printf '{}' > ./guardrails/state.json", workdir: ".opencode" }),
+      ),
+      "cd;, workdir .opencode": await verdict(
+        before("shell", { command: "cd guardrails; printf '{}' > state.json", workdir: ".opencode" }),
+      ),
+      "cd ./ &&, workdir .opencode": await verdict(
+        before("shell", { command: "cd ./guardrails && printf '{}' > state.json", workdir: ".opencode" }),
+      ),
+      "$PWD redirect, workdir .opencode": await verdict(
+        before("shell", { command: `printf '{}' > "$PWD"/guardrails/state.json`, workdir: ".opencode" }),
+      ),
+      "--opt=route, workdir .opencode": await verdict(
+        before("shell", { command: "sort --output=guardrails/state.json x", workdir: ".opencode" }),
+      ),
+      "quoted route, workdir .opencode": await verdict(
+        before("shell", { command: `printf '{}' > "guardrails/state.json"`, workdir: ".opencode" }),
+      ),
       // quotes pair left to right: the text between two quoted args is not prose
-      "between quotes, workdir .opencode": await verdict(before("shell", { command: "printf '{}' > guardrails/state.json && echo 'written ok'", workdir: ".opencode" })),
-      "between double quotes, workdir .opencode": await verdict(before("shell", { command: 'printf "{}" > guardrails/state.json && echo "all done"', workdir: ".opencode" })),
-      "between quotes, workdir .opencode/team": await verdict(before("shell", { command: "printf '{}' > ../guardrails/state.json && echo 'ok then'", workdir: ".opencode/team" })),
+      "between quotes, workdir .opencode": await verdict(
+        before("shell", { command: "printf '{}' > guardrails/state.json && echo 'written ok'", workdir: ".opencode" }),
+      ),
+      "between double quotes, workdir .opencode": await verdict(
+        before("shell", { command: 'printf "{}" > guardrails/state.json && echo "all done"', workdir: ".opencode" }),
+      ),
+      "between quotes, workdir .opencode/team": await verdict(
+        before("shell", {
+          command: "printf '{}' > ../guardrails/state.json && echo 'ok then'",
+          workdir: ".opencode/team",
+        }),
+      ),
       "read-only in runtime (pass)": await verdict(before("shell", { command: "cat state.json", workdir: RUNTIME })),
       "read-only route (pass)": await verdict(before("shell", { command: "ls guardrails", workdir: ".opencode" })),
       "ordinary workdir (pass)": await verdict(before("shell", { command: "printf ok > out.txt", workdir: "src" })),
       // the runtime path in prose or a non-runtime write is not a runtime mutation (no false positive from this fix)
-      "prose in a quoted message, workdir src (pass)": await verdict(before("shell", { command: 'git commit -m "guard ../.opencode/guardrails from edits"', workdir: "src" })),
-      "workdir = session dir (pass)": await verdict(before("shell", { command: "git check-ignore -v .opencode/guardrails && mkdir -p .opencode/guardrails", workdir: dir })),
-      "no workdir, prose and .gitignore (pass)": await verdict(before("shell", { command: 'git commit -m "fix: protect .opencode/guardrails" && echo .opencode/guardrails >> .gitignore' })),
+      "prose in a quoted message, workdir src (pass)": await verdict(
+        before("shell", { command: 'git commit -m "guard ../.opencode/guardrails from edits"', workdir: "src" }),
+      ),
+      "workdir = session dir (pass)": await verdict(
+        before("shell", {
+          command: "git check-ignore -v .opencode/guardrails && mkdir -p .opencode/guardrails",
+          workdir: dir,
+        }),
+      ),
+      "no workdir, prose and .gitignore (pass)": await verdict(
+        before("shell", {
+          command: 'git commit -m "fix: protect .opencode/guardrails" && echo .opencode/guardrails >> .gitignore',
+        }),
+      ),
     }))
     expect(rows).toEqual({
       "explicit path (control)": "runtime-mutation",
@@ -573,7 +889,14 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
   })
 
   test("a shell workdir the guard does not rewrite reaches the 2.x tool unchanged", async () => {
-    const e: any = { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-wd", input: { command: "ls", workdir: "src" } }
+    const e: any = {
+      tool: "shell",
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: "c-wd",
+      input: { command: "ls", workdir: "src" },
+    }
     await at(elsewhere, () => f.fire("tool.execute.before", e))
     expect(e.input).toEqual({ command: "ls", workdir: "src" })
   })
@@ -583,10 +906,22 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
     expect(toV1Call("read", { path: join(elsewhere, "a") }, dir).args.filePath).toBe(join(elsewhere, "a"))
     expect(toV1Call("read", { path: "~/notes.md" }, dir).args.filePath).toBe(join(homedir(), "notes.md"))
     expect(toV1Call("shell", { command: "ls", workdir: "sub" }, dir).args.workdir).toBe(join(dir, "sub"))
-    expect(toV1Calls("patch", { patchText: patch("*** Update File: src/a.ts", "*** Move to: b.ts", "*** Add File: ./src/a.ts") }, dir).map((c) => c.args.filePath)).toEqual([join(dir, "src", "a.ts"), join(dir, "b.ts")])
-    expect(toV2Input("edit", { path: "src/a.ts", filePath: join(dir, "src", "a.ts") }, { path: "src/a.ts" }, dir)).toEqual({ path: "src/a.ts" })
-    expect(toV2Input("edit", { path: "src/a.ts", filePath: join(dir, "src", "b.ts") }, { path: "src/a.ts" }, dir)).toEqual({ path: join(dir, "src", "b.ts") }) // a rewrite is written back
-    expect(toV2Input("shell", { command: "ls", workdir: join(dir, "sub") }, { command: "ls", workdir: "sub" }, dir)).toEqual({ command: "ls", workdir: "sub" })
+    expect(
+      toV1Calls(
+        "patch",
+        { patchText: patch("*** Update File: src/a.ts", "*** Move to: b.ts", "*** Add File: ./src/a.ts") },
+        dir,
+      ).map((c) => c.args.filePath),
+    ).toEqual([join(dir, "src", "a.ts"), join(dir, "b.ts")])
+    expect(
+      toV2Input("edit", { path: "src/a.ts", filePath: join(dir, "src", "a.ts") }, { path: "src/a.ts" }, dir),
+    ).toEqual({ path: "src/a.ts" })
+    expect(
+      toV2Input("edit", { path: "src/a.ts", filePath: join(dir, "src", "b.ts") }, { path: "src/a.ts" }, dir),
+    ).toEqual({ path: join(dir, "src", "b.ts") }) // a rewrite is written back
+    expect(
+      toV2Input("shell", { command: "ls", workdir: join(dir, "sub") }, { command: "ls", workdir: "sub" }, dir),
+    ).toEqual({ command: "ls", workdir: "sub" })
   })
 
   // PAIR: adapter.ts resolveIn restates where core puts a tool path. Pinned by string (core is not importable without
@@ -594,7 +929,9 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
   test("PAIR: core resolves file, patch and shell workdir paths at location.directory (resolvePath, ~ and ~/ expanded)", () => {
     const core = join(import.meta.dir, "..", "..", "..", "..", "core", "src")
     const src = (file: string) => readFileSync(join(core, file), "utf-8")
-    expect(src("file-access.ts")).toContain("export const resolvePath = (directory: string, input: string, home = Global.Path.home) => {")
+    expect(src("file-access.ts")).toContain(
+      "export const resolvePath = (directory: string, input: string, home = Global.Path.home) => {",
+    )
     expect(src("file-access.ts")).toContain('normalized === "~"')
     expect(src("file-access.ts")).toContain('normalized.startsWith("~/")')
     expect(src("file-access.ts")).toContain("AbsolutePath.make(resolvePath(location.directory, input.path))")
@@ -625,7 +962,14 @@ describe("F6 a session in a repo subdirectory: the runtime under location.direct
   const f = fakeCtx(sub)
   f.ctx.location = { directory: sub, project: { id: "p", directory: repo, canonical: repo } }
   const before = (tool: string, input: Record<string, unknown>) =>
-    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+    f.fire("tool.execute.before", {
+      tool,
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: `c-${tool}`,
+      input,
+    })
 
   test("setup: the plugin writes its state under the session directory, not the repo root", async () => {
     await guardrailV2.setup(f.ctx)
@@ -635,16 +979,30 @@ describe("F6 a session in a repo subdirectory: the runtime under location.direct
 
   test("edit/write/read/patch of the state under the session directory is denied, absolute and relative", async () => {
     const rows = await at(elsewhere, async () => ({
-      "edit repo-root state ABS (control)": await verdict(before("edit", { path: join(repo, REL), oldString: "a", newString: "b" })),
+      "edit repo-root state ABS (control)": await verdict(
+        before("edit", { path: join(repo, REL), oldString: "a", newString: "b" }),
+      ),
       "edit sub state ABS": await verdict(before("edit", { path: join(sub, REL), oldString: "a", newString: "b" })),
       "edit sub state REL": await verdict(before("edit", { path: REL, oldString: "a", newString: "b" })),
-      "write sub state REL": await verdict(before("write", { path: REL, content: '{"reviewed":true,"factchecked":true}' })),
+      "write sub state REL": await verdict(
+        before("write", { path: REL, content: '{"reviewed":true,"factchecked":true}' }),
+      ),
       "read sub events REL": await verdict(before("read", { path: ".opencode/guardrails/events.jsonl" })),
       "patch Update sub state REL": await verdict(before("patch", { patchText: patch(`*** Update File: ${REL}`) })),
       "edit sub src/a.ts (pass)": await verdict(before("edit", { path: "src/a.ts", oldString: "x", newString: "y" })),
-      "edit sub .opencode/guardrailsX (pass)": await verdict(before("edit", { path: join(sub, ".opencode", "guardrailsX", "a.json"), oldString: "a", newString: "b" })),
-      "read repo team run (pass)": await verdict(before("read", { path: join(repo, ".opencode", "guardrails", "team-runs", "r.json") })),
-      "edit repo team run": await verdict(before("edit", { path: join(repo, ".opencode", "guardrails", "team-runs", "r.json"), oldString: "a", newString: "b" })),
+      "edit sub .opencode/guardrailsX (pass)": await verdict(
+        before("edit", { path: join(sub, ".opencode", "guardrailsX", "a.json"), oldString: "a", newString: "b" }),
+      ),
+      "read repo team run (pass)": await verdict(
+        before("read", { path: join(repo, ".opencode", "guardrails", "team-runs", "r.json") }),
+      ),
+      "edit repo team run": await verdict(
+        before("edit", {
+          path: join(repo, ".opencode", "guardrails", "team-runs", "r.json"),
+          oldString: "a",
+          newString: "b",
+        }),
+      ),
     }))
     expect(rows).toEqual({
       "edit repo-root state ABS (control)": "plugin-owned",
@@ -666,7 +1024,9 @@ describe("F6 a session in a repo subdirectory: the runtime under location.direct
     const ctx = await createContext({ ...v1Input(fakeCtx(sub).ctx), worktree: "/" })
     expect(ctx.deny(join(sub, REL), "edit")).toBe("guardrail runtime state is plugin-owned")
     expect(ctx.deny(join(sub, ".opencode", "guardrails", "team-runs", "r.json"), "read")).toBeUndefined()
-    expect(ctx.deny(join(sub, ".opencode", "guardrails", "team-runs", "r.json"), "edit")).toBe("guardrail runtime state is plugin-owned")
+    expect(ctx.deny(join(sub, ".opencode", "guardrails", "team-runs", "r.json"), "edit")).toBe(
+      "guardrail runtime state is plugin-owned",
+    )
   })
 
   // PAIR: team.ts keeps its runs under projectRoot(directory, worktree); the context's runtime roots must cover both.
@@ -679,11 +1039,21 @@ describe("F6 a session in a repo subdirectory: the runtime under location.direct
   test("shell: a workdir in, or a path from the workdir into, the runtime under the session directory is a runtime mutation", async () => {
     const rows = await at(elsewhere, async () => ({
       "explicit path, no workdir (control)": await verdict(before("shell", { command: `printf '{}' > ${REL}` })),
-      "redirect, repo-root runtime workdir (control)": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: join(repo, ".opencode", "guardrails") })),
-      "redirect, relative workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: ".opencode/guardrails" })),
-      "redirect, absolute sub runtime workdir": await verdict(before("shell", { command: "printf '{}' > state.json", workdir: join(sub, ".opencode", "guardrails") })),
-      "redirect, workdir .opencode": await verdict(before("shell", { command: "printf '{}' > guardrails/state.json", workdir: ".opencode" })),
-      "read-only in sub runtime (pass)": await verdict(before("shell", { command: "cat state.json", workdir: ".opencode/guardrails" })),
+      "redirect, repo-root runtime workdir (control)": await verdict(
+        before("shell", { command: "printf '{}' > state.json", workdir: join(repo, ".opencode", "guardrails") }),
+      ),
+      "redirect, relative workdir": await verdict(
+        before("shell", { command: "printf '{}' > state.json", workdir: ".opencode/guardrails" }),
+      ),
+      "redirect, absolute sub runtime workdir": await verdict(
+        before("shell", { command: "printf '{}' > state.json", workdir: join(sub, ".opencode", "guardrails") }),
+      ),
+      "redirect, workdir .opencode": await verdict(
+        before("shell", { command: "printf '{}' > guardrails/state.json", workdir: ".opencode" }),
+      ),
+      "read-only in sub runtime (pass)": await verdict(
+        before("shell", { command: "cat state.json", workdir: ".opencode/guardrails" }),
+      ),
       "ordinary workdir (pass)": await verdict(before("shell", { command: "printf ok > out.txt", workdir: "src" })),
     }))
     expect(rows).toEqual({
@@ -710,7 +1080,14 @@ describe("F7 an ordinary session (cwd == location): in-command `cd`, the bare ru
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "guardrails-v2-cd-")))
   const f = fakeCtx(dir)
   const before = (tool: string, input: Record<string, unknown>) =>
-    f.fire("tool.execute.before", { tool, sessionID: "ses_1", agent: "implement", messageID: "m1", id: `c-${tool}`, input })
+    f.fire("tool.execute.before", {
+      tool,
+      sessionID: "ses_1",
+      agent: "implement",
+      messageID: "m1",
+      id: `c-${tool}`,
+      input,
+    })
 
   test("setup", async () => {
     await guardrailV2.setup(f.ctx)
@@ -719,21 +1096,39 @@ describe("F7 an ordinary session (cwd == location): in-command `cd`, the bare ru
   test("shell: `cd` into the runtime, or a mutation that targets the runtime dir itself, is a runtime mutation", async () => {
     const rows = await at(dir, async () => ({
       "explicit path (control)": await verdict(before("shell", { command: `printf '{}' > ${REL}` })),
-      "cd runtime &&": await verdict(before("shell", { command: `cd .opencode/guardrails && printf '{"reviewed":true}' > state.json` })),
+      "cd runtime &&": await verdict(
+        before("shell", { command: `cd .opencode/guardrails && printf '{"reviewed":true}' > state.json` }),
+      ),
       "cd runtime; rm": await verdict(before("shell", { command: "cd .opencode/guardrails; rm state.json" })),
-      "cd .opencode && route": await verdict(before("shell", { command: "cd .opencode && printf '{}' > guardrails/state.json" })),
+      "cd .opencode && route": await verdict(
+        before("shell", { command: "cd .opencode && printf '{}' > guardrails/state.json" }),
+      ),
       "cd twice": await verdict(before("shell", { command: "cd .opencode && cd guardrails && printf x > state.json" })),
-      "cp into the bare runtime dir": await verdict(before("shell", { command: "cp /tmp/x.json .opencode/guardrails" })),
+      "cp into the bare runtime dir": await verdict(
+        before("shell", { command: "cp /tmp/x.json .opencode/guardrails" }),
+      ),
       "rm -rf the bare runtime dir": await verdict(before("shell", { command: "rm -rf .opencode/guardrails" })),
-      "workdir = session dir, cd .opencode": await verdict(before("shell", { command: "cd .opencode && printf x > guardrails/state.json", workdir: dir })),
-      "cd case variant": await verdict(before("shell", { command: "cd .OPENCODE/Guardrails && printf x > state.json" })),
+      "workdir = session dir, cd .opencode": await verdict(
+        before("shell", { command: "cd .opencode && printf x > guardrails/state.json", workdir: dir }),
+      ),
+      "cd case variant": await verdict(
+        before("shell", { command: "cd .OPENCODE/Guardrails && printf x > state.json" }),
+      ),
       "cd ordinary dir (pass)": await verdict(before("shell", { command: "cd src && printf ok > out.txt" })),
-      "cd runtime, read-only (pass)": await verdict(before("shell", { command: "cd .opencode/guardrails && cat state.json" })),
+      "cd runtime, read-only (pass)": await verdict(
+        before("shell", { command: "cd .opencode/guardrails && cat state.json" }),
+      ),
       "cd .opencode, list (pass)": await verdict(before("shell", { command: "cd .opencode && ls guardrails" })),
-      "cd out of runtime before writing (still blocked)": await verdict(before("shell", { command: "cd .opencode/guardrails && cd ../.. && printf ok > out.txt" })),
+      "cd out of runtime before writing (still blocked)": await verdict(
+        before("shell", { command: "cd .opencode/guardrails && cd ../.. && printf ok > out.txt" }),
+      ),
       "mkdir -p the runtime dir (pass)": await verdict(before("shell", { command: "mkdir -p .opencode/guardrails" })),
-      "runtime dir in .gitignore (pass)": await verdict(before("shell", { command: "echo .opencode/guardrails >> .gitignore" })),
-      "sibling name (pass)": await verdict(before("shell", { command: "cd .opencode/guardrailsX && printf x > a.json" })),
+      "runtime dir in .gitignore (pass)": await verdict(
+        before("shell", { command: "echo .opencode/guardrails >> .gitignore" }),
+      ),
+      "sibling name (pass)": await verdict(
+        before("shell", { command: "cd .opencode/guardrailsX && printf x > a.json" }),
+      ),
     }))
     expect(rows).toEqual({
       "explicit path (control)": "runtime-mutation",
@@ -759,8 +1154,12 @@ describe("F7 an ordinary session (cwd == location): in-command `cd`, the bare ru
   test("edit/write/read of a case variant of the state path is denied where the filesystem folds case", async () => {
     const expected = caseInsensitive() ? "plugin-owned" : "PASS"
     const rows = await at(dir, async () => ({
-      "edit .OPENCODE REL": await verdict(before("edit", { path: ".OPENCODE/guardrails/state.json", oldString: "a", newString: "b" })),
-      "write Guardrails ABS": await verdict(before("write", { path: join(dir, ".opencode", "Guardrails", "state.json"), content: "{}" })),
+      "edit .OPENCODE REL": await verdict(
+        before("edit", { path: ".OPENCODE/guardrails/state.json", oldString: "a", newString: "b" }),
+      ),
+      "write Guardrails ABS": await verdict(
+        before("write", { path: join(dir, ".opencode", "Guardrails", "state.json"), content: "{}" }),
+      ),
       "read STATE.JSON REL": await verdict(before("read", { path: ".opencode/GUARDRAILS/state.json" })),
       "edit lowercase REL (control)": await verdict(before("edit", { path: REL, oldString: "a", newString: "b" })),
     }))
@@ -935,7 +1334,14 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
       for (const [command, , workdir] of rows) {
         const input = workdir === undefined ? { command } : { command, workdir }
         out[key(command, workdir)] = await verdict(
-          f.fire("tool.execute.before", { tool: "shell", sessionID: "ses_1", agent: "implement", messageID: "m1", id: "c-sh", input }),
+          f.fire("tool.execute.before", {
+            tool: "shell",
+            sessionID: "ses_1",
+            agent: "implement",
+            messageID: "m1",
+            id: "c-sh",
+            input,
+          }),
         )
       }
       return out
@@ -985,7 +1391,7 @@ describe("F9 sed with an in-place flag is a write, wherever the flag sits (OC-N4
     ])
   })
 
-  test("round 3: only `sed -n [-E|-r] <script> <path>…` with no \\ $ \" ` # -- is a read; every other sed is a write", async () => {
+  test('round 3: only `sed -n [-E|-r] <script> <path>…` with no \\ $ " ` # -- is a read; every other sed is a write', async () => {
     // aidd-governance#219 (round-2 acceptance, REJECT): `$"-i"`, another `$'-i'` reading, GNU `--i` / `--i=.bak`, a
     // postfix `-i` behind an escaped quote, and `I=-i; … $I` still reached sed as in-place. Each wrote state.json with
     // real BSD or GNU sed. Owner (A): stop enumerating write shapes; accept one narrow read shape and block the rest.

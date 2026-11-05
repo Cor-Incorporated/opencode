@@ -5,8 +5,8 @@ Why this exists
 ---------------
 The whitelist lives in three places that must move together:
 
-  1. packages/guardrails/managed/opencode.json   (admin profile)
-  2. packages/guardrails/profile/opencode.json   (packaged profile)
+  1. packages/guardrails/managed/model-policy.json   (admin admission policy)
+  2. packages/guardrails/profile/model-policy.json   (packaged admission policy)
   3. guardrail-patterns.ts `paid`                (cost-0-but-billed classification)
 
 On 2026-09-02 all three were stale at once. `glm-5.3-flash` (released
@@ -57,8 +57,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MANAGED = ROOT / "packages/guardrails/managed/opencode.json"
-PROFILE = ROOT / "packages/guardrails/profile/opencode.json"
+MANAGED = ROOT / "packages/guardrails/managed/model-policy.json"
+PROFILE = ROOT / "packages/guardrails/profile/model-policy.json"
+MANAGED_CONFIG = ROOT / "packages/guardrails/managed/opencode.json"
 PATTERNS = ROOT / "packages/guardrails/profile/src/guardrail-patterns.ts"
 SNAPSHOT = ROOT / "packages/guardrails/model-catalog-snapshot.json"
 DEFAULT_CATALOG = Path.home() / ".cache/opencode/models.json"
@@ -67,12 +68,12 @@ DEFAULT_CATALOG = Path.home() / ".cache/opencode/models.json"
 # them (or, for cor-local, because they are self-hosted with no billing at
 # all). `paid` marks those so isFree() does not treat them as genuinely free.
 # openrouter reports real per-token cost and is deliberately absent.
-# `zai` (Z.AI platform lane) is absent too: it is not in enabled_providers.
+# `zai` (Z.AI platform lane) is absent too: it is not an admitted provider.
 PAID_PROVIDERS = ("zai-coding-plan", "deepseek", "openai", "cor-local")
 
 
 def enabled_providers() -> list[str]:
-    return list(json.loads(MANAGED.read_text()).get("enabled_providers", []))
+    return list(json.loads(MANAGED_CONFIG.read_text()).get("providers", {}))
 
 
 def usable(meta: dict) -> bool:

@@ -387,6 +387,9 @@
       "bin": {
         "opencode-guardrails": "./bin/opencode-guardrails",
       },
+      "devDependencies": {
+        "@opencode/core": "workspace:*",
+      },
     },
     "packages/gui-plugins": {
       "name": "@opencode/gui-plugins",
