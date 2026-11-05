@@ -37,6 +37,11 @@
       "action": "provider.use",
       "resource": "cor-local",
       "effect": "allow"
+    },
+    {
+      "action": "provider.use",
+      "resource": "cor-os",
+      "effect": "allow"
     }
   ],
   "share": "disabled",
@@ -121,6 +126,40 @@
               "supported": true,
               "effort": ["low", "medium", "high"]
             }
+          }
+        }
+      }
+    },
+    "cor-os": {
+      "name": "Cor OS router (llm.cor-jp.com)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "https://llm.cor-jp.com/v1",
+        "apiKey": "{env:COR_OS_LLM_TOKEN_NEXT}",
+        "headerTimeout": 900000,
+        "timeout": false,
+        "chunkTimeout": 120000,
+        "provider": "cor-os"
+      },
+      "models": {
+        "cor-qwen3.6-35b": {
+          "name": "Qwen3.6 35B-A3B (cor-os)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true
+          }
+        },
+        "gemma4-12b": {
+          "name": "Gemma 4 12B (cor-os)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          },
+          "capabilities": {
+            "tools": true
           }
         }
       }
