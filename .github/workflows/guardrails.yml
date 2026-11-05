@@ -7,12 +7,18 @@ on:
     paths:
       - "packages/guardrails/**"
       - "scripts/sync-model-whitelist.py"
+      # The tests decode upstream's bundled model catalog and pin core sources, so an upstream sync that only
+      # touches packages/core must run them too.
+      - "packages/core/src/**"
       - ".github/workflows/**"
   push:
     branches: [dev]
     paths:
       - "packages/guardrails/**"
       - "scripts/sync-model-whitelist.py"
+      # The tests decode upstream's bundled model catalog and pin core sources, so an upstream sync that only
+      # touches packages/core must run them too.
+      - "packages/core/src/**"
       - ".github/workflows/**"
 
 permissions:

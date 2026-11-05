@@ -2,12 +2,32 @@
   "cor-local": {},
   "deepseek": {
     "deepseek-flash": {
-      "context": 1000000,
+      "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-09-10"
+      "release_date": "2026-10-17"
+    },
+    "deepseek-v4-flash": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-17"
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-17"
+    },
+    "deepseek-v4-pro": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-08-13"
     }
   },
   "openai": {
+    "chat-latest": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-05-05"
+    },
     "gpt-4": {
       "context": 8192,
       "reasoning": false,
@@ -23,12 +43,27 @@
       "reasoning": false,
       "release_date": "2025-04-14"
     },
+    "gpt-4.1-fast": {
+      "context": 1047576,
+      "reasoning": false,
+      "release_date": "2025-04-14"
+    },
     "gpt-4.1-mini": {
       "context": 1047576,
       "reasoning": false,
       "release_date": "2025-04-14"
     },
+    "gpt-4.1-mini-fast": {
+      "context": 1047576,
+      "reasoning": false,
+      "release_date": "2025-04-14"
+    },
     "gpt-4.1-nano": {
+      "context": 1047576,
+      "reasoning": false,
+      "release_date": "2025-04-14"
+    },
+    "gpt-4.1-nano-fast": {
       "context": 1047576,
       "reasoning": false,
       "release_date": "2025-04-14"
@@ -43,6 +78,11 @@
       "reasoning": false,
       "release_date": "2024-05-13"
     },
+    "gpt-4o-2024-05-13-fast": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2024-05-13"
+    },
     "gpt-4o-2024-08-06": {
       "context": 128000,
       "reasoning": false,
@@ -53,7 +93,17 @@
       "reasoning": false,
       "release_date": "2024-11-20"
     },
+    "gpt-4o-fast": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2024-05-13"
+    },
     "gpt-4o-mini": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2024-07-18"
+    },
+    "gpt-4o-mini-fast": {
       "context": 128000,
       "reasoning": false,
       "release_date": "2024-07-18"
@@ -63,12 +113,37 @@
       "reasoning": true,
       "release_date": "2025-08-07"
     },
+    "gpt-5-fast": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-08-07"
+    },
+    "gpt-5-flex": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-08-07"
+    },
     "gpt-5-mini": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2025-08-07"
     },
+    "gpt-5-mini-fast": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-08-07"
+    },
+    "gpt-5-mini-flex": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-08-07"
+    },
     "gpt-5-nano": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-08-07"
+    },
+    "gpt-5-nano-flex": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2025-08-07"
@@ -83,13 +158,28 @@
       "reasoning": true,
       "release_date": "2025-11-13"
     },
+    "gpt-5.1-fast": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-11-13"
+    },
+    "gpt-5.1-flex": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-11-13"
+    },
     "gpt-5.2": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2025-12-11"
     },
-    "gpt-5.2-chat-latest": {
-      "context": 128000,
+    "gpt-5.2-fast": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2025-12-11"
+    },
+    "gpt-5.2-flex": {
+      "context": 400000,
       "reasoning": true,
       "release_date": "2025-12-11"
     },
@@ -98,12 +188,12 @@
       "reasoning": true,
       "release_date": "2025-12-11"
     },
-    "gpt-5.3-chat-latest": {
-      "context": 128000,
-      "reasoning": false,
-      "release_date": "2026-03-03"
-    },
     "gpt-5.3-codex": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-02-05"
+    },
+    "gpt-5.3-codex-fast": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2026-02-05"
@@ -118,12 +208,32 @@
       "reasoning": true,
       "release_date": "2026-03-05"
     },
+    "gpt-5.4-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-03-05"
+    },
     "gpt-5.4-mini": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2026-03-17"
     },
+    "gpt-5.4-mini-fast": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-03-17"
+    },
+    "gpt-5.4-mini-flex": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-03-17"
+    },
     "gpt-5.4-nano": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-03-17"
+    },
+    "gpt-5.4-nano-flex": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2026-03-17"
@@ -138,6 +248,11 @@
       "reasoning": true,
       "release_date": "2026-04-23"
     },
+    "gpt-5.5-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-04-23"
+    },
     "gpt-5.5-pro": {
       "context": 1050000,
       "reasoning": true,
@@ -148,7 +263,32 @@
       "reasoning": true,
       "release_date": "2026-07-09"
     },
+    "gpt-5.6-cyber": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-08-07"
+    },
+    "gpt-5.6-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
     "gpt-5.6-luna": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-luna-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-luna-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-pro": {
       "context": 1050000,
       "reasoning": true,
       "release_date": "2026-07-09"
@@ -158,7 +298,27 @@
       "reasoning": true,
       "release_date": "2026-07-09"
     },
+    "gpt-5.6-sol-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-sol-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
     "gpt-5.6-terra": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-terra-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-terra-pro": {
       "context": 1050000,
       "reasoning": true,
       "release_date": "2026-07-09"
@@ -168,10 +328,110 @@
       "reasoning": true,
       "release_date": "2026-09-04"
     },
-    "gpt-realtime-2.1": {
-      "context": 128000,
+    "gpt-6-astra-fast": {
+      "context": 1050000,
       "reasoning": true,
-      "release_date": "2026-07-06"
+      "release_date": "2026-09-04"
+    },
+    "gpt-6-astra-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-04"
+    },
+    "gpt-6-astra-ultrafast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-04"
+    },
+    "gpt-6-luna": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "gpt-6-luna-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "gpt-6-luna-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "gpt-6-sol": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "gpt-6-sol-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "gpt-6-sol-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "gpt-6.1-sol": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-29"
+    },
+    "gpt-6.1-sol-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-29"
+    },
+    "gpt-6.1-sol-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-29"
+    },
+    "gpt-6.1-sol-ultrafast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-29"
+    },
+    "gpt-6.1-terra": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-10-26"
+    },
+    "gpt-6.1-terra-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-10-26"
+    },
+    "gpt-6.1-terra-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-10-26"
+    },
+    "gpt-audio": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2025-08-28"
+    },
+    "gpt-audio-1.5": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2026-02-23"
+    },
+    "gpt-audio-mini": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2025-10-06"
+    },
+    "gpt-daybreak-blue-latest": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-08-07"
+    },
+    "gpt-daybreak-red-latest": {
+      "context": 400000,
+      "reasoning": true,
+      "release_date": "2026-08-07"
     },
     "o1": {
       "context": 200000,
@@ -184,6 +444,16 @@
       "release_date": "2025-03-19"
     },
     "o3": {
+      "context": 200000,
+      "reasoning": true,
+      "release_date": "2025-04-16"
+    },
+    "o3-fast": {
+      "context": 200000,
+      "reasoning": true,
+      "release_date": "2025-04-16"
+    },
+    "o3-flex": {
       "context": 200000,
       "reasoning": true,
       "release_date": "2025-04-16"
@@ -202,23 +472,43 @@
       "context": 200000,
       "reasoning": true,
       "release_date": "2025-04-16"
+    },
+    "o4-mini-fast": {
+      "context": 200000,
+      "reasoning": true,
+      "release_date": "2025-04-16"
+    },
+    "o4-mini-flex": {
+      "context": 200000,
+      "reasoning": true,
+      "release_date": "2025-04-16"
     }
   },
   "openrouter": {
     "aion-labs/aion-2.0": {
       "context": 131072,
       "reasoning": true,
-      "release_date": "2026-02-23"
+      "release_date": "2025-12-21"
     },
     "aion-labs/aion-3.0": {
       "context": 131072,
       "reasoning": true,
-      "release_date": "2026-07-07"
+      "release_date": "2026-05-05"
     },
     "aion-labs/aion-3.0-mini": {
       "context": 131072,
       "reasoning": true,
-      "release_date": "2026-07-07"
+      "release_date": "2026-05-14"
+    },
+    "aion-labs/aion-3.5": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-09-23"
+    },
+    "aion-labs/aion-3.5-mini": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-09-23"
     },
     "amazon/nova-2-lite-v1": {
       "context": 1000000,
@@ -238,17 +528,12 @@
     "amazon/nova-premier-v1": {
       "context": 1000000,
       "reasoning": false,
-      "release_date": "2025-10-31"
+      "release_date": "2025-04-30"
     },
     "amazon/nova-pro-v1": {
       "context": 300000,
       "reasoning": false,
       "release_date": "2024-12-05"
-    },
-    "anthropic/claude-3-haiku": {
-      "context": 200000,
-      "reasoning": false,
-      "release_date": "2024-03-13"
     },
     "anthropic/claude-fable-5": {
       "context": 1000000,
@@ -265,10 +550,10 @@
       "reasoning": true,
       "release_date": "2025-10-15"
     },
-    "anthropic/claude-opus-4": {
-      "context": 200000,
+    "anthropic/claude-haiku-5.5": {
+      "context": 1000000,
       "reasoning": true,
-      "release_date": "2025-05-22"
+      "release_date": "2026-10-07"
     },
     "anthropic/claude-opus-4.1": {
       "context": 200000,
@@ -300,10 +585,10 @@
       "reasoning": true,
       "release_date": "2026-07-24"
     },
-    "anthropic/claude-sonnet-4": {
+    "anthropic/claude-opus-5.5": {
       "context": 1000000,
       "reasoning": true,
-      "release_date": "2025-05-22"
+      "release_date": "2026-09-22"
     },
     "anthropic/claude-sonnet-4.5": {
       "context": 1000000,
@@ -320,25 +605,25 @@
       "reasoning": true,
       "release_date": "2026-06-30"
     },
-    "arcee-ai/trinity-large-thinking": {
-      "context": 262144,
+    "anthropic/claude-sonnet-5.5": {
+      "context": 1000000,
       "reasoning": true,
-      "release_date": "2026-04-01"
+      "release_date": "2026-09-28"
     },
     "bytedance-seed/seed-1.6": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2025-12-23"
+      "release_date": "2025-10-15"
     },
     "bytedance-seed/seed-1.6-flash": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2025-12-23"
+      "release_date": "2025-08-28"
     },
     "bytedance-seed/seed-2-1-turbo": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2026-08-12"
+      "release_date": "2026-06-23"
     },
     "bytedance-seed/seed-2.0-code": {
       "context": 262144,
@@ -355,6 +640,11 @@
       "reasoning": true,
       "release_date": "2026-02-14"
     },
+    "cohere/command-a-plus": {
+      "context": 192000,
+      "reasoning": true,
+      "release_date": "2026-05-20"
+    },
     "cohere/command-r-08-2024": {
       "context": 128000,
       "reasoning": false,
@@ -368,7 +658,7 @@
     "cohere/north-mini-code:free": {
       "context": 256000,
       "reasoning": true,
-      "release_date": "2026-06-17"
+      "release_date": "2026-06-09"
     },
     "deepseek/deepseek-chat": {
       "context": 163840,
@@ -384,11 +674,6 @@
       "context": 163840,
       "reasoning": true,
       "release_date": "2025-08-21"
-    },
-    "deepseek/deepseek-r1": {
-      "context": 64000,
-      "reasoning": true,
-      "release_date": "2025-01-20"
     },
     "deepseek/deepseek-r1-0528": {
       "context": 163840,
@@ -416,7 +701,7 @@
       "release_date": "2026-04-24"
     },
     "deepseek/deepseek-v4-flash-0731": {
-      "context": 1310720,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-07-31"
     },
@@ -433,17 +718,32 @@
     "deepseek/deepseek-v4-pro-0813": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-08-12"
+      "release_date": "2026-08-13"
     },
     "deepseek/deepseek-v4.1-flash": {
       "context": 1048576,
       "reasoning": true,
       "release_date": "2026-09-10"
     },
+    "deepseek/deepseek-v4.1-flash-1017": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-17"
+    },
     "dots-studio/dots-3-note-preview:free": {
       "context": 512000,
       "reasoning": true,
       "release_date": "2026-08-14"
+    },
+    "elorian/glimpse": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-10-17"
+    },
+    "fireworks/ember-1": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-22"
     },
     "google/gemini-2.5-flash": {
       "context": 1048576,
@@ -465,20 +765,10 @@
       "reasoning": true,
       "release_date": "2025-06-05"
     },
-    "google/gemini-2.5-pro-preview-05-06": {
-      "context": 1048576,
-      "reasoning": true,
-      "release_date": "2025-05-07"
-    },
     "google/gemini-3-flash-preview": {
       "context": 1048576,
       "reasoning": true,
       "release_date": "2025-12-17"
-    },
-    "google/gemini-3-pro-image": {
-      "context": 131072,
-      "reasoning": true,
-      "release_date": "2026-05-28"
     },
     "google/gemini-3.1-flash-lite": {
       "context": 1048576,
@@ -525,6 +815,11 @@
       "reasoning": true,
       "release_date": "2026-09-02"
     },
+    "google/gemini-4-argon": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-13"
+    },
     "google/gemma-3-12b-it": {
       "context": 131072,
       "reasoning": false,
@@ -558,67 +853,57 @@
     "ibm-granite/granite-4.2-8b": {
       "context": 131072,
       "reasoning": true,
-      "release_date": "2026-08-31"
+      "release_date": "2026-08-25"
     },
     "inception/mercury-2": {
       "context": 128000,
       "reasoning": true,
-      "release_date": "2026-03-04"
+      "release_date": "2026-02-24"
     },
     "inception/mercury-2.5": {
       "context": 260000,
       "reasoning": true,
       "release_date": "2026-09-08"
     },
+    "inception/mercury-3": {
+      "context": 1000000,
+      "reasoning": true,
+      "release_date": "2026-10-16"
+    },
     "inclusionai/ling-3.0-flash": {
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-07-23"
-    },
-    "inclusionai/ling-3.0-flash-fin": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-08-27"
-    },
-    "inclusionai/ling-3.0-flash-fin:free": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-08-27"
-    },
-    "inclusionai/ling-3.0-flash-sante:free": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-09-04"
     },
     "inclusionai/ling-3.0-flash-vl": {
       "context": 131072,
       "reasoning": true,
       "release_date": "2026-09-10"
     },
-    "inclusionai/ling-3.0-flash-vl:free": {
+    "inclusionai/ling-3.1-flash": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2026-09-10"
+      "release_date": "2026-09-29"
     },
-    "kwaipilot/kat-coder-pro-v2": {
-      "context": 262144,
-      "reasoning": false,
-      "release_date": "2026-03-27"
-    },
-    "kwaipilot/kat-coder-pro-v2.5": {
-      "context": 262144,
-      "reasoning": false,
-      "release_date": "2026-07-10"
+    "liquid/lfm-2.5-2.6b": {
+      "context": 128000,
+      "reasoning": true,
+      "release_date": "2026-08-11"
     },
     "liquid/lfm-2.5-2.6b:free": {
       "context": 65536,
       "reasoning": true,
       "release_date": "2026-08-11"
     },
+    "liquid/lfm-2.5-24b-a2b": {
+      "context": 128000,
+      "reasoning": true,
+      "release_date": "2026-10-13"
+    },
     "meituan/longcat-2.0": {
       "context": 1048756,
       "reasoning": true,
-      "release_date": "2026-07-20"
+      "release_date": "2026-06-30"
     },
     "meta-llama/llama-3.1-70b-instruct": {
       "context": 131072,
@@ -636,7 +921,7 @@
       "release_date": "2024-12-06"
     },
     "meta-llama/llama-4-maverick": {
-      "context": 1048576,
+      "context": 524288,
       "reasoning": false,
       "release_date": "2025-04-05"
     },
@@ -675,6 +960,16 @@
       "reasoning": true,
       "release_date": "2026-09-02"
     },
+    "meta/muse-spark-open": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-15"
+    },
+    "meta/muse-wonder": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-12"
+    },
     "minimax/minimax-m1": {
       "context": 1000000,
       "reasoning": true,
@@ -705,10 +1000,15 @@
       "reasoning": true,
       "release_date": "2026-06-01"
     },
+    "minimax/minimax-m3.1-flash": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-19"
+    },
     "mistralai/codestral-2508": {
       "context": 256000,
       "reasoning": false,
-      "release_date": "2025-08-01"
+      "release_date": "2025-07-30"
     },
     "mistralai/devstral-2512": {
       "context": 262144,
@@ -738,12 +1038,17 @@
     "mistralai/mistral-large-2407": {
       "context": 131072,
       "reasoning": false,
-      "release_date": "2024-11-19"
+      "release_date": "2024-07-24"
     },
     "mistralai/mistral-large-2512": {
       "context": 262144,
       "reasoning": false,
       "release_date": "2025-12-02"
+    },
+    "mistralai/mistral-large-4-0": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-06"
     },
     "mistralai/mistral-medium-3": {
       "context": 131072,
@@ -758,12 +1063,12 @@
     "mistralai/mistral-medium-3.1": {
       "context": 131072,
       "reasoning": false,
-      "release_date": "2025-08-13"
+      "release_date": "2025-08-12"
     },
     "mistralai/mistral-nemo": {
       "context": 131072,
       "reasoning": false,
-      "release_date": "2024-07-01"
+      "release_date": "2024-07-18"
     },
     "mistralai/mistral-saba": {
       "context": 32768,
@@ -774,6 +1079,11 @@
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-03-16"
+    },
+    "mistralai/mistral-small-3.1-24b-instruct": {
+      "context": 128000,
+      "reasoning": false,
+      "release_date": "2025-03-17"
     },
     "mistralai/mistral-small-3.2-24b-instruct": {
       "context": 256000,
@@ -798,7 +1108,7 @@
     "moonshotai/kimi-k2-0905": {
       "context": 262144,
       "reasoning": false,
-      "release_date": "2025-09-04"
+      "release_date": "2025-09-05"
     },
     "moonshotai/kimi-k2-thinking": {
       "context": 262144,
@@ -808,12 +1118,12 @@
     "moonshotai/kimi-k2.5": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2026-01"
+      "release_date": "2026-01-27"
     },
     "moonshotai/kimi-k2.6": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2026-04-21"
+      "release_date": "2026-04-20"
     },
     "moonshotai/kimi-k2.7-code": {
       "context": 262144,
@@ -825,12 +1135,12 @@
       "reasoning": true,
       "release_date": "2026-07-16"
     },
-    "nex-agi/nex-n2.5-mini:free": {
-      "context": 262144,
+    "moonshotai/kimi-k3.1-pro": {
+      "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-09-08"
+      "release_date": "2026-10-23"
     },
-    "nex-agi/nex-n2.5-pro:free": {
+    "nex-agi/nex-n2.5-pro": {
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-09-08"
@@ -875,10 +1185,15 @@
       "reasoning": true,
       "release_date": "2026-08-11"
     },
-    "openai/gpt-3.5-turbo": {
-      "context": 16385,
-      "reasoning": false,
-      "release_date": "2023-03-01"
+    "nvidia/nemotron-3.5-super-vl": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-15"
+    },
+    "nvidia/nemotron-3.5-super-vl:free": {
+      "context": 1000000,
+      "reasoning": true,
+      "release_date": "2026-10-15"
     },
     "openai/gpt-3.5-turbo-0613": {
       "context": 4095,
@@ -899,11 +1214,6 @@
       "context": 128000,
       "reasoning": false,
       "release_date": "2023-11-06"
-    },
-    "openai/gpt-4-turbo-preview": {
-      "context": 128000,
-      "reasoning": false,
-      "release_date": "2024-01-25"
     },
     "openai/gpt-4.1": {
       "context": 1047576,
@@ -998,7 +1308,7 @@
     "openai/gpt-5.2-chat": {
       "context": 128000,
       "reasoning": false,
-      "release_date": "2025-12-10"
+      "release_date": "2025-12-11"
     },
     "openai/gpt-5.2-codex": {
       "context": 400000,
@@ -1085,15 +1395,55 @@
       "reasoning": true,
       "release_date": "2026-09-04"
     },
+    "openai/gpt-6-luna": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "openai/gpt-6-luna-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "openai/gpt-6-sol": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "openai/gpt-6-sol-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "openai/gpt-6.1-sol": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-29"
+    },
+    "openai/gpt-6.1-sol-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-29"
+    },
+    "openai/gpt-6.1-terra": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-10-26"
+    },
+    "openai/gpt-6.1-terra-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-10-26"
+    },
     "openai/gpt-audio": {
       "context": 128000,
       "reasoning": false,
-      "release_date": "2026-01-19"
+      "release_date": "2025-08-28"
     },
     "openai/gpt-audio-mini": {
       "context": 128000,
       "reasoning": false,
-      "release_date": "2026-01-19"
+      "release_date": "2025-10-06"
     },
     "openai/gpt-chat-latest": {
       "context": 400000,
@@ -1160,6 +1510,11 @@
       "reasoning": true,
       "release_date": "2026-02-01"
     },
+    "perceptron/perceptron-mk1.5": {
+      "context": 36864,
+      "reasoning": true,
+      "release_date": "2026-09-25"
+    },
     "poolside/laguna-s-2.1": {
       "context": 1048576,
       "reasoning": true,
@@ -1180,6 +1535,11 @@
       "reasoning": true,
       "release_date": "2026-07-02"
     },
+    "prism-ml/ternary-bonsai-2-27b": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-09-18"
+    },
     "qwen/qwen-2.5-72b-instruct": {
       "context": 32768,
       "reasoning": false,
@@ -1195,20 +1555,10 @@
       "reasoning": false,
       "release_date": "2024-01-25"
     },
-    "qwen/qwen-plus-2025-07-28": {
-      "context": 1000000,
-      "reasoning": false,
-      "release_date": "2025-09-08"
-    },
     "qwen/qwen3-14b": {
-      "context": 131072,
+      "context": 40960,
       "reasoning": true,
       "release_date": "2025-04-28"
-    },
-    "qwen/qwen3-235b-a22b": {
-      "context": 131072,
-      "reasoning": true,
-      "release_date": "2025-04"
     },
     "qwen/qwen3-235b-a22b-2507": {
       "context": 262144,
@@ -1216,31 +1566,21 @@
       "release_date": "2025-07-21"
     },
     "qwen/qwen3-235b-a22b-thinking-2507": {
-      "context": 131072,
+      "context": 128000,
       "reasoning": true,
       "release_date": "2025-07-25"
     },
     "qwen/qwen3-30b-a3b": {
-      "context": 131072,
+      "context": 40960,
       "reasoning": true,
       "release_date": "2025-04-28"
     },
     "qwen/qwen3-30b-a3b-instruct-2507": {
       "context": 262144,
       "reasoning": false,
-      "release_date": "2025-07-29"
-    },
-    "qwen/qwen3-30b-a3b-thinking-2507": {
-      "context": 81920,
-      "reasoning": true,
-      "release_date": "2025-08-28"
+      "release_date": "2025-07-28"
     },
     "qwen/qwen3-32b": {
-      "context": 131072,
-      "reasoning": true,
-      "release_date": "2025-04"
-    },
-    "qwen/qwen3-8b": {
       "context": 131072,
       "reasoning": true,
       "release_date": "2025-04-28"
@@ -1248,12 +1588,12 @@
     "qwen/qwen3-coder": {
       "context": 262144,
       "reasoning": false,
-      "release_date": "2025-07-23"
+      "release_date": "2025-07-22"
     },
     "qwen/qwen3-coder-30b-a3b-instruct": {
       "context": 262144,
       "reasoning": false,
-      "release_date": "2025-04"
+      "release_date": "2025-07-31"
     },
     "qwen/qwen3-coder-flash": {
       "context": 1000000,
@@ -1264,21 +1604,6 @@
       "context": 262144,
       "reasoning": false,
       "release_date": "2026-02-03"
-    },
-    "qwen/qwen3-coder-plus": {
-      "context": 1000000,
-      "reasoning": false,
-      "release_date": "2025-07-23"
-    },
-    "qwen/qwen3-max": {
-      "context": 262144,
-      "reasoning": false,
-      "release_date": "2025-09-23"
-    },
-    "qwen/qwen3-max-thinking": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-02-09"
     },
     "qwen/qwen3-next-80b-a3b-instruct": {
       "context": 262144,
@@ -1295,34 +1620,19 @@
       "reasoning": false,
       "release_date": "2025-09-23"
     },
-    "qwen/qwen3-vl-235b-a22b-thinking": {
-      "context": 131072,
-      "reasoning": true,
-      "release_date": "2025-09-23"
-    },
     "qwen/qwen3-vl-30b-a3b-instruct": {
       "context": 262144,
       "reasoning": false,
-      "release_date": "2025-10-06"
+      "release_date": "2025-10-04"
     },
     "qwen/qwen3-vl-30b-a3b-thinking": {
       "context": 262144,
       "reasoning": true,
       "release_date": "2025-10-06"
     },
-    "qwen/qwen3-vl-32b-instruct": {
-      "context": 131072,
-      "reasoning": false,
-      "release_date": "2025-10-23"
-    },
     "qwen/qwen3-vl-8b-instruct": {
       "context": 262144,
       "reasoning": false,
-      "release_date": "2025-10-14"
-    },
-    "qwen/qwen3-vl-8b-thinking": {
-      "context": 131072,
-      "reasoning": true,
       "release_date": "2025-10-14"
     },
     "qwen/qwen3.5-122b-a10b": {
@@ -1380,11 +1690,6 @@
       "reasoning": true,
       "release_date": "2026-04-27"
     },
-    "qwen/qwen3.6-max-preview": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-04-20"
-    },
     "qwen/qwen3.6-plus": {
       "context": 1000000,
       "reasoning": true,
@@ -1425,10 +1730,30 @@
       "reasoning": true,
       "release_date": "2026-09-02"
     },
+    "qwen/qwen3.8-max-prime": {
+      "context": 1000000,
+      "reasoning": true,
+      "release_date": "2026-09-23"
+    },
+    "qwen/qwen3.8-omni-flash": {
+      "context": 1000000,
+      "reasoning": true,
+      "release_date": "2026-09-17"
+    },
+    "recursive/flint-v1.0:free": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-10-21"
+    },
+    "reflection/beam-1.0-501b-a23b": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-10-05"
+    },
     "rekaai/reka-edge": {
       "context": 16384,
       "reasoning": false,
-      "release_date": "2026-03-20"
+      "release_date": "2026-03-11"
     },
     "relace/relace-search": {
       "context": 256000,
@@ -1455,11 +1780,6 @@
       "reasoning": true,
       "release_date": "2026-08-03"
     },
-    "sao10k/l3.1-euryale-70b": {
-      "context": 131072,
-      "reasoning": false,
-      "release_date": "2024-08-28"
-    },
     "stepfun/step-3.5-flash": {
       "context": 262144,
       "reasoning": true,
@@ -1469,6 +1789,11 @@
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-05-29"
+    },
+    "stepfun/step-5-preview": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-16"
     },
     "tencent/hy3": {
       "context": 262144,
@@ -1485,18 +1810,13 @@
       "reasoning": true,
       "release_date": "2026-08-28"
     },
-    "thedrummer/unslopnemo-12b": {
-      "context": 1024000,
-      "reasoning": false,
-      "release_date": "2024-11-08"
-    },
     "thinkingmachines/inkling": {
-      "context": 1048576,
+      "context": 524288,
       "reasoning": true,
       "release_date": "2026-07-15"
     },
     "thinkingmachines/inkling-small": {
-      "context": 1048576,
+      "context": 524288,
       "reasoning": true,
       "release_date": "2026-07-30"
     },
@@ -1510,15 +1830,30 @@
       "reasoning": true,
       "release_date": "2026-07-15"
     },
+    "unbiased/pareto-26.10": {
+      "context": 1048576,
+      "reasoning": false,
+      "release_date": "2026-10-15"
+    },
+    "unbiased/pareto-26.9": {
+      "context": 262144,
+      "reasoning": false,
+      "release_date": "2026-10-13"
+    },
+    "upstage/solar-mini4": {
+      "context": 524288,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
     "upstage/solar-pro-3": {
       "context": 131072,
       "reasoning": true,
-      "release_date": "2026-01-27"
+      "release_date": "2026-01-26"
     },
     "upstage/solar-pro4": {
       "context": 524288,
       "reasoning": true,
-      "release_date": "2026-08-10"
+      "release_date": "2026-08-06"
     },
     "x-ai/grok-4.20": {
       "context": 2000000,
@@ -1540,6 +1875,11 @@
       "reasoning": true,
       "release_date": "2026-08-12"
     },
+    "x-ai/grok-4.7": {
+      "context": 500000,
+      "reasoning": true,
+      "release_date": "2026-09-21"
+    },
     "x-ai/grok-build-0.1": {
       "context": 256000,
       "reasoning": true,
@@ -1554,6 +1894,26 @@
       "context": 1050000,
       "reasoning": true,
       "release_date": "2026-04-22"
+    },
+    "xiaomi/mimo-v2.6-flash": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "xiaomi/mimo-v2.6-pro": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-09-22"
+    },
+    "xiaomi/mimo-v2.6-pro-ultraspeed": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-21"
+    },
+    "xingchen-agi/xing4.0-29b-a4b:free": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-10-16"
     },
     "z-ai/glm-4.5": {
       "context": 131072,
@@ -1611,14 +1971,24 @@
       "release_date": "2026-06-13"
     },
     "z-ai/glm-5.3": {
-      "context": 1310720,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-08-14"
     },
     "z-ai/glm-5.3-flash": {
-      "context": 1310720,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-08-26"
+    },
+    "z-ai/glm-5.3-flashx": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-18"
+    },
+    "z-ai/glm-5.3-prime": {
+      "context": 1000000,
+      "reasoning": true,
+      "release_date": "2026-09-23"
     },
     "z-ai/glm-5v-turbo": {
       "context": 202752,
@@ -1631,7 +2001,7 @@
       "release_date": "2026-06-09"
     },
     "~anthropic/claude-haiku-latest": {
-      "context": 200000,
+      "context": 1000000,
       "reasoning": true,
       "release_date": "2026-04-27"
     },
@@ -1645,8 +2015,18 @@
       "reasoning": true,
       "release_date": "2026-04-27"
     },
+    "~deepseek/deepseek-flash-latest": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-14"
+    },
+    "~deepseek/deepseek-pro-latest": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-14"
+    },
     "~deepseek/deepseek-v4-flash-latest": {
-      "context": 1310720,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-08-01"
     },
@@ -1690,18 +2070,23 @@
       "reasoning": true,
       "release_date": "2026-09-11"
     },
+    "~unbiased/pareto-latest": {
+      "context": 1048576,
+      "reasoning": false,
+      "release_date": "2026-10-13"
+    },
     "~x-ai/grok-latest": {
       "context": 500000,
       "reasoning": true,
       "release_date": "2026-07-08"
     },
     "~z-ai/glm-flash-latest": {
-      "context": 1310720,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-08-27"
     },
     "~z-ai/glm-latest": {
-      "context": 1310720,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-08-19"
     }

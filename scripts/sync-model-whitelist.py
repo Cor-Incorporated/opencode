@@ -35,6 +35,22 @@ whitelist is "what we allow". The no-args check links the two, so a snapshot
 refresh that forgets to apply fails, and so does a hand-edit that drops a
 model.
 
+The catalog is upstream's own bundled one by default:
+`packages/core/src/models-dev/snapshot.txt` (the models.dev experimental v2
+API, refreshed by upstream and carried into this repo by every upstream sync).
+The 1.x cache `~/.cache/opencode/models.json` does not exist under 2.x, whose
+catalog lives in its KV store, so until 2026-11-05 the refresh had no source
+and the whitelist stayed at its 2026-09-12 state while the 2.x CLI listed newer
+models that the guardrail then rejected ("is not admitted by provider policy").
+Because the default catalog is in the repo, the no-args check also compares
+the committed snapshot with it: an upstream sync that brings new models fails
+until the snapshot is refreshed and applied. `--catalog` still accepts a
+models.dev v1 `api.json`.
+
+2.x lists every `experimental.modes` entry of a model as its own model id,
+`<id>-<mode>` (packages/core/src/models-dev.ts normalize), and the guardrail
+gate compares that id, so the snapshot carries those ids too.
+
 Detecting drift against the *live* catalog still needs network; that stays
 with `local-dev-deploy.sh --check-openrouter-catalog`.
 
@@ -62,7 +78,7 @@ PROFILE = ROOT / "packages/guardrails/profile/model-policy.json"
 MANAGED_CONFIG = ROOT / "packages/guardrails/managed/opencode.json"
 PATTERNS = ROOT / "packages/guardrails/profile/src/guardrail-patterns.ts"
 SNAPSHOT = ROOT / "packages/guardrails/model-catalog-snapshot.json"
-DEFAULT_CATALOG = Path.home() / ".cache/opencode/models.json"
+DEFAULT_CATALOG = ROOT / "packages/core/src/models-dev/snapshot.txt"
 
 # Providers whose models report cost 0 because a plan or subscription covers
 # them (or, for cor-local, because they are self-hosted with no billing at
@@ -77,11 +93,30 @@ def enabled_providers() -> list[str]:
 
 
 def usable(meta: dict) -> bool:
-    """Coding-relevant: can call tools and can emit text."""
-    if not meta.get("tool_call"):
+    """Coding-relevant: a chat model that can call tools and can emit text."""
+    # v2 entries carry `capabilities`; v1 entries carry `tool_call`.
+    v2 = "capabilities" in meta
+    if v2 and meta.get("type") != "chat":
+        return False
+    tools = meta["capabilities"].get("tools", {}).get("supported") if v2 else meta.get("tool_call")
+    if not tools:
         return False
     out = (meta.get("modalities") or {}).get("output") or []
     return (not out) or ("text" in out)
+
+
+def catalog_entries(mid: str, meta: dict) -> dict[str, dict]:
+    """The model ids 2.x offers for one catalog model: the model and one id per mode."""
+    reasoning = meta.get("reasoning")
+    if "capabilities" in meta:
+        reasoning = (meta["capabilities"].get("reasoning") or {}).get("supported")
+    entry = {
+        "release_date": meta.get("release_date") or "",
+        "reasoning": bool(reasoning),
+        "context": (meta.get("limit") or {}).get("context"),
+    }
+    modes = (meta.get("experimental") or {}).get("modes") or {}
+    return {mid: entry, **{f"{mid}-{mode}": entry for mode in modes}}
 
 
 def build_snapshot(catalog_path: Path) -> dict:
@@ -90,13 +125,10 @@ def build_snapshot(catalog_path: Path) -> dict:
     for pid in enabled_providers():
         models = (catalog.get(pid) or {}).get("models", {})
         snapshot[pid] = {
-            mid: {
-                "release_date": meta.get("release_date") or "",
-                "reasoning": bool(meta.get("reasoning")),
-                "context": (meta.get("limit") or {}).get("context"),
-            }
+            cid: entry
             for mid, meta in models.items()
             if usable(meta)
+            for cid, entry in catalog_entries(mid, meta).items()
         }
     return snapshot
 
@@ -194,6 +226,25 @@ def check(snapshot: dict) -> list[str]:
     return problems
 
 
+def upstream_drift(snapshot: dict) -> list[str]:
+    """Models upstream's bundled catalog offers that the committed snapshot lacks."""
+    if not DEFAULT_CATALOG.exists():
+        return [f"upstream catalog missing: {DEFAULT_CATALOG.relative_to(ROOT)}"]
+    upstream = build_snapshot(DEFAULT_CATALOG)
+    problems: list[str] = []
+    for pid, models in upstream.items():
+        missing = sorted(set(models) - set(snapshot.get(pid, {})))
+        if missing:
+            problems.append(
+                f"{pid}: {len(missing)} models in {DEFAULT_CATALOG.relative_to(ROOT)} are not in the "
+                f"committed snapshot (upstream has {len(models)}, snapshot has {len(snapshot.get(pid, {}))}): "
+                + ", ".join(missing[:8])
+                + (f" ... +{len(missing) - 8}" if len(missing) > 8 else "")
+                + " -- run --refresh-snapshot --apply"
+            )
+    return problems
+
+
 def apply(snapshot: dict) -> dict[str, int]:
     mg, pf, paid = whitelists(MANAGED), whitelists(PROFILE), paid_sets()
     merged: dict[str, list[str]] = {}
@@ -225,7 +276,7 @@ def main() -> int:
         "--catalog",
         type=Path,
         default=DEFAULT_CATALOG,
-        help=f"models.dev cache to read (default: {DEFAULT_CATALOG})",
+        help=f"models.dev catalog to read, v2 or v1 (default: {DEFAULT_CATALOG.relative_to(ROOT)})",
     )
     ap.add_argument(
         "--refresh-snapshot",
@@ -241,9 +292,7 @@ def main() -> int:
 
     if args.refresh_snapshot:
         if not args.catalog.exists():
-            sys.exit(
-                f"catalog not found: {args.catalog}\nrun `opencode models` once to populate it"
-            )
+            sys.exit(f"catalog not found: {args.catalog}")
         snapshot = build_snapshot(args.catalog)
         SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
         for pid, models in snapshot.items():
@@ -257,7 +306,7 @@ def main() -> int:
             print(f"  {pid:18} +{n}")
         print("applied to managed, profile and `paid`")
 
-    problems = check(snapshot)
+    problems = check(snapshot) + upstream_drift(snapshot)
     if problems:
         print(
             "\nFAIL: whitelist is out of step with the catalog snapshot",
@@ -266,7 +315,10 @@ def main() -> int:
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
-    print("ok   whitelist covers the catalog snapshot in all three copies")
+    print(
+        "ok   whitelist covers the catalog snapshot in all three copies, "
+        f"and the snapshot covers {DEFAULT_CATALOG.relative_to(ROOT)}"
+    )
     return 0
 
 

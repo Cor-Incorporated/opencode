@@ -59,39 +59,7 @@
     },
     "openai": {},
     "deepseek": {},
-    "openrouter": {
-      "models": {
-        "google/gemini-3.5-flash": {
-          "name": "Gemini 3.5 Flash",
-          "family": "gemini-flash",
-          "limit": {
-            "context": 1048576,
-            "output": 65536
-          },
-          "releaseDate": "2026-05-19",
-          "capabilities": {
-            "tools": true,
-            "input": ["text", "image", "audio", "video", "pdf"],
-            "output": ["text"],
-            "temperature": true,
-            "reasoning": {
-              "supported": true,
-              "effort": ["low", "medium", "high"]
-            }
-          },
-          "cost": [
-            {
-              "input": 1.5,
-              "output": 9,
-              "cache": {
-                "read": 0.15,
-                "write": 0.08333333333333333
-              }
-            }
-          ]
-        }
-      }
-    },
+    "openrouter": {},
     "cor-local": {
       "name": "Cor local (llama-server router / Mac Studio)",
       "package": "@opencode/ai/providers/openai-compatible",

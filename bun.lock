@@ -389,6 +389,7 @@
       },
       "devDependencies": {
         "@opencode/core": "workspace:*",
+        "effect": "catalog:",
       },
     },
     "packages/gui-plugins": {

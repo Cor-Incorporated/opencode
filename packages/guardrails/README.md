@@ -103,6 +103,14 @@ and records the denials. Explicitly configured additional providers can supply t
 unsupported, invalid, or conflicting settings. Catalog synchronization updates the two policies and the `paid` sets
 without changing runtime model overrides.
 
+The catalog source is upstream's bundled models.dev catalog, `packages/core/src/models-dev/snapshot.txt`, which every
+upstream sync brings along. Refresh with `python3 scripts/sync-model-whitelist.py --refresh-snapshot --apply` and
+commit the snapshot and both policies together; the no-argument check (CI `guardrails` job) fails when that catalog has
+a model the committed snapshot lacks. 2.x offers each `experimental.modes` entry as its own model id (`gpt-5.5-fast`),
+so those ids are admitted with their model. For a model the catalog defines, runtime `providers` may only switch it
+off (`disabled`); `model-whitelist.test.ts` fails on a fork-side copy of such a model, because the copy freezes its
+prices and capabilities on the day it was made. Fork-only lanes (`cor-local`) keep their own model definitions.
+
 ## Current scope
 
 Current contents focus on the first thin-distribution slice:
