@@ -17,12 +17,15 @@ const bin = fileURLToPath(new URL("../../bin/opencode-guardrails", import.meta.u
 
 const cli = `
 import { text } from "node:stream/consumers"
+if (process.env.STUB_EXIT) process.exit(Number(process.env.STUB_EXIT))
 const args = process.argv.slice(2)
-const piped = args[0] === "run" && !process.stdin.isTTY ? await text(process.stdin) : null
+const reads = args[0] === "run" && !args.includes("--help") && !process.stdin.isTTY
+const piped = reads ? await text(process.stdin) : null
 process.stdout.write(JSON.stringify({ args, piped }))
 `
 
-// <mode> <launcher> <args...>; modes: open (never written or closed), data, slow-end (written at once, closed later), late
+// <mode> <launcher> <args...>; modes: open (never written or closed), eof (closed at once), data, big (4 MiB),
+// slow-end (written at once, closed later), late (written and closed after 1 s)
 const driver = `
 import { spawn, spawnSync } from "node:child_process"
 const [mode, launcher, ...args] = process.argv.slice(2)
@@ -33,7 +36,9 @@ let stderr = ""
 child.stdout.on("data", (chunk) => (stdout += chunk))
 child.stderr.on("data", (chunk) => (stderr += chunk))
 child.stdin.on("error", () => {})
+if (mode === "eof") child.stdin.end()
 if (mode === "data") child.stdin.end("piped text")
+if (mode === "big") child.stdin.end("x".repeat(4 * 1024 * 1024))
 if (mode === "slow-end") {
   child.stdin.write("piped ")
   setTimeout(() => child.stdin.end("text"), 600)
@@ -115,6 +120,45 @@ describe.skipIf(process.platform === "win32")("run with a socket stdin", () => {
     expect(result.code, result.stderr).toBe(0)
     expect(result.cli?.piped).toBe("")
     expect(result.stderr).toContain("OPENCODE_GUARDRAILS_STDIN_WAIT_MS")
+  })
+
+  test(
+    "a stdin already at EOF is passed on as empty, without waiting or a notice",
+    () => {
+      const result = launch("eof", ["run", "hi"], { OPENCODE_GUARDRAILS_STDIN_WAIT_MS: "20000" })
+      expect(result.signal, result.stderr).toBeNull()
+      expect(result.cli?.piped).toBe("")
+      expect(result.stderr).toBe("")
+    },
+    HANG,
+  )
+
+  test("a CLI that exits without reading large input keeps its own exit status", () => {
+    // more than any socket buffer, so the launcher's write to the exited CLI fails with EPIPE
+    const result = launch("big", ["run", "hi"], { STUB_EXIT: "3" })
+    expect(result.signal, result.stderr).toBeNull()
+    expect(result.code, result.stderr).toBe(3)
+    expect(result.stderr).not.toContain("EPIPE")
+  })
+
+  test(
+    "help requests are not held on stdin",
+    () => {
+      const result = launch("open", ["run", "--help"], { OPENCODE_GUARDRAILS_STDIN_WAIT_MS: "20000" })
+      expect(result.signal, result.stderr).toBeNull()
+      expect(result.cli).toEqual({ args: ["run", "--help"], piped: null })
+      expect(result.stderr).toBe("")
+    },
+    HANG,
+  )
+
+  test("OPENCODE_GUARDRAILS_ALLOW_SERVICE=1 gets the same handling, since the hang does not depend on the server", () => {
+    const result = launch("open", ["run", "hi"], {
+      OPENCODE_GUARDRAILS_ALLOW_SERVICE: "1",
+      OPENCODE_GUARDRAILS_STDIN_WAIT_MS: "200",
+    })
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.cli).toEqual({ args: ["run", "hi"], piped: "" })
   })
 
   test(

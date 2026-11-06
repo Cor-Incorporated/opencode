@@ -137,12 +137,16 @@ const [command, ...args] = cliCommand(
   process.env.OPENCODE_GUARDRAILS_ALLOW_SERVICE === "1" ? process.argv.slice(2) : withStandalone(process.argv.slice(2)),
 )
 // `run` reads a non-TTY stdin to EOF before it starts, so a socket nobody closes would hang it (bin/run-stdin.js)
-const input = await runInput(process.argv.slice(2))
+const input = await runInput(process.argv.slice(2)).catch((error) =>
+  fail(`opencode-guardrails: reading stdin failed (${error.code ?? error.message})`),
+)
 const out = spawnSync(command, args, {
-  stdio: input ? ["pipe", "inherit", "inherit"] : "inherit",
+  stdio: input !== undefined ? ["pipe", "inherit", "inherit"] : "inherit",
   input,
   env: childEnv,
 })
 
-if (out.error) fail(out.error.message)
+// a CLI that exits before reading the stdin we hand it (bad flag, server start failure) leaves EPIPE; its status wins
+if (out.error && !(input !== undefined && out.error.code === "EPIPE" && typeof out.status === "number"))
+  fail(out.error.message)
 process.exit(typeof out.status === "number" ? out.status : 1)
