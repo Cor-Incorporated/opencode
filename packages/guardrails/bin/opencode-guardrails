@@ -24,6 +24,7 @@ import { applyCorLocalDefaults } from "./cor-local-env.js"
 import { applyZaiAuthDefaults } from "./zai-auth-env.js"
 import { withStandalone } from "./standalone-args.js"
 import { cliCommand } from "./cli-command.js"
+import { runInput } from "./run-stdin.js"
 
 function fail(msg) {
   console.error(msg)
@@ -135,8 +136,11 @@ const [command, ...args] = cliCommand(
   target,
   process.env.OPENCODE_GUARDRAILS_ALLOW_SERVICE === "1" ? process.argv.slice(2) : withStandalone(process.argv.slice(2)),
 )
+// `run` reads a non-TTY stdin to EOF before it starts, so a socket nobody closes would hang it (bin/run-stdin.js)
+const input = await runInput(process.argv.slice(2))
 const out = spawnSync(command, args, {
-  stdio: "inherit",
+  stdio: input ? ["pipe", "inherit", "inherit"] : "inherit",
+  input,
   env: childEnv,
 })
 
