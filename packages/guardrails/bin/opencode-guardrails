@@ -24,6 +24,7 @@ import { applyCorLocalDefaults } from "./cor-local-env.js"
 import { applyZaiAuthDefaults } from "./zai-auth-env.js"
 import { withStandalone } from "./standalone-args.js"
 import { cliCommand } from "./cli-command.js"
+import { runInput } from "./run-stdin.js"
 
 function fail(msg) {
   console.error(msg)
@@ -137,10 +138,16 @@ const [command, ...args] = cliCommand(
     ? process.argv.slice(2)
     : withStandalone(process.argv.slice(2), { binary: target, env: childEnv }),
 )
+// `run` reads a non-TTY stdin to EOF before it starts, so a socket nobody closes would hang it (bin/run-stdin.js)
+const input = await runInput(process.argv.slice(2)).catch((error) =>
+  fail(`opencode-guardrails: reading stdin failed (${error.code ?? error.message})`),
+)
 const out = spawnSync(command, args, {
-  stdio: "inherit",
+  stdio: input !== undefined ? ["pipe", "inherit", "inherit"] : "inherit",
+  input,
   env: childEnv,
 })
 
-if (out.error) fail(out.error.message)
+// a CLI that exits before reading the stdin we hand it (bad flag, server start failure) leaves EPIPE; its status wins
+if (out.error && !(input !== undefined && out.error.code === "EPIPE")) fail(out.error.message)
 process.exit(typeof out.status === "number" ? out.status : 1)
