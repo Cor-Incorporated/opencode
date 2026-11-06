@@ -42,6 +42,11 @@ function withTmpDir<T>(prefix: string, fn: (dir: string) => T): T {
   }
 }
 
+// On Windows each keyPermissions call starts Windows PowerShell (Set-Acl), and the code under test starts it again for
+// the production ACL probe. The first cold start alone took 3.4-5 s on the windows runner (5,019 ms timeout on dev
+// 98256dbc89, run 41999813160), past bun's 5 s default; elsewhere these tests take milliseconds.
+const POWERSHELL = 30_000
+
 // Windows chmod does not set a private DACL: create the actual ACL used by the production probe.
 function keyPermissions(filePath: string, mode: number) {
   if (process.platform !== "win32") return chmodSync(filePath, mode)
@@ -120,54 +125,70 @@ describe("cor-local-env.js: COR_LOCAL_BASE_URL defaulting", () => {
 })
 
 describe("cor-local-env.js: key file validation", () => {
-  test("(d) group/other-readable key file is ignored, with a warning that never echoes the value", () => {
-    withTmpDir("cor-local-key-perm-", (dir) => {
-      const keyFile = path.join(dir, "cor-local.key")
-      writeFileSync(keyFile, "top-secret-value\n")
-      keyPermissions(keyFile, 0o644)
+  test(
+    "(d) group/other-readable key file is ignored, with a warning that never echoes the value",
+    () => {
+      withTmpDir("cor-local-key-perm-", (dir) => {
+        const keyFile = path.join(dir, "cor-local.key")
+        writeFileSync(keyFile, "top-secret-value\n")
+        keyPermissions(keyFile, 0o644)
 
-      const warnings: string[] = []
-      const key = loadCorLocalKeyFromFile(keyFile, { warn: (msg) => warnings.push(msg) })
+        const warnings: string[] = []
+        const key = loadCorLocalKeyFromFile(keyFile, { warn: (msg) => warnings.push(msg) })
 
-      expect(key).toBeUndefined()
-      expect(warnings).toHaveLength(1)
-      expect(warnings[0]).not.toContain("top-secret-value")
-      expect(warnings[0]).toBe("cor-local: key file ignored (invalid format)")
-    })
-  })
+        expect(key).toBeUndefined()
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).not.toContain("top-secret-value")
+        expect(warnings[0]).toBe("cor-local: key file ignored (invalid format)")
+      })
+    },
+    POWERSHELL,
+  )
 
-  test("(e) a key containing a quote is ignored (would corrupt the spliced JSON config)", () => {
-    withTmpDir("cor-local-key-quote-", (dir) => {
-      const keyFile = path.join(dir, "cor-local.key")
-      writeFileSync(keyFile, 'sk-"bad\n')
-      keyPermissions(keyFile, 0o600)
+  test(
+    "(e) a key containing a quote is ignored (would corrupt the spliced JSON config)",
+    () => {
+      withTmpDir("cor-local-key-quote-", (dir) => {
+        const keyFile = path.join(dir, "cor-local.key")
+        writeFileSync(keyFile, 'sk-"bad\n')
+        keyPermissions(keyFile, 0o600)
 
-      const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
-      expect(key).toBeUndefined()
-    })
-  })
+        const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
+        expect(key).toBeUndefined()
+      })
+    },
+    POWERSHELL,
+  )
 
-  test("(e) a key with a second line is ignored", () => {
-    withTmpDir("cor-local-key-2line-", (dir) => {
-      const keyFile = path.join(dir, "cor-local.key")
-      writeFileSync(keyFile, "sk-good\nextra-line\n")
-      keyPermissions(keyFile, 0o600)
+  test(
+    "(e) a key with a second line is ignored",
+    () => {
+      withTmpDir("cor-local-key-2line-", (dir) => {
+        const keyFile = path.join(dir, "cor-local.key")
+        writeFileSync(keyFile, "sk-good\nextra-line\n")
+        keyPermissions(keyFile, 0o600)
 
-      const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
-      expect(key).toBeUndefined()
-    })
-  })
+        const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
+        expect(key).toBeUndefined()
+      })
+    },
+    POWERSHELL,
+  )
 
-  test("(f) a normal owner-only key with a trailing newline is adopted without the newline", () => {
-    withTmpDir("cor-local-key-ok-", (dir) => {
-      const keyFile = path.join(dir, "cor-local [key]'s.key")
-      writeFileSync(keyFile, "sk-good-value123\n")
-      keyPermissions(keyFile, 0o600)
+  test(
+    "(f) a normal owner-only key with a trailing newline is adopted without the newline",
+    () => {
+      withTmpDir("cor-local-key-ok-", (dir) => {
+        const keyFile = path.join(dir, "cor-local [key]'s.key")
+        writeFileSync(keyFile, "sk-good-value123\n")
+        keyPermissions(keyFile, 0o600)
 
-      const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
-      expect(key).toBe("sk-good-value123")
-    })
-  })
+        const key = loadCorLocalKeyFromFile(keyFile, { warn: () => {} })
+        expect(key).toBe("sk-good-value123")
+      })
+    },
+    POWERSHELL,
+  )
 
   test("missing key file: COR_LOCAL_API_KEY stays unset, base URL still defaults", () => {
     withTmpDir("cor-local-key-missing-", (dir) => {
@@ -178,29 +199,37 @@ describe("cor-local-env.js: key file validation", () => {
     })
   })
 
-  test("applyCorLocalDefaults reads a valid key file into COR_LOCAL_API_KEY", () => {
-    withTmpDir("cor-local-key-apply-", (dir) => {
-      const keyFile = path.join(dir, "cor-local.key")
-      writeFileSync(keyFile, "sk-applied-value\n")
-      keyPermissions(keyFile, 0o600)
+  test(
+    "applyCorLocalDefaults reads a valid key file into COR_LOCAL_API_KEY",
+    () => {
+      withTmpDir("cor-local-key-apply-", (dir) => {
+        const keyFile = path.join(dir, "cor-local.key")
+        writeFileSync(keyFile, "sk-applied-value\n")
+        keyPermissions(keyFile, 0o600)
 
-      const env: Record<string, string> = { COR_LOCAL_KEY_FILE: keyFile }
-      applyCorLocalDefaults(env, { warn: () => {} })
-      expect(env.COR_LOCAL_API_KEY).toBe("sk-applied-value")
-    })
-  })
+        const env: Record<string, string> = { COR_LOCAL_KEY_FILE: keyFile }
+        applyCorLocalDefaults(env, { warn: () => {} })
+        expect(env.COR_LOCAL_API_KEY).toBe("sk-applied-value")
+      })
+    },
+    POWERSHELL,
+  )
 
-  test("applyCorLocalDefaults never overrides a caller-supplied COR_LOCAL_API_KEY", () => {
-    withTmpDir("cor-local-key-noverride-", (dir) => {
-      const keyFile = path.join(dir, "cor-local.key")
-      writeFileSync(keyFile, "should-not-be-read\n")
-      keyPermissions(keyFile, 0o600)
+  test(
+    "applyCorLocalDefaults never overrides a caller-supplied COR_LOCAL_API_KEY",
+    () => {
+      withTmpDir("cor-local-key-noverride-", (dir) => {
+        const keyFile = path.join(dir, "cor-local.key")
+        writeFileSync(keyFile, "should-not-be-read\n")
+        keyPermissions(keyFile, 0o600)
 
-      const env: Record<string, string> = { COR_LOCAL_KEY_FILE: keyFile, COR_LOCAL_API_KEY: "caller-value" }
-      applyCorLocalDefaults(env, { warn: () => {} })
-      expect(env.COR_LOCAL_API_KEY).toBe("caller-value")
-    })
-  })
+        const env: Record<string, string> = { COR_LOCAL_KEY_FILE: keyFile, COR_LOCAL_API_KEY: "caller-value" }
+        applyCorLocalDefaults(env, { warn: () => {} })
+        expect(env.COR_LOCAL_API_KEY).toBe("caller-value")
+      })
+    },
+    POWERSHELL,
+  )
 })
 
 describe("bin/opencode-guardrails: real entry point ordering (subprocess, offline)", () => {
@@ -258,17 +287,21 @@ describe("bin/opencode-guardrails: real entry point ordering (subprocess, offlin
     })
   })
 
-  test("HOME's ~/cluster-ops/cor-local.key is picked up when COR_LOCAL_API_KEY is unset", () => {
-    withTmpDir("cor-local-entry-keyed-", (projectDir) => {
-      withTmpDir("cor-local-entry-home3-", (homeDir) => {
-        mkdirSync(path.join(homeDir, "cluster-ops"), { recursive: true })
-        const keyFile = path.join(homeDir, "cluster-ops", "cor-local.key")
-        writeFileSync(keyFile, "sk-from-home\n")
-        keyPermissions(keyFile, 0o600)
+  test(
+    "HOME's ~/cluster-ops/cor-local.key is picked up when COR_LOCAL_API_KEY is unset",
+    () => {
+      withTmpDir("cor-local-entry-keyed-", (projectDir) => {
+        withTmpDir("cor-local-entry-home3-", (homeDir) => {
+          mkdirSync(path.join(homeDir, "cluster-ops"), { recursive: true })
+          const keyFile = path.join(homeDir, "cluster-ops", "cor-local.key")
+          writeFileSync(keyFile, "sk-from-home\n")
+          keyPermissions(keyFile, 0o600)
 
-        const out = runEntryPoint({ projectDir, homeDir })
-        expect(out).toContain("API_KEY=sk-from-home")
+          const out = runEntryPoint({ projectDir, homeDir })
+          expect(out).toContain("API_KEY=sk-from-home")
+        })
       })
-    })
-  })
+    },
+    POWERSHELL,
+  )
 })
