@@ -123,7 +123,7 @@ export function loadCorLocalKeyFromFile(filePath, { warn = (msg) => console.erro
 
 /**
  * Mutates `env` (defaults to `process.env`) in place: defaults
- * `COR_LOCAL_BASE_URL` to the Mac Studio router's local address when unset
+ * `COR_LOCAL_BASE_URL` to a router on this machine (loopback) when unset
  * or empty, and -- when `COR_LOCAL_API_KEY` is unset or empty -- reads a key
  * from `COR_LOCAL_KEY_FILE` (or the default `~/cluster-ops/cor-local.key`)
  * if it validates. Never overrides a caller-supplied, non-empty value for

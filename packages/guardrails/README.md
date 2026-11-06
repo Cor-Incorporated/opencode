@@ -235,34 +235,35 @@ router address and authentication stay outside the repository.
 
 Key rotation: replace `~/cluster-ops/cor-local.key`'s contents (owner-only permissions) and every subsequent `opencode-guardrails` invocation picks up the new key — no redeploy needed. To point at a different file instead, set `COR_LOCAL_KEY_FILE=/path/to/key` before invoking.
 
-MacBook usage (once the router is reachable over tailnet — see ai-cluster packet A3a for the `tailscale serve` step):
+MacBook usage (the router runs on EVO-X2 `evo-x2`, bound to its Tailscale address only — ai-cluster ADR-0023,
+`docs/03-runbooks/evo-x2-shared-llm-router.md`; no `tailscale serve`):
 
 ```sh
-export COR_LOCAL_BASE_URL=http://mac-studio.tailb30e58.ts.net:18082/v1
+export COR_LOCAL_BASE_URL=http://100.91.85.86:18082/v1
 export COR_LOCAL_API_KEY=<key from 1Password — never paste it into chat>
 opencode run --model cor-local/qwen3.8-27b "..."
 ```
 
-On Mac Studio itself, no export is needed — `bin/opencode-guardrails`'s defaults already point at the local router and read the key from `~/cluster-ops/cor-local.key`, including under a managed deploy.
+The key is read from `~/cluster-ops/cor-local.key` when `COR_LOCAL_API_KEY` is unset, including under a managed deploy. The Mac Studio router this lane used until 2026-10 is retired.
 
-Three model ids are whitelisted: `deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
+Three model ids are whitelisted: `ornith-1.5-35b-a3b`, `qwen3.6-35b-a3b`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
 
 Usage:
 
 ```sh
-opencode run --model cor-local/glm53-flash "..."
+opencode run --model cor-local/qwen3.6-35b-a3b "..."
 ```
 
 or, in a project `opencode.json`:
 
 ```json
-{ "model": "cor-local/glm53-flash" }
+{ "model": "cor-local/qwen3.6-35b-a3b" }
 ```
 
 Offline environment recipe (no network calls, no auto-update, no telemetry):
 
 ```sh
-OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/glm53-flash "..."
+OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/qwen3.6-35b-a3b "..."
 ```
 
 `share` is already `disabled` in both guardrails profiles, so no extra flag is needed for that.
@@ -270,9 +271,9 @@ OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --mod
 Cold-start note: the router loads models on first request. `settings.headerTimeout` is 900000ms, `settings.timeout`
 is `false`, and `settings.chunkTimeout` is 120000ms, bounding stalled streams separately from cold loading.
 `compatibility.reasoningField` preserves `reasoning_content`; native `capabilities.reasoning` declares the effort
-controls. Context window is 262144 tokens and maximum output is 16384 tokens.
+controls. Context window is 131072 tokens per request and maximum output is 16384 tokens.
 
-`limit.context` (262144) must equal the router's `llama-server` launch flag `-c 262144` (ai-cluster repo, `config/llama-router/cor-local.ini.template`). They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both `qwen3.8-27b` and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins both to 262144.
+`limit.context` (131072) must equal one request's share of the router's context: `-c 262144` split over `-np 2` slots without kv-unified (ai-cluster repo, `config/llama-router/evo1-router.yaml`, rendered by `scripts/cluster-ops/evo_router.py`; its `evo1-router.clients.json` is the source of this block). Until 2026-11-06 this said 262144 although the Mac Studio router (`config/llama-router/cor-local.ini.template`) also split 262144 over 2 slots. They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both `qwen3.8-27b` and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins both to 131072.
 
 Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
 consistency check across the two admission policies and `paid` sets. These checks make no model requests.

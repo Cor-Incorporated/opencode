@@ -169,13 +169,14 @@ describe("model whitelist stays consistent across its copies", () => {
     }
   })
 
-  // Packet P5: cor-local (llama-server router, Mac Studio, fully offline/opt-in).
+  // Packet P5: cor-local (llama-server router on EVO-X2 evo-x2 since 2026-11-06, ai-cluster ADR-0023;
+  // the Mac Studio router was retired 2026-10-12. Fully offline/opt-in).
   // These ids report cost 0 because the router is self-hosted, not because
   // they are a free tier -- pin the whitelist and the preview()/free() truth
   // table so a future edit cannot silently let denyFree block the local lane
   // or denyPreview reject these ids as previews.
   describe("cor-local (local llama-server router)", () => {
-    const ids = ["deepseek-v4-flash-0731", "glm53-flash", "qwen3.8-27b"]
+    const ids = ["ornith-1.5-35b-a3b", "qwen3.6-35b-a3b", "qwen3.8-27b"]
 
     test("whitelist is exactly the 3 local model ids in both copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
@@ -211,14 +212,17 @@ describe("model whitelist stays consistent across its copies", () => {
     // 2026-09-07: the router moved again to `-c 262144` (a two-line config
     // edit on glm53-flash consumed 62% of the 64k window; all three GGUFs
     // have native context >= 262144 and the KV fits the coding budget).
+    // 2026-11-06: the EVO-X2 router runs `-c 262144 -np 2` without kv-unified, so one request gets
+    // 262144 / 2 = 131072 (the Mac router had the same split while this said 262144). The ai-cluster
+    // generator (scripts/cluster-ops/evo_router.py) emits this value from config/llama-router/evo1-router.yaml.
     for (const id of ids) {
-      test(`${id}: limit.context is 262144 (router -c) and limit.output is 16384 in both copies`, () => {
+      test(`${id}: limit.context is 131072 (router -c / -np) and limit.output is 16384 in both copies`, () => {
         expect(modelLimit(managed as Config, "cor-local", id)).toEqual({
-          context: 262144,
+          context: 131072,
           output: 16384,
         })
         expect(modelLimit(profile as Config, "cor-local", id)).toEqual({
-          context: 262144,
+          context: 131072,
           output: 16384,
         })
       })

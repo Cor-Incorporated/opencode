@@ -27,8 +27,8 @@ describe("packaged 2.x provider configuration", () => {
             package: "@opencode/ai/providers/openai-compatible",
             settings: { baseURL: "{env:COR_LOCAL_BASE_URL}", apiKey: "{env:COR_LOCAL_API_KEY}", provider: "cor-local" },
             models: {
-              "deepseek-v4-flash-0731": { capabilities: { reasoning: { supported: true } } },
-              "glm53-flash": { capabilities: { reasoning: { supported: true } } },
+              "ornith-1.5-35b-a3b": { capabilities: { reasoning: { supported: true } } },
+              "qwen3.6-35b-a3b": { capabilities: { reasoning: { supported: true } } },
               "qwen3.8-27b": { capabilities: { reasoning: { supported: true } } },
             },
           },

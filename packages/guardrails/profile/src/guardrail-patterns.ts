@@ -187,10 +187,10 @@ export const paid: Record<string, Set<string>> = {
     "deepseek-v4-flash-vision-exp",
     "deepseek-v4-pro",
   ]),
-  // cor-local: self-hosted llama-server router (Mac Studio). Cost is always 0 (no
+  // cor-local: self-hosted llama-server router (EVO-X2 evo-x2, ai-cluster ADR-0023). Cost is always 0 (no
   // billing), but these are not free-tier models — list them here so free() stays
   // false and denyFree does not block the opt-in local lane.
-  "cor-local": new Set(["deepseek-v4-flash-0731", "glm53-flash", "qwen3.8-27b"]),
+  "cor-local": new Set(["ornith-1.5-35b-a3b", "qwen3.6-35b-a3b", "qwen3.8-27b"]),
   // cor-os: the Cor OS router (llm.cor-jp.com), self-hosted behind a Bearer token. No cost is declared; listing the
   // public aliases keeps free() false even if a catalog lookup ever reports a zero cost.
   "cor-os": new Set(["cor-qwen3.6-35b", "gemma4-12b"]),
