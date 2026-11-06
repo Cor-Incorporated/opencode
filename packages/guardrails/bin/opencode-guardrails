@@ -147,6 +147,5 @@ const out = spawnSync(command, args, {
 })
 
 // a CLI that exits before reading the stdin we hand it (bad flag, server start failure) leaves EPIPE; its status wins
-if (out.error && !(input !== undefined && out.error.code === "EPIPE" && typeof out.status === "number"))
-  fail(out.error.message)
+if (out.error && !(input !== undefined && out.error.code === "EPIPE")) fail(out.error.message)
 process.exit(typeof out.status === "number" ? out.status : 1)

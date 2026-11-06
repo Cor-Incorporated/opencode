@@ -25,17 +25,22 @@ process.stdout.write(JSON.stringify({ args, piped }))
 `
 
 // <mode> <launcher> <args...>; modes: open (never written or closed), eof (closed at once), data, big (4 MiB),
-// slow-end (written at once, closed later), late (written and closed after 1 s)
+// slow-end (written at once, closed later), late (written and closed after 1 s), reset (a TCP stdin that delivers part
+// of a prompt and is then reset)
 const driver = `
 import { spawn, spawnSync } from "node:child_process"
+import net from "node:net"
 const [mode, launcher, ...args] = process.argv.slice(2)
 const probe = spawnSync(process.execPath, ["-e", "process.stdout.write(String(require('node:fs').fstatSync(0).isSocket()))"], { stdio: ["pipe", "pipe", "inherit"] })
-const child = spawn(process.execPath, [launcher, ...args], { stdio: ["pipe", "pipe", "pipe"], detached: true })
+const stdin = mode === "reset" ? await resetSocket() : "pipe"
+const child = spawn(process.execPath, [launcher, ...args], { stdio: [stdin, "pipe", "pipe"], detached: true })
+// the launcher holds its own copy of the socket; closing ours leaves the reset to its reads alone
+if (mode === "reset") stdin.destroy()
 let stdout = ""
 let stderr = ""
 child.stdout.on("data", (chunk) => (stdout += chunk))
 child.stderr.on("data", (chunk) => (stderr += chunk))
-child.stdin.on("error", () => {})
+child.stdin?.on("error", () => {})
 if (mode === "eof") child.stdin.end()
 if (mode === "data") child.stdin.end("piped text")
 if (mode === "big") child.stdin.end("x".repeat(4 * 1024 * 1024))
@@ -50,6 +55,18 @@ child.on("close", (code, signal) => {
   process.stdout.write(JSON.stringify({ socket: probe.stdout.toString() === "true", code, signal, stdout, stderr }))
   process.exit(0)
 })
+
+async function resetSocket() {
+  const server = net.createServer((peer) => {
+    peer.write("partial prompt")
+    setTimeout(() => peer.resetAndDestroy(), 300)
+  })
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const socket = net.connect(server.address().port, "127.0.0.1")
+  socket.on("error", () => {})
+  await new Promise((resolve) => socket.once("connect", resolve))
+  return socket
+}
 `
 
 function launch(mode: string, args: string[], env: Record<string, string>) {
@@ -132,6 +149,13 @@ describe.skipIf(process.platform === "win32")("run with a socket stdin", () => {
     },
     HANG,
   )
+
+  test("a stdin that breaks partway fails the launch instead of passing a truncated prompt on", () => {
+    const result = launch("reset", ["run", "hi"], { OPENCODE_GUARDRAILS_STDIN_WAIT_MS: "2000" })
+    expect(result.signal, result.stderr).toBeNull()
+    expect(result.code, result.stderr).toBe(1)
+    expect(result.stderr).toContain("reading stdin failed")
+  })
 
   test("a CLI that exits without reading large input keeps its own exit status", () => {
     // more than any socket buffer, so the launcher's write to the exited CLI fails with EPIPE
