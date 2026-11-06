@@ -183,6 +183,21 @@ describe("model whitelist stays consistent across its copies", () => {
       expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
     })
 
+    // The runtime model blocks must hold exactly the whitelisted ids: a leftover model in one copy would otherwise
+    // pass every other test here (they loop over `ids` only, and native-config.test.ts uses toMatchObject).
+    test("the runtime model set equals the whitelist in both copies", () => {
+      for (const config of [managed as Config, profile as Config]) {
+        expect(Object.keys(config.providers?.["cor-local"]?.models ?? {}).sort()).toEqual(ids)
+      }
+    })
+
+    // profile/AGENTS.md is loaded as `instructions`, so its id list reaches every session's system prompt.
+    test("AGENTS.md names exactly the whitelisted cor-local ids", async () => {
+      const text = await Bun.file(fileURLToPath(new URL("../AGENTS.md", import.meta.url))).text()
+      const list = text.match(/`--model cor-local\/<id>` \(([^)]*)\)/)?.[1] ?? ""
+      expect([...list.matchAll(/`([^`]+)`/g)].map((m) => m[1]).sort()).toEqual(ids)
+    })
+
     // Packet A3b (2026-09-05): baseURL/apiKey moved from the hardcoded
     // `http://127.0.0.1:18082/v1` / no-key pair to `{env:...}` substitution
     // so a MacBook can reach the router over tailnet with one key, without
@@ -213,7 +228,7 @@ describe("model whitelist stays consistent across its copies", () => {
     // edit on glm53-flash consumed 62% of the 64k window; all three GGUFs
     // have native context >= 262144 and the KV fits the coding budget).
     // 2026-11-06: the EVO-X2 router runs `-c 262144 -np 2` without kv-unified, so one request gets
-    // 262144 / 2 = 131072 (the Mac router had the same split while this said 262144). The ai-cluster
+    // 262144 / 2 = 131072 (the Mac router had the same split from 2026-09-13, ai-cluster #385, while this said 262144). The ai-cluster
     // generator (scripts/cluster-ops/evo_router.py) emits this value from config/llama-router/evo1-router.yaml.
     for (const id of ids) {
       test(`${id}: limit.context is 131072 (router -c / -np) and limit.output is 16384 in both copies`, () => {
