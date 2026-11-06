@@ -133,7 +133,9 @@ if (/\.cjs$/i.test(target)) delete childEnv.OPENCODE_BIN_PATH
 
 const [command, ...args] = cliCommand(
   target,
-  process.env.OPENCODE_GUARDRAILS_ALLOW_SERVICE === "1" ? process.argv.slice(2) : withStandalone(process.argv.slice(2)),
+  process.env.OPENCODE_GUARDRAILS_ALLOW_SERVICE === "1"
+    ? process.argv.slice(2)
+    : withStandalone(process.argv.slice(2), { binary: target, env: childEnv }),
 )
 const out = spawnSync(command, args, {
   stdio: "inherit",
