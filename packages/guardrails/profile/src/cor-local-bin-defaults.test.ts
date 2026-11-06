@@ -42,10 +42,10 @@ function withTmpDir<T>(prefix: string, fn: (dir: string) => T): T {
   }
 }
 
-// On Windows each keyPermissions call starts Windows PowerShell (Set-Acl), and the code under test starts it again for
-// the production ACL probe. The first cold start alone took 3.4-5 s on the windows runner (5,019 ms timeout on dev
-// 98256dbc89, run 41999813160), past bun's 5 s default; elsewhere these tests take milliseconds.
-const POWERSHELL = 30_000
+// On Windows each keyPermissions call starts Windows PowerShell (Set-Acl), and most of these tests start it again through
+// the production ACL probe. The first test's two starts took 3.2-6.0 s on the windows runner and passed bun's 5 s default
+// in 5 of 17 runs (dev 98256dbc89, run 41999813160); later cold starts reached 3.4 s. Elsewhere these take milliseconds.
+const POWERSHELL_TIMEOUT = 30_000
 
 // Windows chmod does not set a private DACL: create the actual ACL used by the production probe.
 function keyPermissions(filePath: string, mode: number) {
@@ -73,13 +73,14 @@ Set-Acl -LiteralPath $env:OPENCODE_COR_LOCAL_TEST_PATH -AclObject $acl
         OPENCODE_COR_LOCAL_TEST_PUBLIC: mode === 0o600 ? "0" : "1",
       },
       encoding: "utf8",
-      timeout: 5_000,
+      // a cold start can take seconds; the test's POWERSHELL_TIMEOUT is the budget (helper 20 s + probe 5 s + node)
+      timeout: 20_000,
       windowsHide: true,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     },
   )
-  expect(result.status, result.stderr).toBe(0)
+  expect(result.status, `${result.signal ?? ""} ${result.stderr}`).toBe(0)
 }
 
 describe("cor-local-env.js: Windows key-file ACL policy", () => {
@@ -142,7 +143,7 @@ describe("cor-local-env.js: key file validation", () => {
         expect(warnings[0]).toBe("cor-local: key file ignored (invalid format)")
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 
   test(
@@ -157,7 +158,7 @@ describe("cor-local-env.js: key file validation", () => {
         expect(key).toBeUndefined()
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 
   test(
@@ -172,7 +173,7 @@ describe("cor-local-env.js: key file validation", () => {
         expect(key).toBeUndefined()
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 
   test(
@@ -187,7 +188,7 @@ describe("cor-local-env.js: key file validation", () => {
         expect(key).toBe("sk-good-value123")
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 
   test("missing key file: COR_LOCAL_API_KEY stays unset, base URL still defaults", () => {
@@ -212,7 +213,7 @@ describe("cor-local-env.js: key file validation", () => {
         expect(env.COR_LOCAL_API_KEY).toBe("sk-applied-value")
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 
   test(
@@ -228,7 +229,7 @@ describe("cor-local-env.js: key file validation", () => {
         expect(env.COR_LOCAL_API_KEY).toBe("caller-value")
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 })
 
@@ -302,6 +303,6 @@ describe("bin/opencode-guardrails: real entry point ordering (subprocess, offlin
         })
       })
     },
-    POWERSHELL,
+    POWERSHELL_TIMEOUT,
   )
 })
