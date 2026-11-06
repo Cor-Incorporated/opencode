@@ -43,8 +43,8 @@ function withTmpDir<T>(prefix: string, fn: (dir: string) => T): T {
 }
 
 // On Windows each keyPermissions call starts Windows PowerShell (Set-Acl), and most of these tests start it again through
-// the production ACL probe. The first test's two starts took 3.2-6.0 s on the windows runner and passed bun's 5 s default
-// in 5 of 17 runs (dev 98256dbc89, run 41999813160); later cold starts reached 3.4 s. Elsewhere these take milliseconds.
+// the production ACL probe. The first test's two starts took 3.2-6.0 s on the windows runner and exceeded bun's 5 s
+// default in 5 of 17 runs (dev 98256dbc89, run 41999813160); the next test took up to 3.4 s. Elsewhere: milliseconds.
 const POWERSHELL_TIMEOUT = 30_000
 
 // Windows chmod does not set a private DACL: create the actual ACL used by the production probe.
