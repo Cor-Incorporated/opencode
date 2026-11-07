@@ -109,7 +109,7 @@ describe("cor-local-env.js: Windows key-file ACL policy", () => {
 })
 
 describe("cor-local-env.js: COR_LOCAL_BASE_URL defaulting", () => {
-  test("(a) unset -> defaults to the Mac Studio router", () => {
+  test("(a) unset -> defaults to the loopback router address", () => {
     const env: Record<string, string> = { COR_LOCAL_API_KEY: "test-key-no-file-read" }
     applyCorLocalDefaults(env, { warn: () => {} })
     expect(env.COR_LOCAL_BASE_URL).toBe("http://127.0.0.1:18082/v1")
@@ -117,11 +117,11 @@ describe("cor-local-env.js: COR_LOCAL_BASE_URL defaulting", () => {
 
   test("(b) already set -> caller's value is never overridden", () => {
     const env: Record<string, string> = {
-      COR_LOCAL_BASE_URL: "http://mac-studio.tailb30e58.ts.net:18082/v1",
+      COR_LOCAL_BASE_URL: "http://100.91.85.86:18082/v1",
       COR_LOCAL_API_KEY: "test-key-no-file-read",
     }
     applyCorLocalDefaults(env, { warn: () => {} })
-    expect(env.COR_LOCAL_BASE_URL).toBe("http://mac-studio.tailb30e58.ts.net:18082/v1")
+    expect(env.COR_LOCAL_BASE_URL).toBe("http://100.91.85.86:18082/v1")
   })
 })
 

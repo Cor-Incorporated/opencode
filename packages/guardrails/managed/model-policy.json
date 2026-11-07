@@ -497,8 +497,8 @@
     },
     "cor-local": {
       "whitelist": [
-        "deepseek-v4-flash-0731",
-        "glm53-flash",
+        "ornith-1.5-35b-a3b",
+        "qwen3.6-35b-a3b",
         "qwen3.8-27b"
       ]
     },

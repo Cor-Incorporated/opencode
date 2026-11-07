@@ -215,9 +215,11 @@ helper behavior is covered by `profile/src/zai-auth-bin-defaults.test.ts`.
 
 ## cor-local (ローカル lane)
 
-`cor-local` is an opt-in provider for a local `llama-server` router exposing an OpenAI-compatible endpoint, normally
-`http://127.0.0.1:18082/v1`. Both runtime files use `@opencode/ai/providers/openai-compatible` with the same model
-settings. It does not change the default model (`zai-coding-plan/glm-5.3`).
+`cor-local` is an opt-in provider for the company's `llama-server` router exposing an OpenAI-compatible endpoint, today
+`http://100.91.85.86:18082/v1` on EVO-X2 (`evo-x2`, Tailscale only, key required). Set `COR_LOCAL_BASE_URL` to that
+address: the loopback default `http://127.0.0.1:18082/v1` (below) reaches no router on any machine today. Both runtime
+files use `@opencode/ai/providers/openai-compatible` with the same model settings. It does not change the default model
+(`zai-coding-plan/glm-5.3`).
 
 ### baseURL / apiKey (env vars)
 
@@ -229,40 +231,40 @@ router address and authentication stay outside the repository.
 - `COR_LOCAL_BASE_URL` defaults to `http://127.0.0.1:18082/v1` when unset or empty. A project `.env` (loaded earlier in the entry point) or an exported shell value both win over this default.
 - `COR_LOCAL_API_KEY`, when unset or empty, is read from a key file: `COR_LOCAL_KEY_FILE` if set, else `~/cluster-ops/cor-local.key`. The file must be owner-only permissions (`chmod 600`) and contain exactly one line matching `[A-Za-z0-9._~+/=-]+` — because `{env:VAR}` splices raw, unescaped bytes into the JSON config text (unlike `{file:...}`, which is `JSON.stringify`-escaped), a key containing `"`, `\`, or a newline would corrupt the whole config and take down every provider, not just cor-local. A file that fails validation is ignored with `cor-local: key file ignored (invalid format)` on stderr — the warning never includes the file's contents.
 
-`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so a keyless router (today's state — see ai-cluster packet A3a for the `--api-key` rollout) keeps working with `apiKey` resolving to `""`. This defaulting is covered by `packages/guardrails/profile/src/cor-local-bin-defaults.test.ts`, which unit-tests `cor-local-env.js` directly and runs the real `bin/opencode-guardrails` entry point against a stub binary to prove the `.env`-vs-default ordering, offline.
+`@ai-sdk/openai-compatible` only adds an `Authorization: Bearer ...` header when `apiKey` is a non-empty string (`...options.apiKey && { Authorization: ... }`), so with `apiKey` resolving to `""` no header is sent. The EVO-X2 router requires the key (`--api-key-file`), so such requests are rejected; only a keyless router would accept them. This defaulting is covered by `packages/guardrails/profile/src/cor-local-bin-defaults.test.ts`, which unit-tests `cor-local-env.js` directly and runs the real `bin/opencode-guardrails` entry point against a stub binary to prove the `.env`-vs-default ordering, offline.
 
 **`opencode debug config` prints the resolved config, including the substituted `apiKey` — never paste its output into a GitHub issue or share it outside a private channel.**
 
 Key rotation: replace `~/cluster-ops/cor-local.key`'s contents (owner-only permissions) and every subsequent `opencode-guardrails` invocation picks up the new key — no redeploy needed. To point at a different file instead, set `COR_LOCAL_KEY_FILE=/path/to/key` before invoking.
 
-MacBook usage (once the router is reachable over tailnet — see ai-cluster packet A3a for the `tailscale serve` step):
+MacBook usage (the router runs on EVO-X2 `evo-x2`, bound to its Tailscale address only — ai-cluster ADR-0023,
+`docs/03-runbooks/evo-x2-shared-llm-router.md`; no `tailscale serve`):
 
 ```sh
-export COR_LOCAL_BASE_URL=http://mac-studio.tailb30e58.ts.net:18082/v1
-export COR_LOCAL_API_KEY=<key from 1Password — never paste it into chat>
+export COR_LOCAL_BASE_URL=http://100.91.85.86:18082/v1
 opencode run --model cor-local/qwen3.8-27b "..."
 ```
 
-On Mac Studio itself, no export is needed — `bin/opencode-guardrails`'s defaults already point at the local router and read the key from `~/cluster-ops/cor-local.key`, including under a managed deploy.
+No key export is needed: the key is read from `~/cluster-ops/cor-local.key` when `COR_LOCAL_API_KEY` is unset, including under a managed deploy. Do not type the key into a shell (it lands in the history). The Mac Studio router this lane used until 2026-10 is retired.
 
-Three model ids are whitelisted: `deepseek-v4-flash-0731`, `glm53-flash`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
+Three model ids are whitelisted: `ornith-1.5-35b-a3b`, `qwen3.6-35b-a3b`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
 
 Usage:
 
 ```sh
-opencode run --model cor-local/glm53-flash "..."
+opencode run --model cor-local/qwen3.6-35b-a3b "..."
 ```
 
 or, in a project `opencode.json`:
 
 ```json
-{ "model": "cor-local/glm53-flash" }
+{ "model": "cor-local/qwen3.6-35b-a3b" }
 ```
 
-Offline environment recipe (no network calls, no auto-update, no telemetry):
+Vendor-egress-free recipe (no model-vendor calls, no auto-update, no telemetry; requests still go over Tailscale to the EVO-X2 router):
 
 ```sh
-OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/glm53-flash "..."
+OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/qwen3.6-35b-a3b "..."
 ```
 
 `share` is already `disabled` in both guardrails profiles, so no extra flag is needed for that.
@@ -270,9 +272,9 @@ OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --mod
 Cold-start note: the router loads models on first request. `settings.headerTimeout` is 900000ms, `settings.timeout`
 is `false`, and `settings.chunkTimeout` is 120000ms, bounding stalled streams separately from cold loading.
 `compatibility.reasoningField` preserves `reasoning_content`; native `capabilities.reasoning` declares the effort
-controls. Context window is 262144 tokens and maximum output is 16384 tokens.
+controls. Context window is 131072 tokens per request and maximum output is 16384 tokens.
 
-`limit.context` (262144) must equal the router's `llama-server` launch flag `-c 262144` (ai-cluster repo, `config/llama-router/cor-local.ini.template`). They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both `qwen3.8-27b` and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins both to 262144.
+`limit.context` (131072) must equal one request's share of the router's context: `-c 262144` split over `-np 2` slots without kv-unified (ai-cluster repo, `config/llama-router/evo1-router.yaml`, rendered by `scripts/cluster-ops/evo_router.py`; its `evo1-router.clients.json` is the source of this block). Until 2026-11-06 this said 262144, although from 2026-09-13 (ai-cluster #389, requested in #385) the Mac Studio router (`config/llama-router/cor-local.ini.template`) also split 262144 over 2 slots. The block is copied from ai-cluster Cor-Incorporated/ai-cluster#614 (`evo1-router.clients.json`, unchanged since `e7b52063`); `scripts/cluster-ops/evo_router.py client-diff <this opencode.json>` there prints `no difference` when the two agree. They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both `qwen3.8-27b` and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins both to 131072.
 
 Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
 consistency check across the two admission policies and `paid` sets. These checks make no model requests.

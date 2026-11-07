@@ -169,17 +169,36 @@ describe("model whitelist stays consistent across its copies", () => {
     }
   })
 
-  // Packet P5: cor-local (llama-server router, Mac Studio, fully offline/opt-in).
+  // Packet P5: cor-local (llama-server router on EVO-X2 evo-x2 since 2026-11-06, ai-cluster ADR-0023;
+  // the Mac Studio router was retired 2026-10-12. Self-hosted, no model-vendor egress, opt-in).
   // These ids report cost 0 because the router is self-hosted, not because
   // they are a free tier -- pin the whitelist and the preview()/free() truth
   // table so a future edit cannot silently let denyFree block the local lane
   // or denyPreview reject these ids as previews.
   describe("cor-local (local llama-server router)", () => {
-    const ids = ["deepseek-v4-flash-0731", "glm53-flash", "qwen3.8-27b"]
+    const ids = ["ornith-1.5-35b-a3b", "qwen3.6-35b-a3b", "qwen3.8-27b"]
 
     test("whitelist is exactly the 3 local model ids in both copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
       expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
+    })
+
+    // The runtime model blocks must hold exactly the whitelisted ids: a leftover model in one copy would otherwise
+    // pass every other test here (they loop over `ids` only, and native-config.test.ts uses toMatchObject).
+    test("the runtime model set equals the whitelist in both copies", () => {
+      for (const config of [managed as Config, profile as Config]) {
+        expect(Object.keys(config.providers?.["cor-local"]?.models ?? {}).sort()).toEqual(ids)
+      }
+    })
+
+    // profile/AGENTS.md is loaded as `instructions`, so its id list reaches every session's system prompt.
+    test("AGENTS.md names exactly the whitelisted cor-local ids", async () => {
+      const text = await Bun.file(fileURLToPath(new URL("../AGENTS.md", import.meta.url))).text()
+      const list = text.match(/`--model cor-local\/<id>` \(([^)]*)\)/)?.[1] ?? ""
+      expect([...list.matchAll(/`([^`]+)`/g)].map((m) => m[1]).sort()).toEqual(ids)
+      // and no other `cor-local/<id>` anywhere in the file names an id the lane does not serve
+      const named = [...text.matchAll(/cor-local\/([A-Za-z0-9._-]+)/g)].map((m) => m[1])
+      expect(named.filter((id) => !ids.includes(id))).toEqual([])
     })
 
     // Packet A3b (2026-09-05): baseURL/apiKey moved from the hardcoded
@@ -211,14 +230,18 @@ describe("model whitelist stays consistent across its copies", () => {
     // 2026-09-07: the router moved again to `-c 262144` (a two-line config
     // edit on glm53-flash consumed 62% of the 64k window; all three GGUFs
     // have native context >= 262144 and the KV fits the coding budget).
+    // 2026-11-06: the EVO-X2 router runs `-c 262144 -np 2` without kv-unified, so one request gets
+    // 262144 / 2 = 131072 (the Mac router had the same split from 2026-09-13, ai-cluster #389 requested in #385,
+    // while this said 262144). The ai-cluster
+    // generator (scripts/cluster-ops/evo_router.py) emits this value from config/llama-router/evo1-router.yaml.
     for (const id of ids) {
-      test(`${id}: limit.context is 262144 (router -c) and limit.output is 16384 in both copies`, () => {
+      test(`${id}: limit.context is 131072 (router -c / -np) and limit.output is 16384 in both copies`, () => {
         expect(modelLimit(managed as Config, "cor-local", id)).toEqual({
-          context: 262144,
+          context: 131072,
           output: 16384,
         })
         expect(modelLimit(profile as Config, "cor-local", id)).toEqual({
-          context: 262144,
+          context: 131072,
           output: 16384,
         })
       })

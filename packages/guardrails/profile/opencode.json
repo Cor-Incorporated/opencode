@@ -66,7 +66,7 @@
     "deepseek": {},
     "openrouter": {},
     "cor-local": {
-      "name": "Cor local (llama-server router / Mac Studio)",
+      "name": "Cor local (EVO-X2 router)",
       "package": "@opencode/ai/providers/openai-compatible",
       "settings": {
         "baseURL": "{env:COR_LOCAL_BASE_URL}",
@@ -77,44 +77,44 @@
         "provider": "cor-local"
       },
       "models": {
-        "deepseek-v4-flash-0731": {
-          "name": "DeepSeek V4 Flash 0731 (local)",
-          "limit": {
-            "context": 262144,
-            "output": 16384
-          },
-          "compatibility": {
-            "reasoningField": "reasoning_content"
-          },
-          "capabilities": {
-            "tools": true,
-            "reasoning": {
-              "supported": true,
-              "effort": ["low", "medium", "high"]
-            }
-          }
-        },
-        "glm53-flash": {
-          "name": "GLM 5.3 Flash (local)",
-          "limit": {
-            "context": 262144,
-            "output": 16384
-          },
-          "compatibility": {
-            "reasoningField": "reasoning_content"
-          },
-          "capabilities": {
-            "tools": true,
-            "reasoning": {
-              "supported": true,
-              "effort": ["low", "medium", "high"]
-            }
-          }
-        },
         "qwen3.8-27b": {
-          "name": "Qwen3.8 27B (local)",
+          "name": "Qwen3.8 27B (EVO-X2)",
           "limit": {
-            "context": 262144,
+            "context": 131072,
+            "output": 16384
+          },
+          "compatibility": {
+            "reasoningField": "reasoning_content"
+          },
+          "capabilities": {
+            "tools": true,
+            "reasoning": {
+              "supported": true,
+              "effort": ["low", "medium", "high"]
+            }
+          }
+        },
+        "qwen3.6-35b-a3b": {
+          "name": "Qwen3.6 35B-A3B (EVO-X2)",
+          "limit": {
+            "context": 131072,
+            "output": 16384
+          },
+          "compatibility": {
+            "reasoningField": "reasoning_content"
+          },
+          "capabilities": {
+            "tools": true,
+            "reasoning": {
+              "supported": true,
+              "effort": ["low", "medium", "high"]
+            }
+          }
+        },
+        "ornith-1.5-35b-a3b": {
+          "name": "Ornith 1.5 35B-A3B (EVO-X2)",
+          "limit": {
+            "context": 131072,
             "output": 16384
           },
           "compatibility": {
