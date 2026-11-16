@@ -279,6 +279,18 @@ controls. Context window is 131072 tokens per request and maximum output is 1638
 Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
 consistency check across the two admission policies and `paid` sets. These checks make no model requests.
 
+## cor-evo2 (EVO-X2-2, FN-only lane — draft)
+
+`cor-evo2` is the draft second local lane, for the EVO-X2-2 router that ai-cluster ADR-0024 addendum 2 proposes to
+run FN-only (`--load-mode none`, `--models-max 1`). **It is not deployed yet**: the endpoint in
+`config/llama-router/evo2-router.clients.json` has no live router behind it, and this block moves with that file.
+`settings.baseURL` / `settings.apiKey` are `{env:COR_EVO2_BASE_URL}` / `{env:COR_EVO2_API_KEY}` substitutions, so
+the same MacBook setup used for `cor-local` applies once the router lands. One model is admitted:
+`qwen3.8-flash-next-ud-iq4xs` (`limit.context` 32768, `limit.output` 16384). `paid["cor-evo2"]` classifies it as
+self-hosted, not a free tier, so `denyFree` does not block it. Verify the block against the generator with
+`scripts/cluster-ops/evo_router.py client-diff <opencode.json> --node evo2` in the ai-cluster repo (`no difference`
+means they agree). Do not select this lane for production work until the router is deployed by a human.
+
 ## cor-os (Cor OS router lane)
 
 `cor-os` reaches the Cor OS router at `https://llm.cor-jp.com/v1` (OpenAI-compatible, behind Cloudflare Access / Tunnel). The router checks the requested model name against what it publishes, so `cor-local` cannot be pointed at it: the guardrail admits only cor-local's three llama-server ids and the router answers `model_not_found` for them. The model definitions come from the ai-cluster repo (`ops/opencode-pi/cor-os-models.json`); in 2.x the block is the native `providers["cor-os"]` entry in both `managed/opencode.json` and `profile/opencode.json`, `provider.use` allows it in their `policies`, and both `model-policy.json` copies admit its ids. `profile/src/cor-os-router-lane.test.ts` pins all of them and runs the block through the real normalizer.

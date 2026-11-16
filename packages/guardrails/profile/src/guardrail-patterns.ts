@@ -78,6 +78,8 @@ export const paid: Record<string, Set<string>> = {
     "glm-5.3-highspeed",
     "glm-5v-turbo",
   ]),
+  // cor-evo2 (EVO-X2-2, FN-only router, ai-cluster ADR-0024) is self-hosted: cost 0 is not a free tier.
+  "cor-evo2": new Set(["qwen3.8-flash-next-ud-iq4xs"]),
   openai: new Set([
     "chat-latest",
     "gpt-4",

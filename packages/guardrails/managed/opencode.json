@@ -37,6 +37,11 @@
     },
     {
       "action": "provider.use",
+      "resource": "cor-evo2",
+      "effect": "allow"
+    },
+    {
+      "action": "provider.use",
       "resource": "cor-os",
       "effect": "allow"
     }
@@ -106,6 +111,37 @@
           "name": "Ornith 1.5 35B-A3B (EVO-X2)",
           "limit": {
             "context": 131072,
+            "output": 16384
+          },
+          "compatibility": {
+            "reasoningField": "reasoning_content"
+          },
+          "capabilities": {
+            "tools": true,
+            "reasoning": {
+              "supported": true,
+              "effort": ["low", "medium", "high"]
+            }
+          }
+        }
+      }
+    },
+    "cor-evo2": {
+      "name": "Cor local (EVO-X2-2 router)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "{env:COR_EVO2_BASE_URL}",
+        "apiKey": "{env:COR_EVO2_API_KEY}",
+        "headerTimeout": 900000,
+        "timeout": false,
+        "chunkTimeout": 120000,
+        "provider": "cor-evo2"
+      },
+      "models": {
+        "qwen3.8-flash-next-ud-iq4xs": {
+          "name": "Qwen3.8 Flash Next (EVO-X2-2)",
+          "limit": {
+            "context": 32768,
             "output": 16384
           },
           "compatibility": {

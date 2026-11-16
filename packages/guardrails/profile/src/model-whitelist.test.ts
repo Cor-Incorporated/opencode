@@ -263,4 +263,41 @@ describe("model whitelist stays consistent across its copies", () => {
       })
     }
   })
+
+  // EVO-X2-2 (FN-only router, ai-cluster ADR-0024 addendum 2, draft PR). The
+  // block is copied from ai-cluster `evo2-router.clients.json`; `evo_router.py
+  // client-diff <opencode.json> --node evo2` prints `no difference` when the two
+  // agree. The router is not deployed yet — the draft PR says so.
+  describe("cor-evo2 (EVO-X2-2 FN-only router)", () => {
+    const ids = ["qwen3.8-flash-next-ud-iq4xs"]
+
+    test("whitelist is exactly the 1 local model id in both copies", () => {
+      expect(whitelist(managed as Config, "cor-evo2")).toEqual(ids)
+      expect(whitelist(profile as Config, "cor-evo2")).toEqual(ids)
+    })
+
+    test("the runtime model set equals the whitelist in both copies", () => {
+      for (const config of [managed as Config, profile as Config]) {
+        expect(Object.keys(config.providers?.["cor-evo2"]?.models ?? {}).sort()).toEqual(ids)
+      }
+    })
+
+    test("baseURL/apiKey are EVO2 {env:...} substitutions in both copies", () => {
+      for (const config of [managed as Config, profile as Config]) {
+        const options = providerOptions(config, "cor-evo2")
+        expect(options.baseURL).toBe("{env:COR_EVO2_BASE_URL}")
+        expect(options.apiKey).toBe("{env:COR_EVO2_API_KEY}")
+      }
+    })
+
+    test("limit.context is 32768 (router -c 32768, one slot) in both copies", () => {
+      for (const config of [managed as Config, profile as Config]) {
+        expect(modelLimit(config, "cor-evo2", ids[0])).toEqual({ context: 32768, output: 16384 })
+      }
+    })
+
+    test("paid[cor-evo2] classifies the self-hosted id", () => {
+      expect(paid["cor-evo2"].has(ids[0])).toBe(true)
+    })
+  })
 })

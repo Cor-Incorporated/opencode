@@ -23,6 +23,13 @@ describe("packaged 2.x provider configuration", () => {
               "glm-5.3-highspeed": { disabled: true },
             },
           },
+          "cor-evo2": {
+            package: "@opencode/ai/providers/openai-compatible",
+            settings: { baseURL: "{env:COR_EVO2_BASE_URL}", apiKey: "{env:COR_EVO2_API_KEY}", provider: "cor-evo2" },
+            models: {
+              "qwen3.8-flash-next-ud-iq4xs": { capabilities: { reasoning: { supported: true } } },
+            },
+          },
           "cor-local": {
             package: "@opencode/ai/providers/openai-compatible",
             settings: { baseURL: "{env:COR_LOCAL_BASE_URL}", apiKey: "{env:COR_LOCAL_API_KEY}", provider: "cor-local" },

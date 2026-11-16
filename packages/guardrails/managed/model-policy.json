@@ -502,6 +502,9 @@
         "qwen3.8-27b"
       ]
     },
+    "cor-evo2": {
+      "whitelist": ["qwen3.8-flash-next-ud-iq4xs"]
+    },
     "cor-os": {
       "whitelist": [
         "cor-qwen3.6-35b",
