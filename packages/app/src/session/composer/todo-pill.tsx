@@ -1,5 +1,6 @@
 import { Popover } from "@kobalte/core/popover"
 import { Badge } from "@opencode/ui/badge"
+import { MenuScroll } from "@opencode/ui/menu-scroll"
 import { createEffect, createMemo, For, Match, on, Show, Switch } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -43,7 +44,9 @@ export function SessionTodoPill(props: { todos: readonly Todo[]; defaultOpen?: b
           <Show when={current()}>
             {(todo) => (
               <>
-                <TodoGlyph status={todo().status} />
+                <span data-composer-pill-icon class="flex size-4 shrink-0 items-center justify-center">
+                  <TodoGlyph status={todo().status} />
+                </span>
                 <span dir="auto" class="min-w-0 max-w-[260px] truncate">
                   {todo().content}
                 </span>
@@ -75,17 +78,17 @@ function TodoList(props: { todos: readonly Todo[] }) {
       () => props.todos.findIndex((todo) => todo.status === "in_progress"),
       (index) => {
         if (index < 0 || !list) return
-        list.children[index]?.scrollIntoView({ block: "nearest" })
+        list.querySelectorAll('[data-slot="session-todo-row"]')[index]?.scrollIntoView({ block: "nearest" })
       },
     ),
   )
 
   return (
-    <div
-      ref={list}
+    <MenuScroll
       data-slot="session-todo-list"
-      data-scrollable
-      class="flex max-h-[232px] flex-col overflow-y-auto p-1"
+      class="max-h-[232px]"
+      viewportClass="p-1"
+      viewportRef={(element) => (list = element)}
     >
       <For each={props.todos}>
         {(todo) => (
@@ -107,7 +110,7 @@ function TodoList(props: { todos: readonly Todo[] }) {
           </div>
         )}
       </For>
-    </div>
+    </MenuScroll>
   )
 }
 

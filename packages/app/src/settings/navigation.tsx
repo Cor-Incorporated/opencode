@@ -38,12 +38,11 @@ export function SettingsNavigation(props: {
   const language = useLanguage()
 
   const back = () => {
-    if (!searchable() && surface.search.back()) return
+    if (surface.search.canReturn()) return surface.search.back()
     props.onBack()
   }
 
-  const backLabel = () =>
-    !searchable() && surface.search.state.selected ? language.t("settings.backToSettings") : props.backLabel
+  const backLabel = () => (surface.search.canReturn() ? language.t("settings.backToSettings") : props.backLabel)
 
   const current = () => props.groups.flatMap((group) => group.items).find((item) => item.value === props.value)
 
@@ -73,7 +72,7 @@ export function SettingsNavigation(props: {
               like the session header, so the back button centers on the collapsed sidebar toggle's line. */}
           <CollapsedSidebarToggleSpace start={24} class="h-8" />
           <button type="button" class="settings-back" onClick={back}>
-            <Icon name="arrow-left" size="small" class="settings-back-icon" />
+            <Icon name="arrow-left" class="settings-back-icon" />
             <span>{backLabel()}</span>
           </button>
         </div>
@@ -82,7 +81,7 @@ export function SettingsNavigation(props: {
           <Menu placement="bottom-end" gutter={8}>
             <Menu.Trigger as={Button} size="normal" variant="outline" class="settings-mobile-menu-trigger">
               <span>{current()?.label}</span>
-              <Icon name="chevron-down" size="small" />
+              <Icon name="chevron-down" />
             </Menu.Trigger>
             <Menu.Portal>
               <Menu.Content class="settings-mobile-menu" onEscapeKeyDown={(event) => event.stopPropagation()}>
@@ -122,13 +121,13 @@ export function SettingsNavigation(props: {
       <aside class="settings-sidebar" data-searchable={searchable()}>
         <div class="settings-nav">
           <button type="button" class="settings-back" onClick={back}>
-            <Icon name="arrow-left" size="small" class="settings-back-icon" />
+            <Icon name="arrow-left" class="settings-back-icon" />
             <span>{backLabel()}</span>
           </button>
           <Show when={searchable()}>
             <SettingsSearch />
           </Show>
-          <Show when={!searchable() || !surface.search.state.query.trim()}>
+          <Show when={!searchable() || !surface.search.active()}>
             <Tabs.List class="settings-nav-groups" data-scrollable>
               <For each={props.groups}>
                 {(group) => (
