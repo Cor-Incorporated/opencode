@@ -190,7 +190,7 @@ export const paid: Record<string, Set<string>> = {
   // cor-local: self-hosted llama-server router (EVO-X2 evo-x2, ai-cluster ADR-0023). Cost is always 0 (no
   // billing), but these are not free-tier models — list them here so free() stays
   // false and denyFree does not block the opt-in local lane.
-  "cor-local": new Set(["ornith-1.5-35b-a3b", "qwen3.6-35b-a3b", "qwen3.8-27b"]),
+  "cor-local": new Set(["flint-40b-a2.5b-abliterated", "gemma4-26b-a4b-unc", "qwen3.8-27b-unc", "qwen3.8-flash-next"]),
   // cor-os: the Cor OS router (llm.cor-jp.com), self-hosted behind a Bearer token. No cost is declared; listing the
   // public aliases keeps free() false even if a catalog lookup ever reports a zero cost.
   "cor-os": new Set(["cor-qwen3.6-35b", "gemma4-12b"]),

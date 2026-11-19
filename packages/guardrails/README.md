@@ -242,29 +242,29 @@ MacBook usage (the router runs on EVO-X2 `evo-x2`, bound to its Tailscale addres
 
 ```sh
 export COR_LOCAL_BASE_URL=http://100.91.85.86:18082/v1
-opencode run --model cor-local/qwen3.8-27b "..."
+opencode run --model cor-local/qwen3.8-27b-unc "..."
 ```
 
 No key export is needed: the key is read from `~/cluster-ops/cor-local.key` when `COR_LOCAL_API_KEY` is unset, including under a managed deploy. Do not type the key into a shell (it lands in the history). The Mac Studio router this lane used until 2026-10 is retired.
 
-Three model ids are whitelisted: `ornith-1.5-35b-a3b`, `qwen3.6-35b-a3b`, `qwen3.8-27b`. All three report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the three ids trip either check.
+Four model ids are whitelisted: `flint-40b-a2.5b-abliterated`, `gemma4-26b-a4b-unc`, `qwen3.8-27b-unc`, `qwen3.8-flash-next`. All four report cost 0 (self-hosted, no billing) but are classified in `profile/src/guardrail-patterns.ts`'s `paid["cor-local"]` set so the `denyFree` guardrail does not mistake "no cost" for "free tier" and block them. `denyPreview` first checks `status !== "active"` (config-defined models default to `active`, see `provider.ts`'s config-provider merge) and only then tests the id against `/(preview|alpha|beta|exp|experimental|:free\b|\bfree\b)/i` — none of the four ids trip either check.
 
 Usage:
 
 ```sh
-opencode run --model cor-local/qwen3.6-35b-a3b "..."
+opencode run --model cor-local/qwen3.8-27b-unc "..."
 ```
 
 or, in a project `opencode.json`:
 
 ```json
-{ "model": "cor-local/qwen3.6-35b-a3b" }
+{ "model": "cor-local/qwen3.8-27b-unc" }
 ```
 
 Vendor-egress-free recipe (no model-vendor calls, no auto-update, no telemetry; requests still go over Tailscale to the EVO-X2 router):
 
 ```sh
-OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/qwen3.6-35b-a3b "..."
+OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --model cor-local/qwen3.8-27b-unc "..."
 ```
 
 `share` is already `disabled` in both guardrails profiles, so no extra flag is needed for that.
@@ -272,16 +272,16 @@ OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --mod
 Cold-start note: the router loads models on first request. `settings.headerTimeout` is 900000ms, `settings.timeout`
 is `false`, and `settings.chunkTimeout` is 120000ms, bounding stalled streams separately from cold loading.
 `compatibility.reasoningField` preserves `reasoning_content`; native `capabilities.reasoning` declares the effort
-controls. Context window is 131072 tokens per request and maximum output is 16384 tokens.
+controls. Context window is 131072 tokens per request for three of the four ids (32768 for `qwen3.8-flash-next`) and maximum output is 16384 tokens.
 
-`limit.context` (131072) must equal one request's share of the router's context: `-c 262144` split over `-np 2` slots without kv-unified (ai-cluster repo, `config/llama-router/evo1-router.yaml`, rendered by `scripts/cluster-ops/evo_router.py`; its `evo1-router.clients.json` is the source of this block). Until 2026-11-06 this said 262144, although from 2026-09-13 (ai-cluster #389, requested in #385) the Mac Studio router (`config/llama-router/cor-local.ini.template`) also split 262144 over 2 slots. The block is copied from ai-cluster Cor-Incorporated/ai-cluster#614 (`evo1-router.clients.json`, unchanged since `e7b52063`); `scripts/cluster-ops/evo_router.py client-diff <this opencode.json>` there prints `no difference` when the two agree. They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both `qwen3.8-27b` and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins both to 131072.
+`limit.context` must equal one request's share of the router's context: 131072 for three of the four ids (`-c 262144` split over `-np 2` slots without kv-unified) and 32768 for `qwen3.8-flash-next` (ai-cluster repo, `config/llama-router/evo1-router.yaml`, rendered by `scripts/cluster-ops/evo_router.py`; its `evo1-router.clients.json` is the source of this block). Until 2026-11-06 this said 262144, although from 2026-09-13 (ai-cluster #389, requested in #385) the Mac Studio router (`config/llama-router/cor-local.ini.template`) also split 262144 over 2 slots. The block is copied from ai-cluster Cor-Incorporated/ai-cluster#614 (`evo1-router.clients.json`, unchanged since `e7b52063`); `scripts/cluster-ops/evo_router.py client-diff <this opencode.json>` there prints `no difference` when the two agree. They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both the Qwen3.8 27B lane and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins the values in both copies.
 
 Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
 consistency check across the two admission policies and `paid` sets. These checks make no model requests.
 
 ## cor-os (Cor OS router lane)
 
-`cor-os` reaches the Cor OS router at `https://llm.cor-jp.com/v1` (OpenAI-compatible, behind Cloudflare Access / Tunnel). The router checks the requested model name against what it publishes, so `cor-local` cannot be pointed at it: the guardrail admits only cor-local's three llama-server ids and the router answers `model_not_found` for them. The model definitions come from the ai-cluster repo (`ops/opencode-pi/cor-os-models.json`); in 2.x the block is the native `providers["cor-os"]` entry in both `managed/opencode.json` and `profile/opencode.json`, `provider.use` allows it in their `policies`, and both `model-policy.json` copies admit its ids. `profile/src/cor-os-router-lane.test.ts` pins all of them and runs the block through the real normalizer.
+`cor-os` reaches the Cor OS router at `https://llm.cor-jp.com/v1` (OpenAI-compatible, behind Cloudflare Access / Tunnel). The router checks the requested model name against what it publishes, so `cor-local` cannot be pointed at it: the guardrail admits only cor-local's four llama-server ids and the router answers `model_not_found` for them. The model definitions come from the ai-cluster repo (`ops/opencode-pi/cor-os-models.json`); in 2.x the block is the native `providers["cor-os"]` entry in both `managed/opencode.json` and `profile/opencode.json`, `provider.use` allows it in their `policies`, and both `model-policy.json` copies admit its ids. `profile/src/cor-os-router-lane.test.ts` pins all of them and runs the block through the real normalizer.
 
 - `settings.apiKey` is `{env:COR_OS_LLM_TOKEN_NEXT}` (the router's Bearer; the owner keeps it in Bitwarden as `env/common/COR_OS_LLM_TOKEN_NEXT` and exports it with `eval "$(~/Developer/bin/bwenv env COR_OS_LLM_TOKEN_NEXT)"`). Unset, the substitution is "" and the 2.x resolver drops the empty key (core `model-resolver.ts` `prepareRuntimeModel`), so no token is sent; whether the request then fails locally or reaches the router unauthenticated has not been measured.
 - Two public aliases are admitted: `cor-qwen3.6-35b` and `gemma4-12b` (cor-os `a43df4e`; which of them production publishes is confirmed with ai-cluster `ops/opencode-pi/verify_router.py`). Both are in `paid["cor-os"]` for the same reason as cor-local.
