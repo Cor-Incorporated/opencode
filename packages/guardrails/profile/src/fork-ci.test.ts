@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import path from "node:path"
 
 const root = path.resolve(import.meta.dir, "../../../..")
@@ -11,10 +11,7 @@ type Job = {
   "runs-on"?: string
   if?: string
   strategy?: {
-    matrix?: {
-      settings?: string | { name: string; host: string }[]
-      os?: string[]
-    }
+    matrix?: Record<string, unknown>
   }
   steps?: {
     name?: string
@@ -27,24 +24,28 @@ type Job = {
   }[]
 }
 
+type Workflow = { on?: unknown; jobs: Record<string, Job> }
+
 function workflow(...names: string[]) {
   const name = names.find((name) => existsSync(path.join(directory, name)))
   if (!name) throw new Error(`Missing workflow: ${names.join(" / ")}`)
-  return Bun.YAML.parse(readFileSync(path.join(directory, name), "utf8")) as { jobs: Record<string, Job> }
+  return Bun.YAML.parse(readFileSync(path.join(directory, name), "utf8")) as Workflow
 }
 
 // These workflow expressions use the shared JavaScript/GitHub subset: property access, strings, ==, && and ||.
 // Evaluate the actual YAML expressions, not a second runner-selection implementation.
 function evaluate(
-  value: string | number | undefined,
+  value: unknown,
   repository: string,
   name = "linux",
   event = "push",
   base = "",
   inputs: Record<string, boolean> = { quarantine: false, release_gate: false },
+  matrix: Record<string, unknown> = {},
 ): unknown {
   if (value === undefined) return true
   if (typeof value === "number") return value
+  if (typeof value !== "string") return value
   if (!value.includes("${{") && !value.includes("github.")) return value
   const expression = value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
   return new Function("github", "matrix", "steps", "inputs", "fromJSON", "cancelled", `return (${expression})`)(
@@ -54,12 +55,68 @@ function evaluate(
       ref: "refs/heads/dev",
       event: { pull_request: { draft: false } },
     },
-    { settings: { name, host: `blacksmith-4vcpu-${name === "windows" ? "windows-2025" : "ubuntu-2404"}` } },
+    { settings: { name, host: `blacksmith-4vcpu-${name === "windows" ? "windows-2025" : "ubuntu-2404"}` }, ...matrix },
     { lint_base: { outputs: { base } } },
     inputs,
     JSON.parse,
     () => false,
   )
+}
+
+// A push reaches this repository on dev. Tag-only pushes and other branches do not run the fork's checks.
+function triggers(config: Workflow, event: "pull_request" | "push") {
+  const on = config.on
+  if (typeof on === "string") return on === event
+  if (Array.isArray(on)) return on.includes(event)
+  if (!on || typeof on !== "object") return false
+  const value = (on as Record<string, unknown>)[event]
+  if (!(event in (on as Record<string, unknown>))) return false
+  if (event === "pull_request") return true
+  if (value === null || value === undefined) return true
+  if (typeof value !== "object" || Array.isArray(value)) return true
+  const push = value as Record<string, unknown>
+  if (push.branches !== undefined) return Array.isArray(push.branches) && push.branches.includes("dev")
+  return push.tags === undefined
+}
+
+// Expand the matrix the way GitHub does for these workflows: every axis value, plus explicit include rows.
+function matrixRows(matrix: unknown, repository: string, event: string): Record<string, unknown>[] {
+  if (!matrix || typeof matrix !== "object" || Array.isArray(matrix)) return [{}]
+  const entries = Object.entries(matrix as Record<string, unknown>).filter(([key]) => key !== "include" && key !== "exclude")
+  const rows = entries.reduce<Record<string, unknown>[]>(
+    (rows, [key, value]) =>
+      rows.flatMap((row) =>
+        (Array.isArray(value) ? value : [value]).map((item) => ({
+          ...row,
+          [key]: typeof item === "string" ? evaluate(item, repository, "linux", event) : item,
+        })),
+      ),
+    [{}],
+  )
+  const include = (matrix as Record<string, unknown>).include
+  if (Array.isArray(include)) {
+    for (const entry of include) {
+      if (!entry || typeof entry !== "object") continue
+      rows.push(
+        Object.fromEntries(
+          Object.entries(entry).map(([key, value]) => [
+            key,
+            typeof value === "string" ? evaluate(value, repository, "linux", event) : value,
+          ]),
+        ),
+      )
+    }
+  }
+  return rows
+}
+
+function runsInFork(job: Job, event: string, matrix: Record<string, unknown>) {
+  try {
+    return evaluate(job.if, fork, "linux", event, "", undefined, matrix) !== false
+  } catch {
+    // An expression the evaluator does not model (for example needs.*) cannot prove the job is skipped.
+    return true
+  }
 }
 
 describe("fork CI runner eligibility", () => {
@@ -117,6 +174,32 @@ describe("fork CI runner eligibility", () => {
     expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request", sha)).toBe(sha)
     expect(evaluate(lint?.env?.LINT_BASE, upstream, "linux", "pull_request", sha)).toBe("HEAD^1")
     expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request")).toBe("")
+  })
+})
+
+describe("fork workflow runners", () => {
+  test("no job that runs on a fork pull request or dev push waits for an upstream runner", () => {
+    const violations: string[] = []
+    const files = readdirSync(directory)
+      .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+      .sort()
+    for (const file of files) {
+      const config = Bun.YAML.parse(readFileSync(path.join(directory, file), "utf8")) as Workflow
+      for (const event of ["pull_request", "push"] as const) {
+        if (!triggers(config, event)) continue
+        for (const [id, job] of Object.entries(config.jobs ?? {})) {
+          if (!job || typeof job !== "object" || job["runs-on"] === undefined) continue
+          for (const matrix of matrixRows(job.strategy?.matrix, fork, event)) {
+            if (!runsInFork(job, event, matrix)) continue
+            const runner = evaluate(job["runs-on"], fork, "linux", event, "", undefined, matrix)
+            for (const name of Array.isArray(runner) ? runner : [runner]) {
+              if (typeof name === "string" && name.startsWith("blacksmith")) violations.push(`${file} / ${id} / ${name}`)
+            }
+          }
+        }
+      }
+    }
+    expect([...new Set(violations)].sort()).toEqual([])
   })
 })
 

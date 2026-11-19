@@ -9,6 +9,10 @@ GitHub 標準の `ubuntu-24.04` / `windows-2025` を使う。Linux と Windows �
 affected 判定、browser test、集約 check を省略しない。公開リポジトリの標準 runner が対象で、
 larger runner、新サービス、追加 secret は使用しない。
 
+macOS も同じ規則で、上流では `blacksmith-6vcpu-macos-15`、fork では標準の `macos-15` を使う。
+この置き換えは `check-docs.yml` の docs build、`check-process-daemon.yml` の Core matrix、
+`release-process-daemon.yml` の build matrix にも適用し、job・step・command・matrix の行は変えない。
+
 標準 runner の clean 環境には `rg` がない場合がある。core のテストは意図しない HTTP 呼び出しを
 拒否するため、通常実行時の自動ダウンロードには依存できない。unit job で既存 runtime と同じ
 ripgrep 15.1.0 を公式 release から取得し、公式の SHA-256 を固定して照合してから PATH へ追加する。
