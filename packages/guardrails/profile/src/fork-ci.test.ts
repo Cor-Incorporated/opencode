@@ -10,6 +10,12 @@ const fork = "Cor-Incorporated/opencode"
 type Job = {
   "runs-on"?: string
   if?: string
+  strategy?: {
+    matrix?: {
+      settings?: string | { name: string; host: string }[]
+      os?: string[]
+    }
+  }
   steps?: {
     name?: string
     id?: string
@@ -29,16 +35,31 @@ function workflow(...names: string[]) {
 
 // These workflow expressions use the shared JavaScript/GitHub subset: property access, strings, ==, && and ||.
 // Evaluate the actual YAML expressions, not a second runner-selection implementation.
-function evaluate(value: string | number | undefined, repository: string, name = "linux", event = "push", base = "") {
+function evaluate(
+  value: string | number | undefined,
+  repository: string,
+  name = "linux",
+  event = "push",
+  base = "",
+  inputs: Record<string, boolean> = { quarantine: false, release_gate: false },
+): unknown {
   if (value === undefined) return true
   if (typeof value === "number") return value
   if (!value.includes("${{") && !value.includes("github.")) return value
   const expression = value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-  return new Function("github", "matrix", "steps", `return (${expression})`)(
-    { repository, event_name: event, ref: "refs/heads/dev" },
+  return new Function("github", "matrix", "steps", "inputs", "fromJSON", "cancelled", `return (${expression})`)(
+    {
+      repository,
+      event_name: event,
+      ref: "refs/heads/dev",
+      event: { pull_request: { draft: false } },
+    },
     { settings: { name, host: `blacksmith-4vcpu-${name === "windows" ? "windows-2025" : "ubuntu-2404"}` } },
     { lint_base: { outputs: { base } } },
-  ) as string | boolean
+    inputs,
+    JSON.parse,
+    () => false,
+  )
 }
 
 describe("fork CI runner eligibility", () => {
@@ -97,6 +118,39 @@ describe("fork CI runner eligibility", () => {
     expect(evaluate(lint?.env?.LINT_BASE, upstream, "linux", "pull_request", sha)).toBe("HEAD^1")
     expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request")).toBe("")
   })
+})
+
+describe("fork pull request test tier", () => {
+  const jobs = workflow("check-test.yml", "test.yml").jobs
+
+  function runs(expression: string | number | undefined, repository: string, event: string) {
+    return Boolean(evaluate(expression, repository, "linux", event))
+  }
+
+  function unitRunners(repository: string, event: string) {
+    const settings = jobs.unit.strategy?.matrix?.settings
+    if (typeof settings !== "string") return []
+    const value = evaluate(settings, repository, "linux", event)
+    const rows = Array.isArray(value) ? value : typeof value === "string" ? JSON.parse(value) : []
+    return (rows as { name: string }[]).map((entry) => entry.name)
+  }
+
+  for (const event of ["pull_request", "push"]) {
+    for (const repository of [fork, upstream]) {
+      test(`${repository} ${event}: affected, unit (windows), build and e2e run in the expected tier`, () => {
+        const expected = repository === fork || event === "push"
+        const actual = {
+          "affected packages": runs(jobs.affected.if, repository, event),
+          "unit (windows)": unitRunners(repository, event).includes("windows"),
+          "build (linux)": runs(jobs.build.if, repository, event),
+          "build (windows)": runs(jobs.build.if, repository, event),
+          "e2e (linux)": runs(jobs.e2e.if, repository, event),
+          "e2e (windows)": runs(jobs.e2e.if, repository, event),
+        }
+        expect(actual).toEqual(Object.fromEntries(Object.keys(actual).map((job) => [job, expected])))
+      })
+    }
+  }
 })
 
 describe("upstream-only automation", () => {
