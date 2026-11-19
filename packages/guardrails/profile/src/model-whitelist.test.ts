@@ -176,9 +176,9 @@ describe("model whitelist stays consistent across its copies", () => {
   // table so a future edit cannot silently let denyFree block the local lane
   // or denyPreview reject these ids as previews.
   describe("cor-local (local llama-server router)", () => {
-    const ids = ["ornith-1.5-35b-a3b", "qwen3.6-35b-a3b", "qwen3.8-27b"]
+    const ids = ["flint-40b-a2.5b-abliterated", "gemma4-26b-a4b-unc", "qwen3.8-27b-unc", "qwen3.8-flash-next"]
 
-    test("whitelist is exactly the 3 local model ids in both copies", () => {
+    test("whitelist is exactly the 4 local model ids in both copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
       expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
     })
@@ -223,7 +223,7 @@ describe("model whitelist stays consistent across its copies", () => {
     // AGENTS.md + system prompt + tool schemas left so little headroom that
     // opencode's compaction (packages/opencode/src/session/compaction.ts)
     // fired its synthetic "Continue if you have next steps..." after every
-    // single step -- qwen3.8-27b and glm53-flash both fixed the target bug
+    // single step -- the Qwen3.8 27B lane and glm53-flash both fixed the target bug
     // (pytest green) but looped re-planning and never terminated. The router
     // (ai-cluster repo, llama-server launcher) moved to `-c 65536`; this pins
     // limit.context to the same value so the two sides cannot drift again.
@@ -234,14 +234,17 @@ describe("model whitelist stays consistent across its copies", () => {
     // 262144 / 2 = 131072 (the Mac router had the same split from 2026-09-13, ai-cluster #389 requested in #385,
     // while this said 262144). The ai-cluster
     // generator (scripts/cluster-ops/evo_router.py) emits this value from config/llama-router/evo1-router.yaml.
+    // 2026-11-19: the lane serves four ids. qwen3.8-flash-next is defined at limit.context 32768;
+    // the other three stay at 131072.
     for (const id of ids) {
-      test(`${id}: limit.context is 131072 (router -c / -np) and limit.output is 16384 in both copies`, () => {
+      test(`${id}: limit.context matches the router and limit.output is 16384 in both copies`, () => {
+        const context = id === "qwen3.8-flash-next" ? 32768 : 131072
         expect(modelLimit(managed as Config, "cor-local", id)).toEqual({
-          context: 131072,
+          context,
           output: 16384,
         })
         expect(modelLimit(profile as Config, "cor-local", id)).toEqual({
-          context: 131072,
+          context,
           output: 16384,
         })
       })
