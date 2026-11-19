@@ -942,7 +942,8 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
     expect(src("file-write.ts")).toContain("const resolved = yield* target(input.path, context)")
     expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.path)")
     expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.movePath)")
-    expect(src("tool/plugin/shell.ts")).toContain("cwd: input.workdir,")
+    expect(src("tool/plugin/shell.ts")).toContain("const cwd = input.workdir ?? location.directory")
+    expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: cwd, kind: "directory" })')
     expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: invocation.cwd, kind: "directory" })')
   })
 
