@@ -124,7 +124,7 @@
         "qwen3.8-flash-next": {
           "name": "Qwen3.8 Flash-Next (EVO-X2-2)",
           "limit": {
-            "context": 32768,
+            "context": 131072,
             "output": 16384
           },
           "compatibility": {
