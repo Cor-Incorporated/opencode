@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import path from "node:path"
 
 const root = path.resolve(import.meta.dir, "../../../..")
@@ -10,6 +10,9 @@ const fork = "Cor-Incorporated/opencode"
 type Job = {
   "runs-on"?: string
   if?: string
+  strategy?: {
+    matrix?: Record<string, unknown>
+  }
   steps?: {
     name?: string
     id?: string
@@ -18,27 +21,105 @@ type Job = {
     uses?: string
     with?: Record<string, string | number>
     env?: Record<string, string>
+    "timeout-minutes"?: number | string
   }[]
 }
+
+type Workflow = { on?: unknown; jobs: Record<string, Job> }
 
 function workflow(...names: string[]) {
   const name = names.find((name) => existsSync(path.join(directory, name)))
   if (!name) throw new Error(`Missing workflow: ${names.join(" / ")}`)
-  return Bun.YAML.parse(readFileSync(path.join(directory, name), "utf8")) as { jobs: Record<string, Job> }
+  return Bun.YAML.parse(readFileSync(path.join(directory, name), "utf8")) as Workflow
 }
 
 // These workflow expressions use the shared JavaScript/GitHub subset: property access, strings, ==, && and ||.
 // Evaluate the actual YAML expressions, not a second runner-selection implementation.
-function evaluate(value: string | number | undefined, repository: string, name = "linux", event = "push", base = "") {
+function evaluate(
+  value: unknown,
+  repository: string,
+  name = "linux",
+  event = "push",
+  base = "",
+  inputs: Record<string, boolean> = { quarantine: false, release_gate: false },
+  matrix: Record<string, unknown> = {},
+): unknown {
   if (value === undefined) return true
   if (typeof value === "number") return value
+  if (typeof value !== "string") return value
   if (!value.includes("${{") && !value.includes("github.")) return value
   const expression = value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-  return new Function("github", "matrix", "steps", `return (${expression})`)(
-    { repository, event_name: event, ref: "refs/heads/dev" },
-    { settings: { name, host: `blacksmith-4vcpu-${name === "windows" ? "windows-2025" : "ubuntu-2404"}` } },
+  const runner = { os: name === "windows" ? "Windows" : name === "macos" ? "macOS" : "Linux" }
+  return new Function("github", "matrix", "steps", "inputs", "fromJSON", "cancelled", "runner", `return (${expression})`)(
+    {
+      repository,
+      event_name: event,
+      ref: "refs/heads/dev",
+      event: { pull_request: { draft: false } },
+    },
+    { settings: { name, host: `blacksmith-4vcpu-${name === "windows" ? "windows-2025" : "ubuntu-2404"}` }, ...matrix },
     { lint_base: { outputs: { base } } },
-  ) as string | boolean
+    inputs,
+    JSON.parse,
+    () => false,
+    runner,
+  )
+}
+
+// A push reaches this repository on dev. Tag-only pushes and other branches do not run the fork's checks.
+function triggers(config: Workflow, event: "pull_request" | "push") {
+  const on = config.on
+  if (typeof on === "string") return on === event
+  if (Array.isArray(on)) return on.includes(event)
+  if (!on || typeof on !== "object") return false
+  const value = (on as Record<string, unknown>)[event]
+  if (!(event in (on as Record<string, unknown>))) return false
+  if (event === "pull_request") return true
+  if (value === null || value === undefined) return true
+  if (typeof value !== "object" || Array.isArray(value)) return true
+  const push = value as Record<string, unknown>
+  if (push.branches !== undefined) return Array.isArray(push.branches) && push.branches.includes("dev")
+  return push.tags === undefined
+}
+
+// Expand the matrix the way GitHub does for these workflows: every axis value, plus explicit include rows.
+function matrixRows(matrix: unknown, repository: string, event: string): Record<string, unknown>[] {
+  if (!matrix || typeof matrix !== "object" || Array.isArray(matrix)) return [{}]
+  const entries = Object.entries(matrix as Record<string, unknown>).filter(([key]) => key !== "include" && key !== "exclude")
+  const rows = entries.reduce<Record<string, unknown>[]>(
+    (rows, [key, value]) =>
+      rows.flatMap((row) =>
+        (Array.isArray(value) ? value : [value]).map((item) => ({
+          ...row,
+          [key]: typeof item === "string" ? evaluate(item, repository, "linux", event) : item,
+        })),
+      ),
+    [{}],
+  )
+  const include = (matrix as Record<string, unknown>).include
+  if (Array.isArray(include)) {
+    for (const entry of include) {
+      if (!entry || typeof entry !== "object") continue
+      rows.push(
+        Object.fromEntries(
+          Object.entries(entry).map(([key, value]) => [
+            key,
+            typeof value === "string" ? evaluate(value, repository, "linux", event) : value,
+          ]),
+        ),
+      )
+    }
+  }
+  return rows
+}
+
+function runsInFork(job: Job, event: string, matrix: Record<string, unknown>) {
+  try {
+    return evaluate(job.if, fork, "linux", event, "", undefined, matrix) !== false
+  } catch {
+    // An expression the evaluator does not model (for example needs.*) cannot prove the job is skipped.
+    return true
+  }
 }
 
 describe("fork CI runner eligibility", () => {
@@ -96,6 +177,88 @@ describe("fork CI runner eligibility", () => {
     expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request", sha)).toBe(sha)
     expect(evaluate(lint?.env?.LINT_BASE, upstream, "linux", "pull_request", sha)).toBe("HEAD^1")
     expect(evaluate(lint?.env?.LINT_BASE, fork, "linux", "pull_request")).toBe("")
+  })
+})
+
+describe("fork workflow runners", () => {
+  test("no job that runs on a fork pull request or dev push waits for an upstream runner", () => {
+    const violations: string[] = []
+    const files = readdirSync(directory)
+      .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+      .sort()
+    for (const file of files) {
+      const config = Bun.YAML.parse(readFileSync(path.join(directory, file), "utf8")) as Workflow
+      for (const event of ["pull_request", "push"] as const) {
+        if (!triggers(config, event)) continue
+        for (const [id, job] of Object.entries(config.jobs ?? {})) {
+          if (!job || typeof job !== "object" || job["runs-on"] === undefined) continue
+          for (const matrix of matrixRows(job.strategy?.matrix, fork, event)) {
+            if (!runsInFork(job, event, matrix)) continue
+            const runner = evaluate(job["runs-on"], fork, "linux", event, "", undefined, matrix)
+            for (const name of Array.isArray(runner) ? runner : [runner]) {
+              if (typeof name === "string" && name.startsWith("blacksmith")) violations.push(`${file} / ${id} / ${name}`)
+            }
+          }
+        }
+      }
+    }
+    expect([...new Set(violations)].sort()).toEqual([])
+  })
+})
+
+describe("fork pull request test tier", () => {
+  const jobs = workflow("check-test.yml", "test.yml").jobs
+
+  function runs(expression: string | number | undefined, repository: string, event: string) {
+    return Boolean(evaluate(expression, repository, "linux", event))
+  }
+
+  function unitRunners(repository: string, event: string) {
+    const settings = jobs.unit.strategy?.matrix?.settings
+    if (typeof settings !== "string") return []
+    const value = evaluate(settings, repository, "linux", event)
+    const rows = Array.isArray(value) ? value : typeof value === "string" ? JSON.parse(value) : []
+    return (rows as { name: string }[]).map((entry) => entry.name)
+  }
+
+  for (const event of ["pull_request", "push"]) {
+    for (const repository of [fork, upstream]) {
+      test(`${repository} ${event}: affected, unit (windows), build and e2e run in the expected tier`, () => {
+        const expected = repository === fork || event === "push"
+        const actual = {
+          "affected packages": runs(jobs.affected.if, repository, event),
+          "unit (windows)": unitRunners(repository, event).includes("windows"),
+          "build (linux)": runs(jobs.build.if, repository, event),
+          "build (windows)": runs(jobs.build.if, repository, event),
+          "e2e (linux)": runs(jobs.e2e.if, repository, event),
+          "e2e (windows)": runs(jobs.e2e.if, repository, event),
+        }
+        expect(actual).toEqual(Object.fromEntries(Object.keys(actual).map((job) => [job, expected])))
+      })
+    }
+  }
+})
+
+describe("fork unit time limit", () => {
+  test("the fork's serial Windows unit step allows 45 minutes while upstream and the fork's Linux keep 20", () => {
+    const step = workflow("check-test.yml", "test.yml").jobs.unit.steps?.find((step) => step.name === "Run unit tests")
+    expect(step).toBeDefined()
+    const rows = [
+      { repository: fork, os: "windows", expected: 45 },
+      { repository: fork, os: "linux", expected: 20 },
+      { repository: upstream, os: "windows", expected: 20 },
+      { repository: upstream, os: "linux", expected: 20 },
+    ]
+    const mismatches = rows
+      .map(({ repository, os, expected }) => ({
+        repository,
+        os,
+        expected,
+        actual: evaluate(step!["timeout-minutes"], repository, os),
+      }))
+      .filter(({ expected, actual }) => actual !== expected)
+      .map(({ repository, os, expected, actual }) => `${repository} / ${os}: expected ${expected}, got ${actual}`)
+    expect(mismatches).toEqual([])
   })
 })
 

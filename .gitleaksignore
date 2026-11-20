@@ -307,3 +307,23 @@ f29e281322b35b525e337d12e84aedc7e129fd6d:packages/core/test/plugin/provider/clau
 f29e281322b35b525e337d12e84aedc7e129fd6d:packages/core/test/plugin/provider/claude-agent/fixtures/recordings/utility.jsonl:generic-api-key:21
 f29e281322b35b525e337d12e84aedc7e129fd6d:packages/core/test/plugin/provider/claude-agent/fixtures/recordings/utility.jsonl:generic-api-key:22
 f29e281322b35b525e337d12e84aedc7e129fd6d:packages/core/test/plugin/provider/claude-agent/fixtures/recordings/utility.jsonl:generic-api-key:23
+
+# Reviewed upstream FAQ translation text, keybind strings, and a published identifier constant.
+# Each entry is commit:path:rule:line metadata, not a secret value or secret hash.
+# New commits, paths, rules, and lines remain scanned.
+01e577f4ddd25f12d920557a8ae60982e4cbb9bc:packages/app/src/shell/titlebar/tab-strip.tsx:generic-api-key:384
+01e577f4ddd25f12d920557a8ae60982e4cbb9bc:packages/app/src/shell/titlebar/tab-strip.tsx:generic-api-key:391
+92265ca63733cdbc6b0a8c9c560005e6f983c474:services/update/src/index.ts:generic-api-key:43
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/ar.ts:generic-api-key:191
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/br.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/da.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/de.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/en.ts:generic-api-key:216
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/es.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/fr.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/it.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/no.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/pl.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/ru.ts:generic-api-key:191
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/th.ts:generic-api-key:200
+c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/uk.ts:generic-api-key:189

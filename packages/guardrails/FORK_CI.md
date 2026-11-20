@@ -9,10 +9,16 @@ GitHub 標準の `ubuntu-24.04` / `windows-2025` を使う。Linux と Windows �
 affected 判定、browser test、集約 check を省略しない。公開リポジトリの標準 runner が対象で、
 larger runner、新サービス、追加 secret は使用しない。
 
+macOS も同じ規則で、上流では `blacksmith-6vcpu-macos-15`、fork では標準の `macos-15` を使う。
+この置き換えは `check-docs.yml` の docs build、`check-process-daemon.yml` の Core matrix、
+`release-process-daemon.yml` の build matrix にも適用し、job・step・command・matrix の行は変えない。
+
 標準 runner の clean 環境には `rg` がない場合がある。core のテストは意図しない HTTP 呼び出しを
 拒否するため、通常実行時の自動ダウンロードには依存できない。unit job で既存 runtime と同じ
 ripgrep 15.1.0 を公式 release から取得し、公式の SHA-256 を固定して照合してから PATH へ追加する。
 続けて隔離 HOME の実際の Ripgrep / search tool テストを実行し、`which` の確認だけで済ませない。
+
+fork の Windows は ACL の subprocess 検査を含むため package を直列で流す。直列の Windows の unit は upstream の 20 分に収まらないので、fork では 45 分にする。
 
 guardrails の設定互換テストは core の実 normalizer を読み込むため、Node 24 と固定 lockfile による
 workspace の依存インストールを行ってから実行する。ローカルの既存 node_modules に依存させない。
