@@ -147,7 +147,7 @@ jobs:
           git config --global user.name "opencode"
 
       - name: Run unit tests
-        timeout-minutes: 20
+        timeout-minutes: ${{ runner.os == 'Windows' && github.repository != 'anomalyco/opencode' && 45 || 20 }}
         run: |
           # Each Bun process performs concurrent work on four-vCPU runners. The fork's Windows suites
           # include ACL subprocess checks, so run packages serially within their existing five-second budget.

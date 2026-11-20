@@ -21,6 +21,7 @@ type Job = {
     uses?: string
     with?: Record<string, string | number>
     env?: Record<string, string>
+    "timeout-minutes"?: number | string
   }[]
 }
 
@@ -48,7 +49,8 @@ function evaluate(
   if (typeof value !== "string") return value
   if (!value.includes("${{") && !value.includes("github.")) return value
   const expression = value.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-  return new Function("github", "matrix", "steps", "inputs", "fromJSON", "cancelled", `return (${expression})`)(
+  const runner = { os: name === "windows" ? "Windows" : name === "macos" ? "macOS" : "Linux" }
+  return new Function("github", "matrix", "steps", "inputs", "fromJSON", "cancelled", "runner", `return (${expression})`)(
     {
       repository,
       event_name: event,
@@ -60,6 +62,7 @@ function evaluate(
     inputs,
     JSON.parse,
     () => false,
+    runner,
   )
 }
 
@@ -234,6 +237,29 @@ describe("fork pull request test tier", () => {
       })
     }
   }
+})
+
+describe("fork unit time limit", () => {
+  test("the fork's serial Windows unit step allows 45 minutes while upstream and the fork's Linux keep 20", () => {
+    const step = workflow("check-test.yml", "test.yml").jobs.unit.steps?.find((step) => step.name === "Run unit tests")
+    expect(step).toBeDefined()
+    const rows = [
+      { repository: fork, os: "windows", expected: 45 },
+      { repository: fork, os: "linux", expected: 20 },
+      { repository: upstream, os: "windows", expected: 20 },
+      { repository: upstream, os: "linux", expected: 20 },
+    ]
+    const mismatches = rows
+      .map(({ repository, os, expected }) => ({
+        repository,
+        os,
+        expected,
+        actual: evaluate(step!["timeout-minutes"], repository, os),
+      }))
+      .filter(({ expected, actual }) => actual !== expected)
+      .map(({ repository, os, expected, actual }) => `${repository} / ${os}: expected ${expected}, got ${actual}`)
+    expect(mismatches).toEqual([])
+  })
 })
 
 describe("upstream-only automation", () => {

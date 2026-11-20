@@ -18,6 +18,8 @@ macOS も同じ規則で、上流では `blacksmith-6vcpu-macos-15`、fork で�
 ripgrep 15.1.0 を公式 release から取得し、公式の SHA-256 を固定して照合してから PATH へ追加する。
 続けて隔離 HOME の実際の Ripgrep / search tool テストを実行し、`which` の確認だけで済ませない。
 
+fork の Windows は ACL の subprocess 検査を含むため package を直列で流す。直列の Windows の unit は upstream の 20 分に収まらないので、fork では 45 分にする。
+
 guardrails の設定互換テストは core の実 normalizer を読み込むため、Node 24 と固定 lockfile による
 workspace の依存インストールを行ってから実行する。ローカルの既存 node_modules に依存させない。
 
