@@ -90,7 +90,7 @@
             "tools": true,
             "reasoning": {
               "supported": true,
-              "effort": ["low", "medium", "high"]
+              "effort": ["low", "medium", "xhigh"]
             }
           }
         },
@@ -107,7 +107,7 @@
             "tools": true,
             "reasoning": {
               "supported": true,
-              "effort": ["low", "medium", "high"]
+              "effort": ["low", "medium", "xhigh"]
             }
           }
         },
@@ -134,7 +134,7 @@
             "tools": true,
             "reasoning": {
               "supported": true,
-              "effort": ["low", "medium", "high"]
+              "effort": ["low", "medium", "xhigh"]
             }
           }
         }
