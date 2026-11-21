@@ -1,18 +1,5 @@
-/**
- * OpenCode sends each listed effort as reasoning_effort with no remap
- * (packages/core/src/variant.ts), and the selected variant is shared across
- * model switches.
- *
- * Measured 2026-11-21 against the live entrance, max_tokens=16:
- * qwen3.8-27b-unc and qwen3.8-flash-next return HTTP 500 for "high"
- * (Jinja: supported types are xhigh, medium, and low).
- * gemma4-26b-a4b-unc accepts "high" (HTTP 200), so this test does not claim
- * that every model rejects it. The advertised list is the intersection.
- * A list that still contains "high" fails. Provider id stays cor-local.
- *
- * Run: bun test profile/src/cor-local-effort.test.ts
- * (from packages/guardrails; this file imports only the two json copies)
- */
+// The profiles advertise shared reasoning choices because OpenCode forwards
+// the selected variant as reasoning_effort across model switches.
 import { expect, test } from "bun:test"
 import managed from "../../managed/opencode.json"
 import profile from "../opencode.json"
