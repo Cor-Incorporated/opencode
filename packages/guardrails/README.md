@@ -271,10 +271,13 @@ OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --mod
 
 Cold-start note: the router loads models on first request. `settings.headerTimeout` is 900000ms, `settings.timeout`
 is `false`, and `settings.chunkTimeout` is 120000ms, bounding stalled streams separately from cold loading.
-`compatibility.reasoningField` preserves `reasoning_content`; native `capabilities.reasoning` declares the effort
-controls. Context window is 131072 tokens per request for three of the four ids (32768 for `qwen3.8-flash-next`) and maximum output is 16384 tokens.
+`compatibility.reasoningField` preserves `reasoning_content`. The `cor-local` profiles offer
+`low`, `medium`, and `xhigh` for models with reasoning controls. OpenCode sends the selected variant as
+`reasoning_effort` and carries it across model switches. Configure choices that the endpoint accepts
+for every model that shares the setting.
 
-`limit.context` must equal one request's share of the router's context: 131072 for three of the four ids (`-c 262144` split over `-np 2` slots without kv-unified) and 32768 for `qwen3.8-flash-next` (ai-cluster repo, `config/llama-router/evo1-router.yaml`, rendered by `scripts/cluster-ops/evo_router.py`; its `evo1-router.clients.json` is the source of this block). Until 2026-11-06 this said 262144, although from 2026-09-13 (ai-cluster #389, requested in #385) the Mac Studio router (`config/llama-router/cor-local.ini.template`) also split 262144 over 2 slots. The block is copied from ai-cluster Cor-Incorporated/ai-cluster#614 (`evo1-router.clients.json`, unchanged since `e7b52063`); `scripts/cluster-ops/evo_router.py client-diff <this opencode.json>` there prints `no difference` when the two agree. They were at 32768 through 2026-09-02 and at 65536 from 2026-09-03 to 2026-09-07 (raised because a trivial two-line edit session on glm53-flash consumed 62% of the 64k window; opencode auto-compacts at `context - limit.output`, so the usable working window was only ~25K after the AGENTS.md/system prompt/tool schemas); with the guardrails profile's AGENTS.md (15.6KB) plus system prompt and tool schemas already eating into the window, the mismatch made opencode auto-compact after every single step (`packages/opencode/src/session/compaction.ts`'s synthetic "Continue if you have next steps…"), and both the Qwen3.8 27B lane and `glm53-flash` looped re-planning without terminating even after fixing the target bug. If you change the router's `-c` value, update `limit.context` in both `managed/opencode.json` and `profile/opencode.json` to match — `model-whitelist.test.ts` pins the values in both copies.
+Set `limit.context` to the endpoint's context window per request and `limit.output` to its maximum
+output. Keep both `managed/opencode.json` and `profile/opencode.json` in sync.
 
 Offline verification: from `packages/guardrails`, run `bun run test:ci` for the guardrail tests and catalog snapshot
 consistency check across the two admission policies and `paid` sets. These checks make no model requests.
