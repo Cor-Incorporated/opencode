@@ -761,11 +761,6 @@
       "reasoning": false,
       "release_date": "2024-12-13"
     },
-    "cohere/north-mini-code:free": {
-      "context": 256000,
-      "reasoning": true,
-      "release_date": "2026-06-09"
-    },
     "deepseek/deepseek-chat": {
       "context": 163840,
       "reasoning": false,
@@ -835,11 +830,6 @@
       "context": 1048576,
       "reasoning": true,
       "release_date": "2026-10-17"
-    },
-    "dots-studio/dots-3-note-preview:free": {
-      "context": 512000,
-      "reasoning": true,
-      "release_date": "2026-08-14"
     },
     "elorian/glimpse": {
       "context": 262144,
@@ -936,6 +926,11 @@
       "reasoning": true,
       "release_date": "2026-11-12"
     },
+    "google/gemini-4-neon": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-11-18"
+    },
     "google/gemma-3-12b-it": {
       "context": 131072,
       "reasoning": false,
@@ -1015,11 +1010,6 @@
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-11-06"
-    },
-    "meituan/longcat-2.0": {
-      "context": 1048756,
-      "reasoning": true,
-      "release_date": "2026-06-30"
     },
     "meta-llama/llama-3.1-70b-instruct": {
       "context": 131072,
@@ -1821,6 +1811,11 @@
       "reasoning": true,
       "release_date": "2026-11-16"
     },
+    "radixark/daisyrose-27b": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-11-21"
+    },
     "recursive/flint-v1.0:free": {
       "context": 262144,
       "reasoning": true,
@@ -1881,11 +1876,6 @@
       "reasoning": true,
       "release_date": "2026-07-06"
     },
-    "tencent/hy3-preview": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-04-20"
-    },
     "tencent/hy4": {
       "context": 1048576,
       "reasoning": true,
@@ -1906,12 +1896,12 @@
       "reasoning": true,
       "release_date": "2026-07-15"
     },
-    "thinkingmachines/inkling-2-small": {
+    "thinkingmachines/inkling-2-mini": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-11-05"
+      "release_date": "2026-11-21"
     },
-    "thinkingmachines/inkling-2-small:free": {
+    "thinkingmachines/inkling-2-small": {
       "context": 1048576,
       "reasoning": true,
       "release_date": "2026-11-05"
@@ -1971,11 +1961,6 @@
       "reasoning": true,
       "release_date": "2026-09-21"
     },
-    "x-ai/grok-build-0.1": {
-      "context": 256000,
-      "reasoning": true,
-      "release_date": "2026-04-16"
-    },
     "xiaomi/mimo-v2.5": {
       "context": 1000000,
       "reasoning": true,
@@ -1987,12 +1972,12 @@
       "release_date": "2026-04-22"
     },
     "xiaomi/mimo-v2.6-flash": {
-      "context": 1050000,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-09-22"
     },
     "xiaomi/mimo-v2.6-pro": {
-      "context": 1050000,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-09-22"
     },

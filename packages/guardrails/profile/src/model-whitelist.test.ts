@@ -24,6 +24,7 @@ import { ModelsDev } from "@opencode/core/models-dev"
 import { Effect } from "effect"
 import managedConfig from "../../managed/opencode.json"
 import managedPolicy from "../../managed/model-policy.json"
+import catalogSnapshot from "../../model-catalog-snapshot.json"
 import profileConfig from "../opencode.json"
 import profilePolicy from "../model-policy.json"
 import { free, paid, preview } from "./guardrail-patterns"
@@ -81,6 +82,7 @@ describe("model whitelist stays consistent across its copies", () => {
     // surfaced the staleness; gpt-5.6-luna is what Codex runs today.
     expect(whitelist(managed as Config, "zai-coding-plan")).toContain("glm-5.3-flash")
     expect(whitelist(managed as Config, "zai-coding-plan")).toContain("glm-5.4")
+    expect(catalogSnapshot["zai-coding-plan"]["glm-5.4"]).toBeDefined()
     expect(whitelist(managed as Config, "openrouter")).toContain("z-ai/glm-5.3-flash")
     expect(whitelist(managed as Config, "openai")).toContain("gpt-5.6-luna")
   })

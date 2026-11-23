@@ -130,6 +130,12 @@ def build_snapshot(catalog_path: Path) -> dict:
             if usable(meta)
             for cid, entry in catalog_entries(mid, meta).items()
         }
+    # The live Coding Plan catalog offered GLM-5.4 before the bundled provider snapshot (#389).
+    # Preserve the verified release when rebuilding offline; upstream metadata wins when present.
+    if "zai-coding-plan" in snapshot:
+        snapshot["zai-coding-plan"].setdefault(
+            "glm-5.4", {"context": 1000000, "reasoning": True, "release_date": "2026-11-23"}
+        )
     return snapshot
 
 
