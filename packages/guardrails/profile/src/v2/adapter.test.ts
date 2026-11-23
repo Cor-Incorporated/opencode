@@ -924,8 +924,8 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
     ).toEqual({ command: "ls", workdir: "sub" })
   })
 
-  // PAIR: adapter.ts resolveIn restates where core puts a tool path. Pinned by string (core is not importable without
-  // `bun install`, see .github/workflows/guardrails.yml); a core change to any of these turns this red.
+  // The local adapter and the upstream tool services must use the same default directory.
+  // Pin both sides of each hand-off so a change of working directory is detected here.
   test("PAIR: core resolves file, patch and shell workdir paths at location.directory (resolvePath, ~ and ~/ expanded)", () => {
     const core = join(import.meta.dir, "..", "..", "..", "..", "core", "src")
     const src = (file: string) => readFileSync(join(core, file), "utf-8")
@@ -934,17 +934,23 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
     )
     expect(src("file-access.ts")).toContain('normalized === "~"')
     expect(src("file-access.ts")).toContain('normalized.startsWith("~/")')
-    expect(src("file-access.ts")).toContain("AbsolutePath.make(resolvePath(location.directory, input.path))")
+    expect(src("environment/environment.ts")).toContain("return { absolute: location.directory, environment }")
+    expect(src("file-access.ts")).toContain("const workingDirectory = yield* Environment.workingDirectory")
+    expect(src("file-access.ts")).toContain("const located = yield* place(input.path, input.base, enabled)")
+    expect(src("file-access.ts")).toContain("const from = base ?? workingDirectory")
+    expect(src("file-access.ts")).toContain("AbsolutePath.make(resolvePath(from.absolute, text))")
     expect(src("tool/plugin/read.ts")).toContain("access.authorizeRead(input.path, context)")
     expect(src("tool/plugin/edit.ts")).toContain("fileWrite.target(input.path, context)")
     expect(src("tool/plugin/write.ts")).toContain("fileWrite.write(input, context)")
     expect(src("file-write.ts")).toContain('access.resolve({ path: file, kind: "file" })')
     expect(src("file-write.ts")).toContain("const resolved = yield* target(input.path, context)")
-    expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.path)")
-    expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.movePath)")
-    expect(src("tool/plugin/shell.ts")).toContain("const cwd = input.workdir ?? location.directory")
+    expect(src("tool/plugin/patch.ts")).toContain('access.resolve({ path: value, kind: "file" })')
+    expect(src("tool/plugin/patch.ts")).toContain("resolveTarget(hunk.path)")
+    expect(src("tool/plugin/patch.ts")).toContain("resolveTarget(hunk.movePath)")
+    expect(src("tool/plugin/shell.ts")).toContain("const cwd = input.workdir ?? workingDirectory.absolute")
     expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: cwd, kind: "directory" })')
-    expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: invocation.cwd, kind: "directory" })')
+    expect(src("tool/plugin/shell.ts")).toContain("const workingDirectory = yield* Environment.workingDirectory")
+    expect(src("tool/plugin/shell.ts")).toMatch(/access\.resolve\(\{\s+path: invocation\.cwd,\s+base:[\s\S]*?kind: "directory"/)
   })
 
   test("cleanup", () => {
