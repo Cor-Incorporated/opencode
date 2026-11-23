@@ -76,6 +76,7 @@ export const paid: Record<string, Set<string>> = {
     "glm-5.3",
     "glm-5.3-flash",
     "glm-5.3-highspeed",
+    "glm-5.4",
     "glm-5v-turbo",
   ]),
   openai: new Set([

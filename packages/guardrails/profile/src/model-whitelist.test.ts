@@ -80,6 +80,7 @@ describe("model whitelist stays consistent across its copies", () => {
     // Regression pins for 2026-09-02. glm-5.3-flash is the model whose absence
     // surfaced the staleness; gpt-5.6-luna is what Codex runs today.
     expect(whitelist(managed as Config, "zai-coding-plan")).toContain("glm-5.3-flash")
+    expect(whitelist(managed as Config, "zai-coding-plan")).toContain("glm-5.4")
     expect(whitelist(managed as Config, "openrouter")).toContain("z-ai/glm-5.3-flash")
     expect(whitelist(managed as Config, "openai")).toContain("gpt-5.6-luna")
   })
