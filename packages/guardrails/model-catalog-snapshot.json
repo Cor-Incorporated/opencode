@@ -2217,6 +2217,11 @@
       "context": 1000000,
       "reasoning": true,
       "release_date": "2026-08-14"
+    },
+    "glm-5.4": {
+      "context": 1000000,
+      "reasoning": true,
+      "release_date": "2026-11-23"
     }
   }
 }
