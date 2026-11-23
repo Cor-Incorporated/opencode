@@ -15,7 +15,7 @@ describe("debug paths command", () => {
   })
 
   test("prints resolved global paths without starting a server", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-debug-paths-"))
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "opencode debug paths-"))
 
     try {
       const result = await cli(["debug", "paths"], {
@@ -28,7 +28,10 @@ describe("debug paths command", () => {
         result.stdout
           .trim()
           .split("\n")
-          .map((line) => line.trim().split(/\s+/, 2)),
+          .map((line) => {
+            const separator = line.search(/\s/)
+            return [line.slice(0, separator), line.slice(separator).trimStart()]
+          }),
       )
 
       expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
