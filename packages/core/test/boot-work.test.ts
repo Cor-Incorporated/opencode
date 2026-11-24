@@ -172,9 +172,10 @@ const expected = {
   // One step resolves the prompt hook model once, shared by the context, compaction and generate hooks.
   "turn: catalog lookups per step": 1,
   // Image and video tools read the catalog by type. Those reads stay off the prompt count above.
-  // Image/video tools probe the typed catalog at registration (wanted + enabled) before the turn.
+  // Image tools probe the typed catalog at registration (wanted + enabled) before the turn.
+  // Video does the same only when `video_generate` is enabled; boot-work leaves that flag off.
   "boot + turn: image capability lookups": 2,
-  "boot + turn: video capability lookups": 2,
+  "boot + turn: video capability lookups": 0,
   // Azure is enabled without a resource name, so its model transform has nothing to rewrite.
   "model rebuild: Azure model edits": 0,
 }
