@@ -31,7 +31,26 @@ import { offlineModels } from "./fixture/models"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-const counters = { catalogLookups: 0, azureModelEdits: 0, gitSpawns: [] as string[], gitLookups: 0 }
+const counters = {
+  catalogLookups: 0,
+  imageLookups: 0,
+  videoLookups: 0,
+  azureModelEdits: 0,
+  gitSpawns: [] as string[],
+  gitLookups: 0,
+}
+
+// Unfiltered `available()` is the prompt catalog. Image and video tools pass a type and must not share that count.
+const countCatalog = (types?: readonly Model.Type[]) => {
+  if (types === undefined || types.length === 0) {
+    counters.catalogLookups++
+    return
+  }
+  for (const type of types) {
+    if (type === "image") counters.imageLookups++
+    else if (type === "video") counters.videoLookups++
+  }
+}
 
 const isGit = (command: string) => path.basename(command).replace(/\.exe$/i, "") === "git"
 
@@ -61,10 +80,10 @@ const countingModels = Model.node.replace(
       Effect.map(Model.Service, (models) =>
         Model.Service.of({
           ...models,
-          available: () =>
+          available: (types?: readonly Model.Type[]) =>
             Effect.suspend(() => {
-              counters.catalogLookups++
-              return models.available()
+              countCatalog(types)
+              return models.available(types)
             }),
           transform: (update) =>
             models.transform((editor) => {
@@ -152,6 +171,11 @@ const expected = {
   "boot + turn: git spawns not using the resolved executable": 0,
   // One step resolves the prompt hook model once, shared by the context, compaction and generate hooks.
   "turn: catalog lookups per step": 1,
+  // Image and video tools read the catalog by type. Those reads stay off the prompt count above.
+  // Image tools probe the typed catalog at registration (wanted + enabled) before the turn.
+  // Video does the same only when `video_generate` is enabled; boot-work leaves that flag off.
+  "boot + turn: image capability lookups": 2,
+  "boot + turn: video capability lookups": 0,
   // Azure is enabled without a resource name, so its model transform has nothing to rewrite.
   "model rebuild: Azure model edits": 0,
 }
@@ -185,6 +209,8 @@ describe("boot work", () => {
       yield* sessions.wait(session.id)
       const steps = (yield* sessions.context(session.id)).filter((message) => message.type === "assistant").length
       const lookups = counters.catalogLookups
+      const imageLookups = counters.imageLookups
+      const videoLookups = counters.videoLookups
       const spawns = [...counters.gitSpawns]
 
       counters.azureModelEdits = 0
@@ -200,6 +226,8 @@ describe("boot work", () => {
           (spawn) => !spawn.startsWith(`${executable} `),
         ).length,
         "turn: catalog lookups per step": steps === 0 ? lookups : lookups / steps,
+        "boot + turn: image capability lookups": imageLookups,
+        "boot + turn: video capability lookups": videoLookups,
         "model rebuild: Azure model edits": counters.azureModelEdits,
       }
       const drift = Object.entries(expected).flatMap(([name, want]) => {
