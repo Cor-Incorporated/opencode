@@ -549,6 +549,7 @@
       "whitelist": [
         "flint-40b-a2.5b-abliterated",
         "gemma4-26b-a4b-unc",
+        "inkling-2-mini-abliterated",
         "qwen3.8-27b-unc",
         "qwen3.8-flash-next"
       ]

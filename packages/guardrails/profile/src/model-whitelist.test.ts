@@ -177,9 +177,15 @@ describe("model whitelist stays consistent across its copies", () => {
   // table so a future edit cannot silently let denyFree block the local lane
   // or denyPreview reject these ids as previews.
   describe("cor-local (local llama-server router)", () => {
-    const ids = ["flint-40b-a2.5b-abliterated", "gemma4-26b-a4b-unc", "qwen3.8-27b-unc", "qwen3.8-flash-next"]
+    const ids = [
+      "flint-40b-a2.5b-abliterated",
+      "gemma4-26b-a4b-unc",
+      "inkling-2-mini-abliterated",
+      "qwen3.8-27b-unc",
+      "qwen3.8-flash-next",
+    ]
 
-    test("whitelist is exactly the 4 local model ids in both copies", () => {
+    test("whitelist is exactly the 5 local model ids in both copies", () => {
       expect(whitelist(managed as Config, "cor-local")).toEqual(ids)
       expect(whitelist(profile as Config, "cor-local")).toEqual(ids)
     })
@@ -237,9 +243,12 @@ describe("model whitelist stays consistent across its copies", () => {
     // generator (scripts/cluster-ops/evo_router.py) emits this value from config/llama-router/evo1-router.yaml.
     // 2026-11-19: the lane serves four ids. qwen3.8-flash-next is defined at limit.context 32768;
     // the other three stay at 131072.
+    // 2026-11-24: inkling-2-mini-abliterated joins at limit.context 32768 -- its model card
+    // (orcarouter/Inkling-2-Mini-abliterated-GGUF) serves with `-c 32768` and lists long context
+    // as unmeasured on these builds, so the 1M inherited limit is not advertised.
     for (const id of ids) {
       test(`${id}: limit.context matches the router and limit.output is 16384 in both copies`, () => {
-        const context = id === "qwen3.8-flash-next" ? 32768 : 131072
+        const context = id === "qwen3.8-flash-next" || id === "inkling-2-mini-abliterated" ? 32768 : 131072
         expect(modelLimit(managed as Config, "cor-local", id)).toEqual({
           context,
           output: 16384,

@@ -29,6 +29,7 @@ describe("packaged 2.x provider configuration", () => {
             models: {
               "flint-40b-a2.5b-abliterated": { capabilities: { tools: true } },
               "gemma4-26b-a4b-unc": { capabilities: { reasoning: { supported: true } } },
+              "inkling-2-mini-abliterated": { capabilities: { reasoning: { supported: true } } },
               "qwen3.8-27b-unc": { capabilities: { reasoning: { supported: true } } },
               "qwen3.8-flash-next": { capabilities: { reasoning: { supported: true } } },
             },

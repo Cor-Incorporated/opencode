@@ -121,6 +121,23 @@
             "tools": true
           }
         },
+        "inkling-2-mini-abliterated": {
+          "name": "Inkling 2 Mini 26B A3.4B Abliterated (EVO-X2)",
+          "limit": {
+            "context": 32768,
+            "output": 16384
+          },
+          "compatibility": {
+            "reasoningField": "reasoning_content"
+          },
+          "capabilities": {
+            "tools": true,
+            "reasoning": {
+              "supported": true,
+              "effort": ["low", "medium", "xhigh"]
+            }
+          }
+        },
         "qwen3.8-flash-next": {
           "name": "Qwen3.8 Flash-Next (EVO-X2-2)",
           "limit": {
