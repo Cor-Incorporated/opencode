@@ -29,7 +29,12 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { applyCorLocalDefaults, loadCorLocalKeyFromFile, privateWindowsKeyAcl } from "../../bin/cor-local-env.js"
+import {
+  applyCorLocalDefaults,
+  defaultCorLocalBaseUrl,
+  loadCorLocalKeyFromFile,
+  privateWindowsKeyAcl,
+} from "../../bin/cor-local-env.js"
 
 const binPath = fileURLToPath(new URL("../../bin/opencode-guardrails", import.meta.url))
 
@@ -109,10 +114,10 @@ describe("cor-local-env.js: Windows key-file ACL policy", () => {
 })
 
 describe("cor-local-env.js: COR_LOCAL_BASE_URL defaulting", () => {
-  test("(a) unset -> defaults to the loopback router address", () => {
+  test("(a) unset -> defaults to the platform router address", () => {
     const env: Record<string, string> = { COR_LOCAL_API_KEY: "test-key-no-file-read" }
     applyCorLocalDefaults(env, { warn: () => {} })
-    expect(env.COR_LOCAL_BASE_URL).toBe("http://127.0.0.1:18082/v1")
+    expect(env.COR_LOCAL_BASE_URL).toBe(defaultCorLocalBaseUrl())
   })
 
   test("(b) already set -> caller's value is never overridden", () => {
@@ -195,7 +200,7 @@ describe("cor-local-env.js: key file validation", () => {
     withTmpDir("cor-local-key-missing-", (dir) => {
       const env: Record<string, string> = { COR_LOCAL_KEY_FILE: path.join(dir, "does-not-exist.key") }
       applyCorLocalDefaults(env, { warn: () => {} })
-      expect(env.COR_LOCAL_BASE_URL).toBe("http://127.0.0.1:18082/v1")
+      expect(env.COR_LOCAL_BASE_URL).toBe(defaultCorLocalBaseUrl())
       expect(env.COR_LOCAL_API_KEY).toBeUndefined()
     })
   })
@@ -282,7 +287,7 @@ describe("bin/opencode-guardrails: real entry point ordering (subprocess, offlin
     withTmpDir("cor-local-entry-noenv-", (projectDir) => {
       withTmpDir("cor-local-entry-home2-", (homeDir) => {
         const out = runEntryPoint({ projectDir, homeDir })
-        expect(out).toContain("BASE_URL=http://127.0.0.1:18082/v1")
+        expect(out).toContain(`BASE_URL=${defaultCorLocalBaseUrl()}`)
         expect(out).toContain("API_KEY=<unset>")
       })
     })

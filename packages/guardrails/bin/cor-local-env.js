@@ -22,7 +22,12 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 
 export const DEFAULT_COR_LOCAL_BASE_URL = "http://127.0.0.1:18082/v1"
+export const DEFAULT_COR_LOCAL_MAC_BASE_URL = "http://100.91.85.86:18082/v1"
 export const DEFAULT_COR_LOCAL_KEY_FILE = path.join(os.homedir(), "cluster-ops", "cor-local.key")
+
+export function defaultCorLocalBaseUrl() {
+  return process.platform === "darwin" ? DEFAULT_COR_LOCAL_MAC_BASE_URL : DEFAULT_COR_LOCAL_BASE_URL
+}
 
 // `{env:VAR}` is spliced into the JSON config text as raw, unescaped bytes
 // (variable.ts:36-38 -- unlike `{file:...}`, which goes through
@@ -123,14 +128,15 @@ export function loadCorLocalKeyFromFile(filePath, { warn = (msg) => console.erro
 
 /**
  * Mutates `env` (defaults to `process.env`) in place: defaults
- * `COR_LOCAL_BASE_URL` to a router on this machine (loopback) when unset
+ * `COR_LOCAL_BASE_URL` to the platform default router when unset (loopback on
+ * non-macOS; the cluster LAN router on macOS) when unset
  * or empty, and -- when `COR_LOCAL_API_KEY` is unset or empty -- reads a key
  * from `COR_LOCAL_KEY_FILE` (or the default `~/cluster-ops/cor-local.key`)
  * if it validates. Never overrides a caller-supplied, non-empty value for
  * either variable.
  */
 export function applyCorLocalDefaults(env = process.env, { warn } = {}) {
-  env.COR_LOCAL_BASE_URL ||= DEFAULT_COR_LOCAL_BASE_URL
+  env.COR_LOCAL_BASE_URL ||= defaultCorLocalBaseUrl()
   if (!env.COR_LOCAL_API_KEY) {
     const keyFile = env.COR_LOCAL_KEY_FILE || DEFAULT_COR_LOCAL_KEY_FILE
     const key = loadCorLocalKeyFromFile(keyFile, warn !== undefined ? { warn } : undefined)
