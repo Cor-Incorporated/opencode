@@ -122,6 +122,13 @@ type Precomputed = {
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
 /** After each "too long" rejection, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.85, 0.7, 0.5, 0.35]
+/**
+ * The most the measured count may correct the character estimate for text density. Ordinary text runs about
+ * `ESTIMATE_ERROR` low and dense text such as Japanese about 2.8 times; a wider gap means the count covers content the
+ * request no longer carries, such as reasoning the provider dropped, so scaling the fixed instructions by it would
+ * shrink the transcript below them.
+ */
+const MAX_ESTIMATE_RATIO = 8
 // The least of the window kept free for the last reply before compaction and for the summary itself.
 const RESERVE_MIN = 16_000
 /**
@@ -630,18 +637,47 @@ export const layer = Layer.effect(
       let asText = shrink.text ?? false
       let fit = shrink.fit
 
+      // A measured request fixes the size of the whole history more precisely than the character estimate, which runs
+      // `ESTIMATE_ERROR` low on ordinary text and much lower on dense text such as Japanese. Scale the estimate to the
+      // unit the provider counts by the ratio it reported for this request, between that margin and the densest text.
+      // Without a measurement the character estimate is all there is; the provider then rejects a request that does
+      // not fit and the shrink steps take over.
+      const ratio =
+        shrink.measured === undefined
+          ? 1
+          : Math.min(
+              MAX_ESTIMATE_RATIO,
+              Math.max(
+                1 + SessionModelRequest.ESTIMATE_ERROR,
+                total(shrink.measured) / Math.max(1, estimateRequest(prepared.request)),
+              ),
+            )
+      const measuredEstimate = (request: LLMRequest) => Math.ceil(estimateRequest(request) * ratio)
+      const estimatedTarget = (value: number) => Math.floor(value / ratio)
+      // A previous checkpoint is fixed, already-serialized text. The ratio describes the new conversation the count
+      // measured, not that text, and scaling it would make the checkpoint look larger than it is and rewrite its
+      // retained recent into the transcript. Size the checkpoint as before and correct only the conversation after it.
+      const previous = previousCompaction(context.messages)
+      const checkpoint =
+        previous !== undefined && !SessionHistory.isNativeCompaction(previous)
+          ? shrink.history.messages.find((message) => message.id === previous.id)
+          : undefined
+      const checkpointSize = checkpoint ? estimateMessage(checkpoint) : 0
+      const measuredEstimateHistory =
+        Math.ceil(Math.max(0, estimateRequest(shrink.history) - checkpointSize) * ratio) + checkpointSize
+
       while (true) {
         const measured = rejections === 0 ? shrink.measured : undefined
         const unchanged = asText
           ? undefined
-          : (measured ? total(measured) : estimateRequest(prepared.request)) <= fit
+          : (measured ? total(measured) : measuredEstimate(prepared.request)) <= fit
             ? prepared.request
-            : estimateRequest(shrink.history) <= target
+            : measuredEstimateHistory <= target
               ? shrink.history
               : undefined
         const request =
           unchanged ??
-          flattenAndDropOldest(shrink.history, context, target) ??
+          flattenAndDropOldest(shrink.history, context, estimatedTarget(target)) ??
           (rejections > 0
             ? undefined
             : asText
@@ -673,7 +709,7 @@ export const layer = Layer.effect(
         if (tooLarge || isContextOverflowFailure(cause)) {
           const step = SHRINK_STEPS[rejections]
           if (step === undefined) return yield* Effect.fail<Failure>({ error })
-          rejected ??= size ? total(size) : estimateRequest(request)
+          rejected ??= size ? total(size) : measuredEstimate(request)
           // The characters can still say the rejected request fits, so it only goes out again as text.
           if (size) asText = true
           target = Math.floor(rejected * step)
