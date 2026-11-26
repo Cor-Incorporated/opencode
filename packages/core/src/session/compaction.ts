@@ -654,6 +654,17 @@ export const layer = Layer.effect(
             )
       const measuredEstimate = (request: LLMRequest) => Math.ceil(estimateRequest(request) * ratio)
       const estimatedTarget = (value: number) => Math.floor(value / ratio)
+      // A previous checkpoint is fixed, already-serialized text. The ratio describes the new conversation the count
+      // measured, not that text, and scaling it would make the checkpoint look larger than it is and rewrite its
+      // retained recent into the transcript. Size the checkpoint as before and correct only the conversation after it.
+      const previous = previousCompaction(context.messages)
+      const checkpoint =
+        previous !== undefined && !SessionHistory.isNativeCompaction(previous)
+          ? shrink.history.messages.find((message) => message.id === previous.id)
+          : undefined
+      const checkpointSize = checkpoint ? estimateMessage(checkpoint) : 0
+      const measuredEstimateHistory =
+        Math.ceil(Math.max(0, estimateRequest(shrink.history) - checkpointSize) * ratio) + checkpointSize
 
       while (true) {
         const measured = rejections === 0 ? shrink.measured : undefined
@@ -661,7 +672,7 @@ export const layer = Layer.effect(
           ? undefined
           : (measured ? total(measured) : measuredEstimate(prepared.request)) <= fit
             ? prepared.request
-            : measuredEstimate(shrink.history) <= target
+            : measuredEstimateHistory <= target
               ? shrink.history
               : undefined
         const request =
