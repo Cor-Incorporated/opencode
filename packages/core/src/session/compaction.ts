@@ -122,6 +122,13 @@ type Precomputed = {
 const NOTHING_TO_COMPACT: Failure = { error: { type: "compaction.unavailable", message: "Nothing to compact yet" } }
 /** After each "too long" rejection, the next attempt aims at this share of the first rejected request's size. */
 const SHRINK_STEPS = [0.85, 0.7, 0.5, 0.35]
+/**
+ * The most the measured count may correct the character estimate for text density. Ordinary text runs about
+ * `ESTIMATE_ERROR` low and dense text such as Japanese about 2.8 times; a wider gap means the count covers content the
+ * request no longer carries, such as reasoning the provider dropped, so scaling the fixed instructions by it would
+ * shrink the transcript below them.
+ */
+const MAX_ESTIMATE_RATIO = 8
 // The least of the window kept free for the last reply before compaction and for the summary itself.
 const RESERVE_MIN = 16_000
 /**
@@ -630,16 +637,23 @@ export const layer = Layer.effect(
       let asText = shrink.text ?? false
       let fit = shrink.fit
 
-      // A measured request fixes the size of the whole history: an estimate of it runs about `ESTIMATE_ERROR` low,
-      // so compare estimates in the measured unit. Without a measurement the character estimate is all there is; the
-      // provider then rejects a request that does not fit and the shrink steps take over.
-      const measuredUnits = shrink.measured !== undefined
-      const measuredEstimate = (request: LLMRequest) =>
-        measuredUnits
-          ? Math.ceil(estimateRequest(request) * (1 + SessionModelRequest.ESTIMATE_ERROR))
-          : estimateRequest(request)
-      const estimatedTarget = (value: number) =>
-        measuredUnits ? Math.floor(value / (1 + SessionModelRequest.ESTIMATE_ERROR)) : value
+      // A measured request fixes the size of the whole history more precisely than the character estimate, which runs
+      // `ESTIMATE_ERROR` low on ordinary text and much lower on dense text such as Japanese. Scale the estimate to the
+      // unit the provider counts by the ratio it reported for this request, between that margin and the densest text.
+      // Without a measurement the character estimate is all there is; the provider then rejects a request that does
+      // not fit and the shrink steps take over.
+      const ratio =
+        shrink.measured === undefined
+          ? 1
+          : Math.min(
+              MAX_ESTIMATE_RATIO,
+              Math.max(
+                1 + SessionModelRequest.ESTIMATE_ERROR,
+                total(shrink.measured) / Math.max(1, estimateRequest(prepared.request)),
+              ),
+            )
+      const measuredEstimate = (request: LLMRequest) => Math.ceil(estimateRequest(request) * ratio)
+      const estimatedTarget = (value: number) => Math.floor(value / ratio)
 
       while (true) {
         const measured = rejections === 0 ? shrink.measured : undefined
