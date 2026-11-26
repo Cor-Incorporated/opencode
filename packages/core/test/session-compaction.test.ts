@@ -52,6 +52,24 @@ let requests: LLMRequest[] = []
 /** Runs before a request's response streams; tests hold it back to keep a background summary in flight. */
 let beforeResponse: Effect.Effect<void> = Effect.void
 let reject: ((request: LLMRequest) => boolean) | undefined
+/**
+ * When set, the mock provider behaves like a model slot of that token window: a request whose conservative input plus
+ * its output limit passes the window is cut at the window and ends with `length`, as the machine does.
+ */
+let slot: number | undefined
+/** The prompt in measured units: the character estimate raised by the margin the provider counted above it. */
+const conservativeInput = (request: LLMRequest) =>
+  Math.ceil(
+    (request.system.reduce((sum, part) => sum + Token.estimate(part.text), 0) +
+      request.messages.reduce(
+        (sum, message) =>
+          sum +
+          message.content.reduce((content, part) => content + (part.type === "text" ? Token.estimate(part.text) : 0), 0),
+        0,
+      )) *
+      (1 + SessionModelRequest.ESTIMATE_ERROR),
+  )
+
 const model = LanguageModel.make({
   id: "summary-model",
   provider: "test",
@@ -70,6 +88,27 @@ const cost = [
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
+    if (slot !== undefined) {
+      const input = conservativeInput(request)
+      const maxTokens = request.maxTokens ?? 0
+      if (input + maxTokens > slot) {
+        return Stream.make(
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: { normalized: "length" },
+            usage: {
+              inputTokens: input,
+              outputTokens: Math.max(0, slot - input),
+              nonCachedInputTokens: input,
+              cacheReadInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              reasoningTokens: 0,
+            },
+          }),
+          LLMEvent.finish({ reason: { normalized: "length" } }),
+        )
+      }
+    }
     if (reject?.(request)) {
       return Stream.fail(
         new AIError({
@@ -893,6 +932,43 @@ it.effect("compaction keeps the output limit for a request that fits its target"
     expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
     expect(requests).toHaveLength(1)
     expect(requests[0]?.maxTokens).toBe(30_000)
+  }),
+)
+
+it.effect("summary compaction fits a measured request and still asks for a full output limit", () =>
+  Effect.gen(function* () {
+    requests = []
+    slot = 131_072
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        slot = undefined
+      }),
+    )
+    const session = yield* insertSession(Session.ID.make("ses_compaction_measured_slot"))
+    // One exchange whose attachment estimates at about 100k tokens while the provider measured 118440 in all. Its
+    // input plus the 16384-token output limit passes the 131072-token window, so the history has to be shortened.
+    const user = textUser("x".repeat(420_000))
+    const answer = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [{ type: "text", text: "Attachment received." }],
+      tokens: { input: 93_190, output: 0, reasoning: 0, cache: { read: 25_250, write: 0 } },
+      time: { created: 0, completed: 0 },
+    })
+    const context = {
+      ...loaded(session, [user, answer]),
+      model: { ...resolved, limit: { context: 131_072, output: 16_384 } },
+    }
+
+    expect(SessionCompaction.estimateContext(context)).toBe(118_440)
+    const compaction = yield* SessionCompaction.Service
+    expect(yield* compaction.compact({ reason: "auto", context })).toEqual({ status: "completed" })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0].maxTokens).toBeGreaterThanOrEqual(16_000)
+    expect(conservativeInput(requests[0]!) + requests[0].maxTokens!).toBeLessThanOrEqual(131_072)
   }),
 )
 

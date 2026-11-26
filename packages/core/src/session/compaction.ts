@@ -630,18 +630,29 @@ export const layer = Layer.effect(
       let asText = shrink.text ?? false
       let fit = shrink.fit
 
+      // A measured request fixes the size of the whole history: an estimate of it runs about `ESTIMATE_ERROR` low,
+      // so compare estimates in the measured unit. Without a measurement the character estimate is all there is; the
+      // provider then rejects a request that does not fit and the shrink steps take over.
+      const measuredUnits = shrink.measured !== undefined
+      const measuredEstimate = (request: LLMRequest) =>
+        measuredUnits
+          ? Math.ceil(estimateRequest(request) * (1 + SessionModelRequest.ESTIMATE_ERROR))
+          : estimateRequest(request)
+      const estimatedTarget = (value: number) =>
+        measuredUnits ? Math.floor(value / (1 + SessionModelRequest.ESTIMATE_ERROR)) : value
+
       while (true) {
         const measured = rejections === 0 ? shrink.measured : undefined
         const unchanged = asText
           ? undefined
-          : (measured ? total(measured) : estimateRequest(prepared.request)) <= fit
+          : (measured ? total(measured) : measuredEstimate(prepared.request)) <= fit
             ? prepared.request
-            : estimateRequest(shrink.history) <= target
+            : measuredEstimate(shrink.history) <= target
               ? shrink.history
               : undefined
         const request =
           unchanged ??
-          flattenAndDropOldest(shrink.history, context, target) ??
+          flattenAndDropOldest(shrink.history, context, estimatedTarget(target)) ??
           (rejections > 0
             ? undefined
             : asText
@@ -673,7 +684,7 @@ export const layer = Layer.effect(
         if (tooLarge || isContextOverflowFailure(cause)) {
           const step = SHRINK_STEPS[rejections]
           if (step === undefined) return yield* Effect.fail<Failure>({ error })
-          rejected ??= size ? total(size) : estimateRequest(request)
+          rejected ??= size ? total(size) : measuredEstimate(request)
           // The characters can still say the rejected request fits, so it only goes out again as text.
           if (size) asText = true
           target = Math.floor(rejected * step)
