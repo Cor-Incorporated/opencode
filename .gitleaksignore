@@ -327,3 +327,24 @@ c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/pl.ts:generi
 c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/ru.ts:generic-api-key:191
 c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/th.ts:generic-api-key:200
 c64fff5bcbcc76b678102ebc4ce7e5a4c5f5af7c:services/www/site/src/i18n/uk.ts:generic-api-key:189
+# Upstream dev 999950b2fc (2026-11-28 sync): one documentation curl -u example, translation strings, and test data (RFC 6455 example WebSocket keys, a recorded machine-link trace, a literal test password). Upstream commits only.
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/ar.ts:generic-api-key:200
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/br.ts:generic-api-key:214
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/da.ts:generic-api-key:213
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/de.ts:generic-api-key:215
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/en.ts:generic-api-key:229
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/es.ts:generic-api-key:214
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/fr.ts:generic-api-key:217
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/it.ts:generic-api-key:214
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/no.ts:generic-api-key:213
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/pl.ts:generic-api-key:214
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/ru.ts:generic-api-key:205
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/th.ts:generic-api-key:213
+2b296cabc843fb76e7d65c53e10ce29833630aa1:services/site/src/i18n/uk.ts:generic-api-key:201
+3b38a77c0977b03972ffd080e060e60743920ed2:packages/core/test/fixture/machine-v3.json:generic-api-key:40
+3b38a77c0977b03972ffd080e060e60743920ed2:packages/core/test/fixture/machine-v3.json:generic-api-key:46
+6b1df0cceba3ea093722fe16fb2717037b92edb1:packages/cli-rs/crates/api/tests/all/api.rs:generic-api-key:207
+6f9d6cf575b8be7b6808db582f44191b8cf9904c:packages/server/test/machine-link.test.ts:generic-api-key:323
+a4f1040b48c15f002e87433a60a5b26bb01c9ec3:services/site/src/docs/content/cli/web.mdx:curl-auth-user:170
+badd3ea1cdbbeaf6e8d7ae73c5866cfb2a1eda0b:packages/plugin-browser/test/stream-tunnel.test.ts:generic-api-key:663
+badd3ea1cdbbeaf6e8d7ae73c5866cfb2a1eda0b:packages/server/test/browser-tunnel.test.ts:generic-api-key:37
