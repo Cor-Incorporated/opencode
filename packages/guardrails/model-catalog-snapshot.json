@@ -29,16 +29,6 @@
       "reasoning": true,
       "release_date": "2026-05-05"
     },
-    "gpt-4": {
-      "context": 8192,
-      "reasoning": false,
-      "release_date": "2023-11-06"
-    },
-    "gpt-4-turbo": {
-      "context": 128000,
-      "reasoning": false,
-      "release_date": "2023-11-06"
-    },
     "gpt-4.1": {
       "context": 1047576,
       "reasoning": false,
@@ -59,27 +49,7 @@
       "reasoning": false,
       "release_date": "2025-04-14"
     },
-    "gpt-4.1-nano": {
-      "context": 1047576,
-      "reasoning": false,
-      "release_date": "2025-04-14"
-    },
-    "gpt-4.1-nano-fast": {
-      "context": 1047576,
-      "reasoning": false,
-      "release_date": "2025-04-14"
-    },
     "gpt-4o": {
-      "context": 128000,
-      "reasoning": false,
-      "release_date": "2024-05-13"
-    },
-    "gpt-4o-2024-05-13": {
-      "context": 128000,
-      "reasoning": false,
-      "release_date": "2024-05-13"
-    },
-    "gpt-4o-2024-05-13-fast": {
       "context": 128000,
       "reasoning": false,
       "release_date": "2024-05-13"
@@ -199,11 +169,6 @@
       "reasoning": true,
       "release_date": "2026-02-05"
     },
-    "gpt-5.3-codex-spark": {
-      "context": 128000,
-      "reasoning": true,
-      "release_date": "2026-02-05"
-    },
     "gpt-5.4": {
       "context": 1050000,
       "reasoning": true,
@@ -249,6 +214,11 @@
       "reasoning": true,
       "release_date": "2026-03-05"
     },
+    "gpt-5.4-pro-flex": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-03-05"
+    },
     "gpt-5.5": {
       "context": 1050000,
       "reasoning": true,
@@ -269,6 +239,11 @@
       "reasoning": true,
       "release_date": "2026-04-23"
     },
+    "gpt-5.5-pro-flex": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-04-23"
+    },
     "gpt-5.6": {
       "context": 1050000,
       "reasoning": true,
@@ -280,6 +255,11 @@
       "release_date": "2026-08-07"
     },
     "gpt-5.6-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-07-09"
+    },
+    "gpt-5.6-flex": {
       "context": 1050000,
       "reasoning": true,
       "release_date": "2026-07-09"
@@ -364,6 +344,16 @@
       "reasoning": true,
       "release_date": "2026-09-04"
     },
+    "gpt-6-astra-healthcare": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
+    "gpt-6-astra-healthcare-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
     "gpt-6-astra-pro": {
       "context": 1050000,
       "reasoning": true,
@@ -434,6 +424,16 @@
       "reasoning": true,
       "release_date": "2026-09-29"
     },
+    "gpt-6.1-sol-healthcare": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
+    "gpt-6.1-sol-healthcare-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
     "gpt-6.1-sol-pro": {
       "context": 1050000,
       "reasoning": true,
@@ -474,6 +474,16 @@
       "reasoning": true,
       "release_date": "2026-11-17"
     },
+    "gpt-6.2-astra-healthcare": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
+    "gpt-6.2-astra-healthcare-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
     "gpt-6.2-astra-pro": {
       "context": 1050000,
       "reasoning": true,
@@ -493,6 +503,16 @@
       "context": 1050000,
       "reasoning": true,
       "release_date": "2026-11-17"
+    },
+    "gpt-6.2-sol-healthcare": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
+    },
+    "gpt-6.2-sol-healthcare-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-11-24"
     },
     "gpt-6.2-sol-pro": {
       "context": 1050000,
@@ -524,20 +544,20 @@
       "reasoning": true,
       "release_date": "2026-08-07"
     },
+    "gpt-daybreak-blue-latest-fast": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-08-07"
+    },
+    "gpt-daybreak-blue-latest-flex": {
+      "context": 1050000,
+      "reasoning": true,
+      "release_date": "2026-08-07"
+    },
     "gpt-daybreak-red-latest": {
       "context": 400000,
       "reasoning": true,
       "release_date": "2026-08-07"
-    },
-    "o1": {
-      "context": 200000,
-      "reasoning": true,
-      "release_date": "2024-12-05"
-    },
-    "o1-pro": {
-      "context": 200000,
-      "reasoning": true,
-      "release_date": "2025-03-19"
     },
     "o3": {
       "context": 200000,
@@ -554,30 +574,10 @@
       "reasoning": true,
       "release_date": "2025-04-16"
     },
-    "o3-mini": {
-      "context": 200000,
-      "reasoning": true,
-      "release_date": "2024-12-20"
-    },
     "o3-pro": {
       "context": 200000,
       "reasoning": true,
       "release_date": "2025-06-10"
-    },
-    "o4-mini": {
-      "context": 200000,
-      "reasoning": true,
-      "release_date": "2025-04-16"
-    },
-    "o4-mini-fast": {
-      "context": 200000,
-      "reasoning": true,
-      "release_date": "2025-04-16"
-    },
-    "o4-mini-flex": {
-      "context": 200000,
-      "reasoning": true,
-      "release_date": "2025-04-16"
     }
   },
   "openrouter": {
@@ -761,11 +761,6 @@
       "reasoning": false,
       "release_date": "2024-12-13"
     },
-    "cohere/north-mini-code:free": {
-      "context": 256000,
-      "reasoning": true,
-      "release_date": "2026-06-09"
-    },
     "deepseek/deepseek-chat": {
       "context": 163840,
       "reasoning": false,
@@ -836,11 +831,6 @@
       "reasoning": true,
       "release_date": "2026-10-17"
     },
-    "dots-studio/dots-3-note-preview:free": {
-      "context": 512000,
-      "reasoning": true,
-      "release_date": "2026-08-14"
-    },
     "elorian/glimpse": {
       "context": 262144,
       "reasoning": true,
@@ -859,7 +849,7 @@
     "google/gemini-2.5-flash-lite": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2025-06-17"
+      "release_date": "2025-07-22"
     },
     "google/gemini-2.5-pro": {
       "context": 1048576,
@@ -936,6 +926,11 @@
       "reasoning": true,
       "release_date": "2026-11-12"
     },
+    "google/gemini-4-neon": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-11-18"
+    },
     "google/gemma-3-12b-it": {
       "context": 131072,
       "reasoning": false,
@@ -984,17 +979,22 @@
     "inclusionai/ling-3.0-tiny": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2026-08-06"
+      "release_date": "2026-08-07"
     },
     "inclusionai/ling-3.1-flash": {
-      "context": 1000000,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-09-29"
     },
     "inclusionai/ling-3.2-flash:free": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-11-13"
+      "release_date": "2026-11-05"
+    },
+    "inclusionai/lingsante-3.1-air-vl": {
+      "context": 131072,
+      "reasoning": true,
+      "release_date": "2026-11-19"
     },
     "kt/midm-k-3.0-pro": {
       "context": 261795,
@@ -1015,11 +1015,6 @@
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-11-06"
-    },
-    "meituan/longcat-2.0": {
-      "context": 1048756,
-      "reasoning": true,
-      "release_date": "2026-06-30"
     },
     "meta-llama/llama-3.1-70b-instruct": {
       "context": 131072,
@@ -1092,7 +1087,7 @@
       "release_date": "2026-10-12"
     },
     "minimax/minimax-m2.5": {
-      "context": 198000,
+      "context": 65536,
       "reasoning": true,
       "release_date": "2026-02-12"
     },
@@ -1154,22 +1149,12 @@
     "mistralai/mistral-large-4-0": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-10-06"
-    },
-    "mistralai/mistral-medium-3": {
-      "context": 131072,
-      "reasoning": false,
-      "release_date": "2025-05-07"
+      "release_date": "2026-10-05"
     },
     "mistralai/mistral-medium-3-5": {
       "context": 262144,
       "reasoning": true,
-      "release_date": "2026-04-30"
-    },
-    "mistralai/mistral-medium-3.1": {
-      "context": 131072,
-      "reasoning": false,
-      "release_date": "2025-08-12"
+      "release_date": "2026-04-28"
     },
     "mistralai/mistral-nemo": {
       "context": 131072,
@@ -1215,11 +1200,6 @@
       "context": 262144,
       "reasoning": false,
       "release_date": "2025-09-05"
-    },
-    "moonshotai/kimi-k2-thinking": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2025-11-06"
     },
     "moonshotai/kimi-k2.5": {
       "context": 262144,
@@ -1821,6 +1801,11 @@
       "reasoning": true,
       "release_date": "2026-11-16"
     },
+    "radixark/daisyrose-27b": {
+      "context": 262144,
+      "reasoning": true,
+      "release_date": "2026-11-21"
+    },
     "recursive/flint-v1.0:free": {
       "context": 262144,
       "reasoning": true,
@@ -1867,7 +1852,7 @@
       "release_date": "2026-08-03"
     },
     "stepfun/step-3.7-flash": {
-      "context": 262144,
+      "context": 256000,
       "reasoning": true,
       "release_date": "2026-05-29"
     },
@@ -1880,11 +1865,6 @@
       "context": 262144,
       "reasoning": true,
       "release_date": "2026-07-06"
-    },
-    "tencent/hy3-preview": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-04-20"
     },
     "tencent/hy4": {
       "context": 1048576,
@@ -1902,16 +1882,16 @@
       "release_date": "2026-08-28"
     },
     "thinkingmachines/inkling": {
-      "context": 524288,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-07-15"
     },
-    "thinkingmachines/inkling-2-small": {
+    "thinkingmachines/inkling-2-mini": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-11-05"
+      "release_date": "2026-11-20"
     },
-    "thinkingmachines/inkling-2-small:free": {
+    "thinkingmachines/inkling-2-small": {
       "context": 1048576,
       "reasoning": true,
       "release_date": "2026-11-05"
@@ -1921,25 +1901,20 @@
       "reasoning": true,
       "release_date": "2026-07-30"
     },
-    "unbiased/pareto-26.10": {
-      "context": 1048576,
-      "reasoning": false,
-      "release_date": "2026-10-15"
-    },
-    "unbiased/pareto-26.10-preview": {
-      "context": 1048576,
-      "reasoning": false,
-      "release_date": "2026-10-01"
-    },
-    "unbiased/pareto-26.9": {
-      "context": 262144,
-      "reasoning": false,
-      "release_date": "2026-10-13"
+    "upstage/solar-mini-4-5": {
+      "context": 524288,
+      "reasoning": true,
+      "release_date": "2026-11-24"
     },
     "upstage/solar-mini4": {
       "context": 524288,
       "reasoning": true,
       "release_date": "2026-09-22"
+    },
+    "upstage/solar-pro-4-contributor": {
+      "context": 524288,
+      "reasoning": true,
+      "release_date": "2026-11-24"
     },
     "upstage/solar-pro4": {
       "context": 524288,
@@ -1971,35 +1946,25 @@
       "reasoning": true,
       "release_date": "2026-09-21"
     },
-    "x-ai/grok-build-0.1": {
-      "context": 256000,
-      "reasoning": true,
-      "release_date": "2026-04-16"
-    },
-    "xiaomi/mimo-v2.5": {
-      "context": 1000000,
-      "reasoning": true,
-      "release_date": "2026-04-22"
-    },
-    "xiaomi/mimo-v2.5-pro": {
-      "context": 262144,
-      "reasoning": true,
-      "release_date": "2026-04-22"
-    },
     "xiaomi/mimo-v2.6-flash": {
-      "context": 1050000,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-09-22"
     },
+    "xiaomi/mimo-v2.6-flash-mopd": {
+      "context": 1048576,
+      "reasoning": true,
+      "release_date": "2026-09-27"
+    },
     "xiaomi/mimo-v2.6-pro": {
-      "context": 1050000,
+      "context": 1048576,
       "reasoning": true,
       "release_date": "2026-09-22"
     },
     "xiaomi/mimo-v2.6-pro-ultraspeed": {
       "context": 1048576,
       "reasoning": true,
-      "release_date": "2026-09-21"
+      "release_date": "2026-09-22"
     },
     "z-ai/glm-4.5": {
       "context": 131072,
@@ -2017,7 +1982,7 @@
       "release_date": "2025-08-11"
     },
     "z-ai/glm-4.6": {
-      "context": 204800,
+      "context": 202752,
       "reasoning": true,
       "release_date": "2025-09-30"
     },
@@ -2032,7 +1997,7 @@
       "release_date": "2025-12-22"
     },
     "z-ai/glm-4.7-flash": {
-      "context": 200000,
+      "context": 131072,
       "reasoning": true,
       "release_date": "2026-01-19"
     },
@@ -2160,11 +2125,6 @@
       "context": 1050000,
       "reasoning": true,
       "release_date": "2026-09-11"
-    },
-    "~unbiased/pareto-latest": {
-      "context": 1048576,
-      "reasoning": false,
-      "release_date": "2026-10-13"
     },
     "~x-ai/grok-latest": {
       "context": 500000,
