@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ github.repository == 'anomalyco/opencode' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 45
     defaults:
       run:
