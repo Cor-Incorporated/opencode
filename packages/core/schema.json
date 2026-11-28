@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "74cace2e-430e-4672-bf3b-eba14ae0c399",
-  "prevIds": ["ab8fea18-0d95-48a1-b631-c112235dc492"],
+  "id": "ea7fb45e-fef3-40b6-8e09-42b781c5bf23",
+  "prevIds": ["6fdb1fc8-74cd-4f15-8faa-e109d3030da9"],
   "ddl": [
     {
       "name": "account_state",
@@ -90,6 +90,10 @@
     },
     {
       "name": "session_v2",
+      "entityType": "tables"
+    },
+    {
+      "name": "space",
       "entityType": "tables"
     },
     {
@@ -857,6 +861,16 @@
       "default": null,
       "generated": null,
       "name": "id",
+      "entityType": "columns",
+      "table": "machine"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
       "entityType": "columns",
       "table": "machine"
     },
@@ -1952,6 +1966,46 @@
     },
     {
       "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "space",
+      "entityType": "columns",
+      "table": "space"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "space"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "space"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "space"
+    },
+    {
+      "type": "text",
       "notNull": false,
       "autoincrement": false,
       "default": null,
@@ -2230,6 +2284,13 @@
       "table": "session_part"
     },
     {
+      "columns": ["space", "key"],
+      "nameExplicit": false,
+      "name": "space_pk",
+      "entityType": "pks",
+      "table": "space"
+    },
+    {
       "columns": ["project_id", "directory"],
       "nameExplicit": false,
       "name": "worktree_pk",
@@ -2489,6 +2550,20 @@
     {
       "columns": [
         {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "machine_key_idx",
+      "entityType": "indexes",
+      "table": "machine"
+    },
+    {
+      "columns": [
+        {
           "value": "project_id",
           "isExpression": false
         },
@@ -2733,6 +2808,64 @@
       "name": "session_v2_time_suspended_idx",
       "entityType": "indexes",
       "table": "session_v2"
+    },
+    {
+      "columns": [
+        {
+          "value": "space",
+          "isExpression": false
+        },
+        {
+          "value": "revision",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "space_revision_idx",
+      "entityType": "indexes",
+      "table": "space"
+    },
+    {
+      "columns": [
+        {
+          "value": "space",
+          "isExpression": false
+        },
+        {
+          "value": "revision",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"space\".\"value\" is not null",
+      "origin": "manual",
+      "name": "space_live_idx",
+      "entityType": "indexes",
+      "table": "space"
+    },
+    {
+      "columns": [
+        {
+          "value": "space",
+          "isExpression": false
+        },
+        {
+          "value": "revision",
+          "isExpression": false
+        },
+        {
+          "value": "value",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"space\".\"value\" is null",
+      "origin": "manual",
+      "name": "space_tombstone_idx",
+      "entityType": "indexes",
+      "table": "space"
     }
   ],
   "renames": []
