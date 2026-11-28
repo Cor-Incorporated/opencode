@@ -30,7 +30,7 @@ import { WriteTool } from "@opencode/core/tool/plugin/write"
 import { elsewhere } from "./fixture/target-environment"
 import { withTempDir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, noToolCalls, registerToolPlugin, toolIdentity } from "./lib/tool"
 
 const fileToolsNode = makeLocationNode({
   name: "test/file-tool-plugins",
@@ -52,6 +52,7 @@ const fileToolsNode = makeLocationNode({
     FileWrite.node,
     Formatter.node,
     Image.node,
+    Environment.node,
     Permission.node,
     SessionInstructions.node,
     InstructionDiscovery.node,
@@ -149,7 +150,7 @@ describe("Code Mode Bun", () => {
               await notes.delete()
               return [...first, second, await notes.exists(), new Bun.Glob("notes.txt").scanSync()]`,
           },
-          { sessionID, ...toolIdentity, id: Tool.CallID.make("call_bun"), progress: () => Effect.void },
+          { sessionID, ...toolIdentity, id: Tool.CallID.make("call_bun"), progress: () => Effect.void, tool: noToolCalls },
         )
 
         expect(JSON.parse(result.output.output)).toEqual([4, 4, "one\n", true, 4, true, "two\n", false, []])
@@ -161,7 +162,7 @@ describe("Code Mode Bun", () => {
             metadata: { files: [{ status: "modified", patch: expect.stringContaining("-one\n+two") }] },
           },
           { action: "edit" },
-          { action: "glob" },
+          { action: "read", resources: ["notes.txt"] },
         ])
         expect(yield* Environment.exists(other.environment.files, file)).toBe(false)
         expect(yield* Effect.promise(() => fs.readdir(tmp.path))).toEqual(["notes.txt"])

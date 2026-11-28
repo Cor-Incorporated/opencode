@@ -9,13 +9,9 @@ export * as EditTool from "./edit.js"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { ToolFailure } from "@opencode/ai/effect"
 import { Effect, Schema } from "effect"
-import { Config } from "../../config.js"
-import { ConfigEntryObserver } from "../../config/plugin/entry-observer.js"
 import { Flag } from "../../flag.js"
 import { toolFailure } from "../runtime.js"
 import { FileMutation } from "../../file-mutation.js"
-import { Location } from "../../location.js"
-import { FileAccess } from "../../file-access.js"
 import { FileWrite } from "../../file-write.js"
 import { Permission } from "../../permission.js"
 import { fileDiff } from "./file-diff.js"
@@ -262,17 +258,14 @@ export const Plugin = {
   effect: Effect.fn("EditTool.Plugin")(function* (ctx: Context) {
     const fileMutation = yield* FileMutation.Service
     const fileWrite = yield* FileWrite.Service
-    const location = yield* Location.Service
     const permission = yield* Permission.Service
-    const config = yield* Config.Service
-    const loaded = yield* ConfigEntryObserver.observe(config, ctx.event, ctx.tool.reload())
     const flags = yield* Flag.Service
 
     yield* ctx.tool
       .transform((editor) =>
         editor.add({
           name,
-          options: flags.resolve(loaded.entries).full_codemode.enabled
+          options: flags.current().full_codemode.enabled
             ? {
                 codemode: {
                   pinned: true,
@@ -322,12 +315,14 @@ export const Plugin = {
                 ? { matches: findOccurrences(source, input.oldString), replace: () => input.newString }
                 : matchView(source, input.oldString, input.newString)
               const replacements = matches.length
-              const replaced = (input.replaceAll === true ? matches : matches.slice(0, 1))
-                .toReversed()
-                .reduce(
-                  (content, match) => `${content.slice(0, match.start)}${replace(match)}${content.slice(match.end)}`,
-                  source,
-                )
+              const selected = input.replaceAll === true ? matches : matches.slice(0, 1)
+              const replaced = [
+                ...selected.flatMap((match, index) => [
+                  source.slice(selected[index - 1]?.end ?? 0, match.start),
+                  replace(match),
+                ]),
+                source.slice(selected.at(-1)?.end ?? 0),
+              ].join("")
               const preview =
                 replacements > 0 && (replacements === 1 || input.replaceAll === true)
                   ? fileDiff(target.resource, source, replaced)
@@ -365,10 +360,7 @@ export const Plugin = {
                 output: `Edited ${result.resource} (${replacements} replacement${replacements === 1 ? "" : "s"})`,
                 metadata: { files: [fileDiff(result.resource, source, formatted)] },
               }
-            }).pipe(
-              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.path)]),
-              Effect.mapError(toolFailure(`Unable to edit ${input.path}`)),
-            )
+            }).pipe(fileMutation.withLock([input.path]), Effect.mapError(toolFailure(`Unable to edit ${input.path}`)))
           },
         }),
       )
