@@ -47,8 +47,8 @@ the committed snapshot with it: an upstream sync that brings new models fails
 until the snapshot is refreshed and applied. `--catalog` still accepts a
 models.dev v1 `api.json`.
 
-2.x lists every `experimental.modes` entry of a model as its own model id,
-`<id>-<mode>` (packages/core/src/models-dev.ts normalize), and the guardrail
+2.x lists every `experimental.modes` entry of a model and every service tier it
+offers as its own model id, `<id>-<mode>` and `<id>-<tier>` (packages/core/src/models-dev.ts), and the guardrail
 gate compares that id, so the snapshot carries those ids too.
 
 Detecting drift against the *live* catalog still needs network; that stays
@@ -105,8 +105,14 @@ def usable(meta: dict) -> bool:
     return (not out) or ("text" in out)
 
 
-def catalog_entries(mid: str, meta: dict) -> dict[str, dict]:
-    """The model ids 2.x offers for one catalog model: the model and one id per mode."""
+def catalog_entries(mid: str, meta: dict, listed: set[str]) -> dict[str, dict]:
+    """The model ids 2.x offers for one catalog model: the model, one id per service tier and one per mode.
+
+    Mirrors the id derivation in packages/core/src/models-dev.ts. A service tier is a speed of its own,
+    `<id>-<tier>`, where "priority" is the tier people know as "fast" unless the model also lists a "fast" tier.
+    A mode only adds an id for a tier the model does not list, and a tier id the catalog lists as a model of its
+    own is that model, not a speed of this one. Tiers are offered on `@opencode/ai` routes only.
+    """
     reasoning = meta.get("reasoning")
     if "capabilities" in meta:
         reasoning = (meta["capabilities"].get("reasoning") or {}).get("supported")
@@ -116,7 +122,25 @@ def catalog_entries(mid: str, meta: dict) -> dict[str, dict]:
         "context": (meta.get("limit") or {}).get("context"),
     }
     modes = (meta.get("experimental") or {}).get("modes") or {}
-    return {mid: entry, **{f"{mid}-{mode}": entry for mode in modes}}
+    tiers = (meta.get("capabilities") or {}).get("service_tier") or []
+    apis = (meta.get("api") or {}).values()
+    if any((api.get("sdk") or {}).get("opencodeai") for api in apis):
+        # "priority" is the tier people know as "fast", unless the model also has a "fast" tier.
+        names = [
+            "fast" if tier == "priority" and "fast" not in tiers else tier
+            for tier in tiers
+        ]
+    else:
+        names = []
+    for mode, options in modes.items():
+        # A mode says how to ask for its tier, so it only adds an id for a tier the model does not list.
+        tier = options.get("service_tier") if isinstance(options, dict) else None
+        if (tier or mode) not in tiers:
+            names.append(mode)
+    return {
+        mid: entry,
+        **{f"{mid}-{name}": entry for name in names if f"{mid}-{name}" not in listed},
+    }
 
 
 def build_snapshot(catalog_path: Path) -> dict:
@@ -124,11 +148,12 @@ def build_snapshot(catalog_path: Path) -> dict:
     snapshot: dict[str, dict] = {}
     for pid in enabled_providers():
         models = (catalog.get(pid) or {}).get("models", {})
+        listed = set(models)
         snapshot[pid] = {
             cid: entry
             for mid, meta in models.items()
             if usable(meta)
-            for cid, entry in catalog_entries(mid, meta).items()
+            for cid, entry in catalog_entries(mid, meta, listed).items()
         }
     return snapshot
 
