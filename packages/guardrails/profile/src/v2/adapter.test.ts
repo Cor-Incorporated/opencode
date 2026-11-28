@@ -934,17 +934,34 @@ describe("F5 relative paths are judged at ctx.location.directory, not at the ser
     )
     expect(src("file-access.ts")).toContain('normalized === "~"')
     expect(src("file-access.ts")).toContain('normalized.startsWith("~/")')
-    expect(src("file-access.ts")).toContain("AbsolutePath.make(resolvePath(location.directory, input.path))")
+    // A bare path is resolved against the session's working directory, which is the Location's directory unless an
+    // experimental session cwd is set (upstream #65445, #65633: one `place` for every caller of file access).
+    expect(src("environment/environment.ts")).toContain(
+      "const fallback = { absolute: location.directory, environment }",
+    )
+    expect(src("environment/environment.ts")).toContain(
+      "return Effect.map(CurrentWorkingDirectory, (cwd) => cwd ?? fallback)",
+    )
+    expect(src("file-access.ts")).toContain("const workingDirectory = yield* currentWorkingDirectory")
+    expect(src("file-access.ts")).toContain("yield* place(input.path, input.base, enabled, workingDirectory)")
+    expect(src("file-access.ts")).toContain("const from = base ?? workingDirectory")
+    expect(src("file-access.ts")).toContain("const origin = parsed ? location.directory : from.absolute")
+    expect(src("file-access.ts")).toContain("absolute: AbsolutePath.make(resolvePath(origin, written)),")
     expect(src("tool/plugin/read.ts")).toContain("access.authorizeRead(input.path, context)")
     expect(src("tool/plugin/edit.ts")).toContain("fileWrite.target(input.path, context)")
     expect(src("tool/plugin/write.ts")).toContain("fileWrite.write(input, context)")
     expect(src("file-write.ts")).toContain('access.resolve({ path: file, kind: "file" })')
     expect(src("file-write.ts")).toContain("const resolved = yield* target(input.path, context)")
-    expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.path)")
-    expect(src("tool/plugin/patch.ts")).toContain("FileAccess.resolvePath(location.directory, hunk.movePath)")
-    expect(src("tool/plugin/shell.ts")).toContain("const cwd = input.workdir ?? location.directory")
-    expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: cwd, kind: "directory" })')
-    expect(src("tool/plugin/shell.ts")).toContain('access.resolve({ path: invocation.cwd, kind: "directory" })')
+    expect(src("tool/plugin/patch.ts")).toContain('const target = yield* access.resolve({ path: value, kind: "file" })')
+    expect(src("tool/plugin/patch.ts")).toContain("const target = yield* resolveTarget(hunk.path)")
+    expect(src("tool/plugin/patch.ts")).toContain(
+      "const move = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined",
+    )
+    expect(src("tool/plugin/shell.ts")).toContain("const cwd = input.workdir ?? workingDirectory.absolute")
+    expect(src("tool/plugin/shell.ts")).toContain(
+      "base: input.workdir === undefined ? workingDirectory : undefined,",
+    )
+    expect(src("tool/plugin/shell.ts")).toContain("path: invocation.cwd,")
   })
 
   test("cleanup", () => {
